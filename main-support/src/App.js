@@ -1,30 +1,64 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { AppBar, Toolbar, Typography, CssBaseline, Box } from '@mui/material';
+import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
+import { Box } from '@mui/material';
 import Sidebar from './components/Sidebar';
 import Content from './components/Content';
+import EnumIdGrid from './components/EnumIdGrid';
 import EnumDetailGrid from './components/EnumDetailGrid';
+import ClassDataGrid from './components/ClassDataGrid';
+import ClassDataDetailGrid from './components/ClassDataDetailGrid';
+import StateGrid from './components/StateGrid';
+import StateDetailGridGrid from './components/StateDetailGrid';
 
-function App() {
-  const [selectedMenu, setSelectedMenu] = useState('Main');
+function AppContent() {
+  const navigate = useNavigate();
+  const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
+
+  // メニュークリックハンドラ
+  const handleMenuClick = (menu, subMenu) => {
+    setSelectedMenu(menu);
+    console.log('Menu clicked:', menu, 'SubMenu:', subMenu);
+    if (menu === 'GenerateTool' && subMenu) {
+      switch (subMenu) {
+        case 'enum-id':
+          navigate('/enum-id');
+          break;
+        case 'class-data':
+          navigate('/class-data');
+          break;
+        case 'state':
+          navigate('/state');
+          break;
+        default:
+          navigate('/enum-id'); // GenerateToolのデフォルト
+      }
+    } else {
+      navigate('/');
+    }
+  };
 
   return (
-    <Router>
-      <Box sx={{ display: 'flex' }}>
-        <CssBaseline />
-        <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-          <Toolbar>
-            <Typography variant="h6" noWrap component="div">
-              My Dashboard
-            </Typography>
-          </Toolbar>
-        </AppBar>
-        <Sidebar onMenuSelect={setSelectedMenu} />
+    <Box sx={{ display: 'flex' }}>
+      <Sidebar selectedMenu={selectedMenu} handleMenuClick={handleMenuClick} />
+      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
         <Routes>
-          <Route path="/" element={<Content selectedMenu={selectedMenu} />} />
+          <Route path="/" element={<Content />} />
+          <Route path="/enum-id" element={<EnumIdGrid />} />
           <Route path="/enum/:name" element={<EnumDetailGrid />} />
+          <Route path="/class-data" element={<ClassDataGrid />} />
+          <Route path="/class/:name" element={<ClassDataDetailGrid />} />
+          <Route path="/state" element={<StateGrid />} />
+          <Route path="/state/:name" element={<StateDetailGridGrid />} />
         </Routes>
       </Box>
+    </Box>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <AppContent />
     </Router>
   );
 }

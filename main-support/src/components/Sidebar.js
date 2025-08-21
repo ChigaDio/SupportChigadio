@@ -1,16 +1,16 @@
-import React, { useState } from 'react';
-import { Drawer, List, ListItem, ListItemIcon, ListItemText, Toolbar, Collapse } from '@mui/material';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import SettingsIcon from '@mui/icons-material/Settings';
-import InfoIcon from '@mui/icons-material/Info';
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
+import React from 'react';
+import { Drawer, List, ListItem, ListItemText, ListItemButton, Collapse } from '@mui/material';
+import { ExpandLess, ExpandMore } from '@mui/icons-material';
 
-function Sidebar({ onMenuSelect }) {
-  const [openGenerateTool, setOpenGenerateTool] = useState(false);
+function Sidebar({ selectedMenu, handleMenuClick }) {
+  const [open, setOpen] = React.useState(true); // GenerateToolのサブメニュー展開状態
 
   const handleGenerateToolClick = () => {
-    setOpenGenerateTool(!openGenerateTool);
+    setOpen(!open);
+  };
+
+  const handleSubMenuClick = (subMenu) => {
+    handleMenuClick('GenerateTool', subMenu);
   };
 
   return (
@@ -22,34 +22,36 @@ function Sidebar({ onMenuSelect }) {
         '& .MuiDrawer-paper': { width: 240, boxSizing: 'border-box' },
       }}
     >
-      <Toolbar />
       <List>
-        <ListItem button onClick={() => onMenuSelect('Main')}>
-          <ListItemIcon><DashboardIcon /></ListItemIcon>
-          <ListItemText primary="Main" />
-        </ListItem>
-        <ListItem button onClick={handleGenerateToolClick}>
-          <ListItemIcon><SettingsIcon /></ListItemIcon>
+        <ListItemButton
+          selected={selectedMenu === 'GenerateTool'}
+          onClick={handleGenerateToolClick}
+        >
           <ListItemText primary="GenerateTool" />
-          {openGenerateTool ? <ExpandLess /> : <ExpandMore />}
-        </ListItem>
-        <Collapse in={openGenerateTool} timeout="auto" unmountOnExit>
+          {open ? <ExpandLess /> : <ExpandMore />}
+        </ListItemButton>
+        <Collapse in={open} timeout="auto" unmountOnExit>
           <List component="div" disablePadding>
-            <ListItem button sx={{ pl: 4 }} onClick={() => onMenuSelect('Enum-ID')}>
-              <ListItemText primary="Enum-ID" />
-            </ListItem>
-            <ListItem button sx={{ pl: 4 }} onClick={() => onMenuSelect('ClassData')}>
-              <ListItemText primary="ClassData" />
-            </ListItem>
-            <ListItem button sx={{ pl: 4 }} onClick={() => onMenuSelect('State')}>
+            <ListItemButton
+              sx={{ pl: 4 }}
+              onClick={() => handleSubMenuClick('enum-id')}
+            >
+              <ListItemText primary="Enum ID" />
+            </ListItemButton>
+            <ListItemButton
+              sx={{ pl: 4 }}
+              onClick={() => handleSubMenuClick('class-data')}
+            >
+              <ListItemText primary="Class Data" />
+            </ListItemButton>
+            <ListItemButton
+              sx={{ pl: 4 }}
+              onClick={() => handleSubMenuClick('state')}
+            >
               <ListItemText primary="State" />
-            </ListItem>
+            </ListItemButton>
           </List>
         </Collapse>
-        <ListItem button onClick={() => onMenuSelect('About')}>
-          <ListItemIcon><InfoIcon /></ListItemIcon>
-          <ListItemText primary="About" />
-        </ListItem>
       </List>
     </Drawer>
   );
