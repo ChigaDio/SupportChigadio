@@ -46,7 +46,13 @@ def get_type_lists():
     unity_types = ['GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 'Color', 'Rect', 'Bounds', 'Matrix4x4', 'AnimationCurve', 'Sprite', 'Texture', 'Material', 'Mesh', 'Rigidbody', 'Collider', 'AudioClip', 'ScriptableObject']
     enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')) else []
-    return basic_types, unity_types, [e['name'] for e in enum_list], [c['name'] for c in class_list]
+    return (
+    basic_types,
+    unity_types,
+    [e.get('name') for e in enum_list] if enum_list else [],
+    [c.get('name') for c in class_list] if class_list else []
+)
+
 
 # ディレクトリ作成
 for dir_name in [ENUM, CLASS_DATA, STATE_DATA, CLASS_DATA_ID]:
@@ -56,7 +62,22 @@ for dir_name in [ENUM, CLASS_DATA, STATE_DATA, CLASS_DATA_ID]:
         os.makedirs(dir_path)
         
 # ベースファイルの作成
+if not  os.path.exists(os.path.join(DATA_DIR, ENUM, "enum_list.json")):
+    with open(os.path.join(DATA_DIR, ENUM, "enum_list.json"), 'w', encoding='utf-8') as f:
+        json.dump([], f)
         
+if not  os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, "class_list.json")):
+    with open(os.path.join(DATA_DIR, CLASS_DATA, "class_list.json"), 'w', encoding='utf-8') as f:
+        json.dump([], f)
+        
+if not  os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "class_data_id_list.json")):
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "class_data_id_list.json"), 'w', encoding='utf-8') as f:
+        json.dump([], f)
+        
+if not  os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "state_list.json")):
+    with open(os.path.join(DATA_DIR, STATE_DATA, "state_list.json"), 'w', encoding='utf-8') as f:
+        json.dump([], f)
+
 if not os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "BaseState.cs")):
     code_str = """
         private bool is_active = true;
@@ -279,12 +300,9 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
 
     namespace GameCore.Tables
     {
-        public abstract class BaseClassDataID<T> where T : Enum
+        public abstract class BaseClassDataID<T,E> where T : Enum where E : BaseClassDataRow
         {
-            protected BaseClassDataID(BinaryReader reader)
-            {
-                // ここで共通の処理を追加可能（例：ヘッダチェックなど）
-            }
+            public static Dictionary<T,E> Table = new Dictionary<T,E>();
         }
     }
     """
@@ -831,8 +849,8 @@ def generate_class_data_id_cs(name):
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Tables\n{\n")
-            f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}>\n    {{\n")
-            f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
+            f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
+            #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
 
             # --- Row Class ---
             f.write(f"        public class {name}Row : BaseClassDataRow\n        {{\n")
@@ -904,6 +922,29 @@ def generate_class_data_id_cs(name):
                 ef.write(f"        {row['enum_property']} = {i},\n")
             ef.write("        Max\n")
             ef.write("    }\n}\n")
+            
+            
+        #Exsample
+        exsample_cs_path = os.path.join(table_dir, f"{name}TableExample.cs")
+        with open(exsample_cs_path, 'w', encoding='utf-8') as ef:
+           ef.write("using System;\nusing UnityEngine;\n")
+           ef.write("using GameCore.Tables;\nusing GameCore.Tables.ID;\n\n")
+           ef.write("namespace GameCore.Tables\n{\n")
+           ef.write(f"    public static class {name}IDExtensions\n    {{\n")
+           ef.write(f"        public static {name}Row GetRow(this {name}TableID id)\n")
+           ef.write("        {\n")
+           ef.write(f"            if ({name}Table.Table.TryGetValue(id, out var row))\n")
+           ef.write("            {\n")
+           ef.write("                return row;\n")
+           ef.write("            }\n")
+           ef.write("            else\n")
+           ef.write("            {\n")
+           ef.write("                return null; // または throw new KeyNotFoundException()\n")
+           ef.write("            }\n")
+           ef.write("        }\n")
+           ef.write("    }\n")
+           ef.write("}\n")
+
 
         return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
     except Exception as e:
@@ -1144,9 +1185,9 @@ def generate_state_manager_data(file_path, name, json_data):
     file_state_manager_data_path = os.path.join(file_path, "ManagerData", f'{name}StateManager.cs')
 
     base_code_str = []
-    
-    
-    enum_list, class_list = get_type_lists()
+
+
+    base_list,unity_types,enum_list, class_list = get_type_lists()
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
     unity_types = [
     'GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 
@@ -1311,7 +1352,7 @@ def generate_state_classes(file_path, name, json_data):
 
 
     # 型情報の取得（ダミー関数、外で定義する想定）
-    enum_list, class_list = get_type_lists()  
+    basic_types, unity_types, enum_list, class_list = get_type_lists()  
 
     basic_types = [
         'int', 'float', 'bool', 'string', 'double',
@@ -1574,6 +1615,7 @@ def generate_control_classes(file_path, name, json_data):
         f.write('        {\n')
         f.write('            if (!state.IsActive) return;\n\n')
         f.write('            var id = state_manager_data.PopStateID();\n')
+        f.write('            if(id == default) id = state_manager_data.GetNowID();\n')
         f.write('            switch (id)\n')
         f.write('            {\n')
         

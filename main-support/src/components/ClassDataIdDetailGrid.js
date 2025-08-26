@@ -429,7 +429,7 @@ const columns = [
     const isEnum = col.type in enumValues;
     const isNumber = col.type.toLowerCase() === 'int' || col.type.toLowerCase() === 'float';
     const isVector = col.type.toLowerCase() === 'vector2' || col.type.toLowerCase() === 'vector3';
-
+    const isString = col.type.toLowerCase() === 'string'; // string 型を明示的にチェック
     return {
       field: col.name,
       headerName: col.name,
@@ -451,7 +451,7 @@ const columns = [
           </IconButton>
         </Box>
       ),
-      type: isNumber ? 'number' : (isVector ? 'string' : 'singleSelect'), // bool も singleSelect
+      type: isNumber ? 'number' : isBool ? 'boolean' : isString ? 'string' : isVector ? 'string' : 'singleSelect',
       valueOptions: isBool ? [
         { value: true, label: 'true' },
         { value: false, label: 'false' }
@@ -466,44 +466,44 @@ const columns = [
         }
         return value;
       },
-      valueParser: (value) => {
-        let parsedValue = value;
-        try {
-          switch (col.type.toLowerCase()) {
-            case 'int':
-              parsedValue = isNaN(parseInt(value)) ? getDefaultValue(col.type) : parseInt(value);
-              break;
-            case 'float':
-              parsedValue = isNaN(parseFloat(value)) ? getDefaultValue(col.type) : parseFloat(value);
-              break;
-            case 'bool':
-              parsedValue = value === 'true' || value === true || value === '1';
-              break;
-            case 'string':
-              parsedValue = String(value ?? '');
-              break;
-            case 'vector2':
-              parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
-              if (!Array.isArray(parsedValue) || parsedValue.length !== 2) throw new Error('不正なVector2形式');
-              break;
-            case 'vector3':
-              parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
-              if (!Array.isArray(parsedValue) || parsedValue.length !== 3) throw new Error('不正なVector3形式');
-              break;
-            default:
-              if (isEnum) {
-                const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v}`);
-                parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : '');
-              } else {
-                parsedValue = value ?? '';
-              }
-          }
-        } catch (e) {
-          console.error(`valueParser error for ${col.name}:`, e);
-          parsedValue = getDefaultValue(col.type);
+valueParser: (value) => {
+  let parsedValue = value;
+  try {
+    switch (col.type.toLowerCase()) {
+      case 'int':
+        parsedValue = isNaN(parseInt(value)) ? getDefaultValue(col.type) : parseInt(value);
+        break;
+      case 'float':
+        parsedValue = isNaN(parseFloat(value)) ? getDefaultValue(col.type) : parseFloat(value);
+        break;
+      case 'bool':
+        parsedValue = value === 'true' || value === true || value === '1';
+        break;
+      case 'string':
+        parsedValue = value != null ? String(value) : getDefaultValue(col.type);
+        break;
+      case 'vector2':
+        parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
+        if (!Array.isArray(parsedValue) || parsedValue.length !== 2) throw new Error('不正なVector2形式');
+        break;
+      case 'vector3':
+        parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
+        if (!Array.isArray(parsedValue) || parsedValue.length !== 3) throw new Error('不正なVector3形式');
+        break;
+      default:
+        if (isEnum) {
+          const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v}`);
+          parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : '');
+        } else {
+          parsedValue = value ?? '';
         }
-        return parsedValue;
-      },
+    }
+  } catch (e) {
+    console.error(`valueParser error for ${col.name}:`, e);
+    parsedValue = getDefaultValue(col.type);
+  }
+  return parsedValue;
+},
 
     };
   }),
