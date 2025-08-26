@@ -49,16 +49,13 @@ def get_type_lists():
     return basic_types, unity_types, [e['name'] for e in enum_list], [c['name'] for c in class_list]
 
 # ディレクトリ作成
-for dir_name in [ENUM, CLASS_DATA, STATE_DATA]:
+for dir_name in [ENUM, CLASS_DATA, STATE_DATA, CLASS_DATA_ID]:
     dir_path = os.path.join(DATA_DIR, dir_name)
     if not os.path.exists(dir_path):
         logger.info(f"Creating directory: {dir_path}")
         os.makedirs(dir_path)
         
 # ベースファイルの作成
-if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, "BaseClassData.cs")):
-    with open(os.path.join(DATA_DIR, CLASS_DATA, "BaseClassData.cs"), 'w', encoding='utf-8') as f:
-        f.write("namespace GameCore.Classes\n{\n    public class BaseClassData\n    {\n    }\n}\n")
         
 if not os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "BaseState.cs")):
     code_str = """
