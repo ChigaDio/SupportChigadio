@@ -10,7 +10,8 @@ import json
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     # PyInstallerでビルドされた場合
-    BASE_DIR = os.path.dirname(sys.executable)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 else:
     # デバッグ環境（VS Codeなど）
     # main-support/ の1つ上のディレクトリ（project/）を基準にする
