@@ -7,8 +7,11 @@ import EnumIdGrid from './components/EnumIdGrid';
 import EnumDetailGrid from './components/EnumDetailGrid';
 import ClassDataGrid from './components/ClassDataGrid';
 import ClassDataDetailGrid from './components/ClassDataDetailGrid';
+
 import StateGrid from './components/StateGrid';
 import StateDetailGridGrid from './components/StateDetailGrid';
+import ClassDataIdGrid from './components/ClassDataIdGrid';
+import ClassDataIdDetailGrid from './components/ClassDataIdDetailGrid';
 
 function AppContent() {
   const navigate = useNavigate();
@@ -25,6 +28,9 @@ function AppContent() {
           break;
         case 'class-data':
           navigate('/class-data');
+          break;
+        case 'class-data-id':
+          navigate('/class-data-id');
           break;
         case 'state':
           navigate('/state');
@@ -47,6 +53,8 @@ function AppContent() {
           <Route path="/enum/:name" element={<EnumDetailGrid />} />
           <Route path="/class-data" element={<ClassDataGrid />} />
           <Route path="/class/:name" element={<ClassDataDetailGrid />} />
+          <Route path="/class-data-id" element={<ClassDataIdGrid />} />
+          <Route path="/class-data-id/:name" element={<ClassDataIdDetailGrid />} />
           <Route path="/state" element={<StateGrid />} />
           <Route path="/state/:name" element={<StateDetailGridGrid />} />
         </Routes>

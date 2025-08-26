@@ -47,7 +47,7 @@ function EnumDetailGrid() {
       return;
     }
     const maxId = Math.max(...data.map(item => item.id), 0) + 1;
-    const maxValue = Math.max(...data.map(item => item.value), -1) + 1;
+    const maxValue = data.length > 0 ? Math.max(...data.map(item => item.value), 0) + 1 : 1; // 1スタート
     const newRow = {
       id: maxId,
       property: newProperty,
@@ -70,7 +70,7 @@ function EnumDetailGrid() {
       return;
     }
     const maxId = Math.max(...data.map(item => item.id), 0);
-    const maxValue = data.length > 0 ? Math.max(...data.map(item => item.value), -1) + 1 : 0;
+    const maxValue = data.length > 0 ? Math.max(...data.map(item => item.value), 0) + 1 : 1; // 1スタート
     const newRows = Array.from({ length: count }, (_, index) => ({
       id: maxId + index + 1,
       property: `${name}_${index}`,
@@ -90,10 +90,10 @@ function EnumDetailGrid() {
     const newData = [...data];
     const [movedRow] = newData.splice(oldIndex, 1);
     newData.splice(targetIndex, 0, movedRow);
-    // valueを連番に更新（0スタート）
+    // valueを連番に更新（1スタート）
     const updatedData = newData.map((item, index) => ({
       ...item,
-      value: index
+      value: index + 1 // 1スタート
     }));
     console.log('Reordered data:', updatedData);
     setData(updatedData);

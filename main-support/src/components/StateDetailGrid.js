@@ -19,6 +19,14 @@ const CustomNode = ({ data, id }) => {
     console.log(`Opening code for node ${id}`);
   };
 
+  const handleAddSubNode = () => {
+    window.dispatchEvent(new CustomEvent('addSubNode', { detail: id }));
+  };
+
+  const handleDeleteSubNode = (subId) => {
+    window.dispatchEvent(new CustomEvent('deleteSubNode', { detail: { parentId: id, subId } }));
+  };
+
   return (
     <div className="bg-gray-900 rounded-lg text-white w-72" style={{ minHeight: '80px', position: 'relative' }}>
       <IconButton size="small" onClick={handleDelete} style={{ position: 'absolute', top: 4, right: 4, color: 'red' }}>
@@ -27,6 +35,9 @@ const CustomNode = ({ data, id }) => {
       <Button variant="outlined" size="small" onClick={handleShowCode} style={{ position: 'absolute', top: 32, right: 4, color: 'white', borderColor: 'white' }}>
         Show Code
       </Button>
+      <IconButton size="small" onClick={handleAddSubNode} style={{ position: 'absolute', top: 60, right: 4, color: 'green' }}>
+        <AddIcon fontSize="small" />
+      </IconButton>
       <div className="bg-gradient-to-r from-blue-800 to-blue-600 p-2 flex items-center justify-center">
         <Typography variant="subtitle1" className="font-semibold text-center text-white">
           {data.label}
@@ -34,9 +45,21 @@ const CustomNode = ({ data, id }) => {
       </div>
       <div className="p-3 bg-gray-800 flex items-center justify-center">
         <Typography variant="caption" className="text-gray-400">
-          ID: {id}
+          ID: {id} | Description: {data.description || 'N/A'}
         </Typography>
       </div>
+      {data.subNodes && data.subNodes.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {data.subNodes.map((sub) => (
+            <div key={sub.id} className="bg-gradient-to-r from-green-800 to-green-600 p-2 mt-1 rounded text-white flex items-center justify-between" style={{ width: '100%' }}>
+              <Typography variant="subtitle2">{sub.label}</Typography>
+              <IconButton size="small" onClick={() => handleDeleteSubNode(sub.id)} color="error">
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </div>
+          ))}
+        </div>
+      )}
       <Handle
         type="target"
         position={Position.Left}
@@ -65,9 +88,9 @@ function StateDetailGrid() {
   const [openManagerDialog, setOpenManagerDialog] = useState(false);
   const [openFlow, setOpenFlow] = useState(false);
   const [newFromState, setNewFromState] = useState('');
+  const [newDescription, setNewDescription] = useState('');
   const [newType, setNewType] = useState('');
   const [newName, setNewName] = useState('');
-  const [newDescription, setNewDescription] = useState('');
   const [newArraySize, setNewArraySize] = useState(0);
   const [typeOptions, setTypeOptions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +100,9 @@ function StateDetailGrid() {
   const [filteredTransitions, setFilteredTransitions] = useState([]);
   const { fitView, screenToFlowPosition } = useReactFlow();
   const reactFlowWrapper = useRef(null);
+  const [openSubNodeDialog, setOpenSubNodeDialog] = useState(false);
+  const [selectedParentId, setSelectedParentId] = useState(null);
+  const [newSubLabel, setNewSubLabel] = useState('');
 
   useEffect(() => {
     const handleDeleteNode = (e) => {
@@ -129,8 +155,39 @@ function StateDetailGrid() {
       });
     };
 
+    const handleAddSubNode = (e) => {
+      const parentId = e.detail;
+      setSelectedParentId(parentId);
+      setOpenSubNodeDialog(true);
+    };
+
+    const handleDeleteSubNode = (e) => {
+      const { parentId, subId } = e.detail;
+      setFlowElements((els) => ({
+        ...els,
+        nodes: els.nodes.map((node) => {
+          if (node.id === parentId) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subNodes: node.data.subNodes.filter((sub) => sub.id !== subId),
+              },
+            };
+          }
+          return node;
+        }),
+      }));
+    };
+
     window.addEventListener('deleteNode', handleDeleteNode);
-    return () => window.removeEventListener('deleteNode', handleDeleteNode);
+    window.addEventListener('addSubNode', handleAddSubNode);
+    window.addEventListener('deleteSubNode', handleDeleteSubNode);
+    return () => {
+      window.removeEventListener('deleteNode', handleDeleteNode);
+      window.removeEventListener('addSubNode', handleAddSubNode);
+      window.removeEventListener('deleteSubNode', handleDeleteSubNode);
+    };
   }, []);
 
   useEffect(() => {
@@ -151,6 +208,7 @@ function StateDetailGrid() {
           ? validData.transitions.map((item, index) => ({
               id: item.id || index + 1,
               fromState: item.fromState || '',
+              description: item.description || '',
               variables: Array.isArray(item.variables) ? item.variables : [],
             }))
           : [];
@@ -178,13 +236,19 @@ function StateDetailGrid() {
               source: edge.source,
               target: edge.target,
               type: 'custom',
-              style: { stroke: '#FFFF00', strokeWidth: 6 },
+              animated: true,
+              style: { stroke: '#00FF00', strokeWidth: 3 },
             }))
           : [];
         const validNodes = Array.isArray(validData.nodes)
           ? validData.nodes.map(node => ({
               ...node,
-              data: { ...node.data, targets: node.data.targets || [] }
+              data: { 
+                ...node.data, 
+                targets: node.data.targets || [], 
+                subNodes: node.data.subNodes || [],
+                description: validTransitions.find(t => t.fromState === node.data.label)?.description || ''
+              }
             }))
           : [];
 
@@ -251,26 +315,25 @@ function StateDetailGrid() {
     }
   };
 
-const handleGenerateCs = async () => {
-  const data = {
-    transitions,
-    manager: managerData,
-    base: baseData,
-    nodes: flowElements.nodes,
-    edges: flowElements.edges,
+  const handleGenerateCs = async () => {
+    const data = {
+      transitions,
+      manager: managerData,
+      base: baseData,
+      nodes: flowElements.nodes,
+      edges: flowElements.edges,
+    };
+
+    // ここを必ず data にする
+    fetch(`/api/generate-state/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+      .then(response => response.json())
+      .then(result => alert(result.message))
+      .catch(error => alert('C#生成エラー: ' + error));
   };
-
-  // ここを必ず data にする
-  fetch(`/api/generate-state/${name}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-    .then(response => response.json())
-    .then(result => alert(result.message))
-    .catch(error => alert('C#生成エラー: ' + error));
-};
-
 
   const handleAddTransition = () => {
     if (!newFromState.trim()) {
@@ -281,11 +344,13 @@ const handleGenerateCs = async () => {
     const newTransition = {
       id: newId,
       fromState: newFromState,
+      description: newDescription,
       variables: [],
     };
     setTransitions([...transitions, newTransition]);
     setOpenTransitionDialog(false);
     setNewFromState('');
+    setNewDescription('');
   };
 
   const handleDeleteTransition = (id) => {
@@ -460,9 +525,36 @@ const handleGenerateCs = async () => {
     setBaseData(baseData.filter(item => item.id !== id));
   };
 
+  const handleAddSubNodeConfirm = () => {
+    if (!newSubLabel.trim()) {
+      alert('ラベルは必須です');
+      return;
+    }
+    setFlowElements((els) => {
+      const updatedNodes = els.nodes.map((node) => {
+        if (node.id === selectedParentId) {
+          const subNodes = node.data.subNodes || [];
+          const newSubId = Math.max(...subNodes.map(s => s.id || 0), 0) + 1;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              subNodes: [...subNodes, { id: newSubId, label: newSubLabel }],
+            },
+          };
+        }
+        return node;
+      });
+      return { ...els, nodes: updatedNodes };
+    });
+    setOpenSubNodeDialog(false);
+    setNewSubLabel('');
+    setSelectedParentId(null);
+  };
+
   const onConnect = useCallback((connection) => {
     setFlowElements((els) => {
-      const newEdge = { ...connection, id: `e${els.edges.length + 1}`, type: 'custom', style: { stroke: '#FFFF00', strokeWidth: 6 } };
+      const newEdge = { ...connection, id: `e${els.edges.length + 1}`, type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } };
       const updatedEdges = addEdge(newEdge, els.edges);
 
       const updatedNodes = els.nodes.map((node) => {
@@ -507,6 +599,11 @@ const handleGenerateCs = async () => {
     });
   }, []);
 
+  const onEdgeContextMenu = useCallback((event, edge) => {
+    event.preventDefault();
+    onEdgesDelete([edge]);
+  }, [onEdgesDelete]);
+
   const onNodesChange = useCallback((changes) => {
     setFlowElements((els) => ({
       ...els,
@@ -547,7 +644,7 @@ const handleGenerateCs = async () => {
       id: newNodeId,
       type: 'default',
       position,
-      data: { label, targets: [] },
+      data: { label, targets: [], subNodes: [], description: transitions.find(t => t.fromState === label)?.description || '' },
       draggable: true,
     };
 
@@ -555,7 +652,7 @@ const handleGenerateCs = async () => {
       ...els,
       nodes: [...els.nodes, newNode],
     }));
-  }, [screenToFlowPosition, flowElements.nodes]);
+  }, [screenToFlowPosition, flowElements.nodes, transitions]);
 
   const onDragOver = useCallback((event) => {
     event.preventDefault();
@@ -585,6 +682,7 @@ const handleGenerateCs = async () => {
   const transitionColumns = [
     { field: 'id', headerName: 'ID', width: 100 },
     { field: 'fromState', headerName: '状態名', width: 150 },
+    { field: 'description', headerName: '説明', width: 250, editable: true },
     {
       field: 'actions',
       headerName: 'アクション',
@@ -851,13 +949,14 @@ const handleGenerateCs = async () => {
                   onConnect={onConnect}
                   onNodesDelete={onNodesDelete}
                   onEdgesDelete={onEdgesDelete}
+                  onEdgeContextMenu={onEdgeContextMenu}
                   onInit={onInit}
                   onNodeDragStart={onNodeDragStart}
                   snapToGrid
                   snapGrid={[15, 15]}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
-                  defaultEdgeOptions={{ type: 'custom', style: { stroke: '#FFFF00', strokeWidth: 6 } }}
+                  defaultEdgeOptions={{ type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } }}
                 >
                   <Background variant="dots" gap={15} size={1} />
                   <Controls />
@@ -923,6 +1022,14 @@ const handleGenerateCs = async () => {
                 margin="dense"
                 variant="outlined"
                 required
+              />
+              <TextField
+                label="説明"
+                fullWidth
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+                margin="dense"
+                variant="outlined"
               />
             </DialogContent>
             <DialogActions>
@@ -1031,6 +1138,27 @@ const handleGenerateCs = async () => {
                 variant="contained"
                 sx={{ textTransform: 'none' }}
               >
+                追加
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Dialog open={openSubNodeDialog} onClose={() => setOpenSubNodeDialog(false)} maxWidth="sm" fullWidth>
+            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white', fontWeight: 'medium' }}>新しいサブノードを追加</DialogTitle>
+            <DialogContent sx={{ pt: 2 }}>
+              <Autocomplete
+                freeSolo
+                options={transitions.map(t => t.fromState)}
+                value={newSubLabel}
+                onChange={(e, newValue) => setNewSubLabel(newValue || '')}
+                renderInput={(params) => <TextField {...params} label="ラベル (遷移から選択)" fullWidth margin="dense" variant="outlined" required />}
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenSubNodeDialog(false)} color="secondary" sx={{ textTransform: 'none' }}>
+                キャンセル
+              </Button>
+              <Button onClick={handleAddSubNodeConfirm} color="primary" variant="contained" sx={{ textTransform: 'none' }}>
                 追加
               </Button>
             </DialogActions>

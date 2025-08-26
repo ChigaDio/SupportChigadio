@@ -44,6 +44,12 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
             >
               <ListItemText primary="Class Data" />
             </ListItemButton>
+              <ListItemButton
+              sx={{ pl: 4 }}
+              onClick={() => handleSubMenuClick('class-data-id')}
+            >
+              <ListItemText primary="Class Data ID" />
+            </ListItemButton>
             <ListItemButton
               sx={{ pl: 4 }}
               onClick={() => handleSubMenuClick('state')}
