@@ -1,5 +1,6 @@
 from math import isnan, isfinite
 import logging
+import re
 import shutil
 import struct
 import sys
@@ -10,8 +11,7 @@ import json
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     # PyInstallerでビルドされた場合
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
+    BASE_DIR = os.path.dirname(sys.executable)
 else:
     # デバッグ環境（VS Codeなど）
     # main-support/ の1つ上のディレクトリ（project/）を基準にする
@@ -19,7 +19,8 @@ else:
 
 # ディレクトリパスをプロジェクトルート基準に設定
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
+
 CLASS_DATA_ID = 'class-data-id'
 
 logging.basicConfig(level=logging.DEBUG)
@@ -84,7 +85,7 @@ if not os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "BaseState.cs")):
         private bool is_active = true;
         public bool IsActive => is_active;
 
-        protected void IsActiveOff(T state_manager_data)
+        protected void IsActiveOff()
         {
             is_active = false;
         }
@@ -92,13 +93,14 @@ if not os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "BaseState.cs")):
         public abstract void Enter(T state_manager_data);
         public abstract void Update(T state_manager_data);
         public abstract void Exit(T state_manager_data);
-        public virtual T BranchNextState(T state_manager_data)
+        
+        public virtual E BranchNextState(T state_manager_data)
         {
             return default;
         }
 """
     with open(os.path.join(DATA_DIR, STATE_DATA, "BaseState.cs"), 'w', encoding='utf-8') as f:
-        f.write(f"namespace GameCore.States\n{{\n    public class BaseState<T> where T : BaseStateManagerData\n    {{{code_str}\n    }}\n}}\n")
+        f.write(f"using GameCore.States.Managers;\nusing System;\nnamespace GameCore.States\n{{\n    public abstract class  BaseState<E,T>where E : Enum where T : BaseStateManagerData<E>\n    {{{code_str}\n    }}\n}}\n")
 
 STATE_BRANCH = os.path.join(DATA_DIR, STATE_DATA)
 
@@ -107,31 +109,7 @@ os.makedirs(STATE_BRANCH, exist_ok=True)
 
 
 files_content = {
-    # BaseDetailStateBranch
-    os.path.join(STATE_BRANCH, "BaseDetailStateBranch.cs"): """namespace GameCore.States.Branch
-{
-    public abstract class BaseDetailStateBranch<T, E, F>
-        where T : Enum
-        where E : GameCore.States.Managers.BaseStateManagerData<T>
-        where F : GameCore.States.BaseState<E>
-    {
-        public abstract T ConditionsBranch(E state_manager_data, F state);
-    }
-}
-""",
 
-    # BaseStateBranch
-    os.path.join(STATE_BRANCH, "BaseStateBranch.cs"): """namespace GameCore.States.Branch
-{
-    public abstract class BaseStateBranch<T, E, F> 
-        where T : Enum
-        where E : GameCore.States.Managers.BaseStateManagerData<T>
-        where F : GameCore.States.BaseState<E>
-    {
-        public abstract T ConditionsBranch(E state_manager_data, F state);
-    }
-}
-""",
 
     # BaseStateControl
     os.path.join(STATE_BRANCH, "BaseStateControl.cs"): """namespace GameCore.States.Control
@@ -139,7 +117,7 @@ files_content = {
     public abstract class BaseStateControl<T, E, F>
         where T : Enum
         where E : GameCore.States.Managers.BaseStateManagerData<T>
-        where F : GameCore.States.BaseState<E>
+        where F : GameCore.States.BaseState<T,E>
     {
 
         protected E state_manager_data;
@@ -165,10 +143,11 @@ files_content = {
 
         protected abstract T GetInitStartID();
         protected  void OnStartState(
-    CharacterStateID state_id,
+    T state_id,
     Action<E> action)
         {
             state = FactoryState(state_id);
+            state_manager_data.ChangeStateNowID(state_id);
             action?.Invoke(state_manager_data);
             state.Enter(state_manager_data);
         }
@@ -248,35 +227,14 @@ files_content = {
 for path, content in files_content.items():
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
+            f.write("using System;\n")
+            f.write("using System.Collections.Generic;\n")
             f.write(content)
         print(f"Created: {path}")
     else:
         print(f"Skipped (exists): {path}")
 
-if not os.path.exists(os.path.join(DATA_DIR, STATE_DATA, "BaseStateManagerData.cs")):  
-    code_str = """
-    protected T now_state_id = default;
 
-    protected T old_state_id = default;
-
-    public void ChangeStateNowID(T new_state_id)
-    {
-        old_state_id = now_state_id;
-        now_state_id = new_state_id;
-    }
-
-    public T GetNowStateID()
-    {
-        return now_state_id;
-    }
-
-    public T GetOldStateID()
-    {
-        return old_state_id;
-    }
-"""
-    with open(os.path.join(DATA_DIR, STATE_DATA, "BaseStateManagerData.cs"), 'w', encoding='utf-8') as f:
-        f.write(f"namespace GameCore.States\n{{\n    using System;\n\n    public class BaseStateManagerData<T> where T : Enum\n    {{{code_str}\n    }}\n}}\n")
 # BaseClassDataRow.cs を生成
 if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRow.cs")):
     code_str = """
@@ -298,18 +256,56 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
     code_str = """
     using System.IO;
     using System;
+    using System.Collections.Generic;
 
     namespace GameCore.Tables
     {
         public abstract class BaseClassDataID<T,E> where T : Enum where E : BaseClassDataRow
         {
             public static Dictionary<T,E> Table = new Dictionary<T,E>();
+            protected BaseClassDataID(BinaryReader reader)
+            {
+                // ここで共通の処理を追加可能（例：ヘッダチェックなど）
+            }
         }
     }
     """
     with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
 
+
+# --- BaseStateBranch.cs ---
+base_branch_path = os.path.join(DATA_DIR, STATE_BRANCH, 'BaseStateBranch.cs')
+with open(base_branch_path, 'w', encoding='utf-8') as f:
+    f.write('using System;\n')
+    f.write('using UnityEngine;\n')
+    f.write('using GameCore.States.Managers;\n\n')
+    f.write('namespace GameCore.States.Branch\n{\n')
+    f.write('    public abstract class BaseStateBranch<TStateId, TManagerData, TState, TDetailState>\n')
+    f.write('        where TStateId : Enum\n')
+    f.write('        where TManagerData : BaseStateManagerData<TStateId>\n')
+    f.write('        where TState : BaseState<TStateId, TManagerData>\n')
+    f.write('        where TDetailState : BaseDetailStateBranch<TStateId, TManagerData, TState>\n')
+    f.write('    {\n')
+    f.write('        public abstract TStateId ConditionsBranch(TManagerData manager_data, TState state);\n')
+    f.write('        public abstract TDetailState Factory(TStateId id);\n')
+    f.write('    }\n')
+    f.write('}\n')
+# --- BaseDetailStateBranch.cs ---
+base_detail_path = os.path.join(DATA_DIR, STATE_BRANCH, 'BaseDetailStateBranch.cs')
+with open(base_detail_path, 'w', encoding='utf-8') as f:
+    f.write('using System;\n')
+    f.write('using UnityEngine;\n')
+    f.write('using GameCore.States.Managers;\n\n')
+    f.write('namespace GameCore.States.Branch\n{\n')
+    f.write('    public abstract class BaseDetailStateBranch<TStateId, TManagerData, TState>\n')
+    f.write('        where TStateId : Enum\n')
+    f.write('        where TManagerData : BaseStateManagerData<TStateId>\n')
+    f.write('        where TState : BaseState<TStateId, TManagerData>\n')
+    f.write('    {\n')
+    f.write('        public abstract TStateId ConditionsBranch(TManagerData manager_data, TState state);\n')
+    f.write('    }\n')
+    f.write('}\n')
 # Enum-ID管理
 @app.route('/api/enum-id', methods=['GET', 'POST', 'PATCH'])
 def manage_enum_id():
@@ -844,17 +840,13 @@ def generate_class_data_id_cs(name):
         # 出力ディレクトリ作成
         table_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, f"{name}")
         os.makedirs(table_dir, exist_ok=True)
-
-        # --- Main Table File ---
-        cs_path = os.path.join(table_dir, f"{name}Table.cs")
-        with open(cs_path, 'w', encoding='utf-8') as f:
-            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
-            f.write("namespace GameCore.Tables\n{\n")
-            f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
-            #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
-
+        
+        #-- Row ---
+        with open(os.path.join(table_dir, f"{name}Row.cs"), 'w', encoding='utf-8') as lf:
             # --- Row Class ---
-            f.write(f"        public class {name}Row : BaseClassDataRow\n        {{\n")
+            lf.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\n\n")
+            lf.write("namespace GameCore.Tables\n{\n")
+            lf.write(f"    public class {name}Row : BaseClassDataRow\n    {{\n")
             for col in columns:
                 type_str = col['type']
                 if type_str in enum_list:
@@ -863,9 +855,19 @@ def generate_class_data_id_cs(name):
                     type_str = f"GameCore.Classes.{type_str}"
                 elif type_str.lower() in ['vector2', 'vector3']:
                     type_str = type_str.capitalize()
+                lf.write(f"            private {type_str} {col['name']};\n")
+                lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
+            lf.write("  }\n}")
 
-                f.write(f"            private {type_str} {col['name']};\n")
-                f.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
+        # --- Main Table File ---
+        cs_path = os.path.join(table_dir, f"{name}Table.cs")
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\n\n")
+            f.write("namespace GameCore.Tables\n{\n")
+            f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
+            #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
+
+
 
             # --- Read Method ---
             f.write("\n            public override void Read(BinaryReader reader)\n")
@@ -1182,8 +1184,8 @@ def generate_state_id(file_path, name, json_data):
 def generate_state_manager_data(file_path, name, json_data):
     if not os.path.exists(os.path.join(file_path, "ManagerData")):
         os.makedirs(os.path.join(file_path, "ManagerData"))
-    file_base_state_manager_data_path = os.path.join(file_path, "ManagerData", f'Base{name}StateManager.cs')
-    file_state_manager_data_path = os.path.join(file_path, "ManagerData", f'{name}StateManager.cs')
+    file_base_state_manager_data_path = os.path.join(file_path, "ManagerData", f'Base{name}StateManagerData.cs')
+    file_state_manager_data_path = os.path.join(file_path, "ManagerData", f'{name}StateManagerData.cs')
 
     base_code_str = []
 
@@ -1215,28 +1217,58 @@ def generate_state_manager_data(file_path, name, json_data):
         f.write('using System.Collections.Generic;\n')
         f.write('using UnityEngine;\n\n')
 
+
         f.write('namespace GameCore.States.Managers\n{\n')
-        f.write(f'    public class {name}StateManager : GameCore.States.Base{name}StateManager\n    {{\n')
+        f.write(f'    public class {name}StateManagerData : Base{name}StateManagerData\n    {{\n')
         f.write('    }\n')
         f.write('}\n')
         
 
 
+
+import os
+
 def generate_state_branch(file_path, name, json_data):
+    """
+    ゲームステートブランチのC#コードを生成する。
+    file_path: 出力先ディレクトリ
+    name: ステート名（例: MainGame）
+    json_data: ノード情報を持つJSONデータ
+    """
     branch_dir = os.path.join(file_path, "Branch")
     os.makedirs(branch_dir, exist_ok=True)
     node_dict = {node["id"]: node for node in json_data.get("nodes", [])}
 
+    # --- Base{name}StateBranch.cs ---
+    base_main_branch_path = os.path.join(branch_dir, f'Base{name}StateBranch.cs')
+    with open(base_main_branch_path, 'w', encoding='utf-8') as f:
+        f.write('using System;\n')
+        f.write('using UnityEngine;\n')
+        f.write('using GameCore.States.Managers;\n\n')
+        f.write('using GameCore.States.ID;\n')
+        f.write('namespace GameCore.States.Branch\n{\n')
+        f.write(f'    public abstract class Base{name}StateBranch<TState, TDetailState> : BaseStateBranch<{name}StateID, {name}StateManagerData, TState, TDetailState>\n')
+        f.write(f'        where TState : GameCore.States.Base{name}State\n')
+        f.write(f'        where TDetailState : Base{name}DetailStateBranch<TState>\n')
+        f.write('    {\n')
+        f.write(f'        public override abstract {name}StateID ConditionsBranch({name}StateManagerData manager_data, TState state);\n')
+        f.write(f'        public override abstract TDetailState Factory({name}StateID id);\n')
+        f.write('    }\n')
+        f.write('}\n')
+
     # --- Base{name}DetailStateBranch.cs ---
     base_detail_path = os.path.join(branch_dir, f'Base{name}DetailStateBranch.cs')
     with open(base_detail_path, 'w', encoding='utf-8') as f:
-        f.write('using System.Collections.Generic;\n')
-        f.write('using UnityEngine;\n\n')
+        f.write('using System;\n')
+        f.write('using UnityEngine;\n')
+        f.write('using GameCore.States.ID;\n')
+        f.write('using GameCore.States.Managers;\n\n')
+
         f.write('namespace GameCore.States.Branch\n{\n')
-        f.write(f'    public abstract class Base{name}DetailStateBranch<F> ')
-        f.write(f': BaseDetailStateBranch<GameCore.States.ID.{name}StateID, GameCore.States.Managers.{name}StateManagerData, F> where F : GameCore.States.Base{name}State\n')
+        f.write(f'    public abstract class Base{name}DetailStateBranch<TState> : BaseDetailStateBranch<{name}StateID, {name}StateManagerData, TState>\n')
+        f.write(f'        where TState : GameCore.States.Base{name}State\n')
         f.write('    {\n')
-        f.write(f'        public abstract GameCore.States.ID.{name}StateID ConditionsBranch(GameCore.States.Managers.{name}StateManagerData manager_data, F state);\n')
+        f.write(f'        public override abstract {name}StateID ConditionsBranch({name}StateManagerData manager_data, TState state);\n')
         f.write('    }\n')
         f.write('}\n')
 
@@ -1246,92 +1278,107 @@ def generate_state_branch(file_path, name, json_data):
         label = node["data"]["label"]
         targets = node["data"].get("targets", [])
         if len(targets) <= 1:
-            continue  # 1つ以下なら DetailBranch を作らない
+            continue  # ターゲットが1つ以下なら DetailBranch を作らない
         label_groups.setdefault(label, []).append(node)
 
     for label, nodes in label_groups.items():
-        # Base{name}{label}DetailStateBranch.cs
+        # --- Base{name}{label}DetailStateBranch.cs ---
         base_label_path = os.path.join(branch_dir, f'Base{name}{label}DetailStateBranch.cs')
         with open(base_label_path, 'w', encoding='utf-8') as f:
-            f.write('using System.Collections.Generic;\n')
-            f.write('using UnityEngine;\n\n')
+            f.write('using System;\n')
+            f.write('using UnityEngine;\n')
+            f.write('using GameCore.States.ID;\n')
+            f.write('using GameCore.States.Managers;\n\n')
             f.write('namespace GameCore.States.Branch\n{\n')
             f.write(f'    public abstract class Base{name}{label}DetailStateBranch : Base{name}DetailStateBranch<{name}{label}State>\n')
             f.write('    {\n')
-            f.write(f'        public abstract GameCore.States.ID.{name}StateID ConditionsBranch(GameCore.States.Managers.{name}StateManagerData manager_data, GameCore.States.{name}{label}State state);\n')
+            f.write(f'        public override abstract {name}StateID ConditionsBranch({name}StateManagerData manager_data, {name}{label}State state);\n')
+            for node in nodes:
+                targets = node["data"].get("targets", [])
+                for target_id in targets:
+                    target_label = node_dict.get(target_id, {}).get("data", {}).get("label", "")
+                    if target_label:
+                        f.write(f'        public abstract bool {name}{label}_to_{target_label}{int(target_id):02d}({name}StateManagerData manager_data, {name}{label}State state);\n')
             f.write('    }\n')
             f.write('}\n')
 
-        # IDごとの BaseDetail / Detail クラス
+        # --- IDごとの BaseDetail / Detail クラス ---
         for node in nodes:
             node_id = int(node["id"])
             targets = node["data"].get("targets", [])
             if len(targets) <= 1:
-                continue  # 1つ以下なら DetailBranch を作らない
+                continue  # ターゲットが1つ以下なら DetailBranch を作らない
+            # Base{name}{label}{node_id:02d}DetailStateBranch.cs
             base_id_path = os.path.join(branch_dir, f'Base{name}{label}{node_id:02d}DetailStateBranch.cs')
             with open(base_id_path, 'w', encoding='utf-8') as f:
-                f.write('using System.Collections.Generic;\n')
-                f.write('using UnityEngine;\n\n')
+                f.write('using System;\n')
+                f.write('using UnityEngine;\n')
+                f.write('using GameCore.States.ID;\n')
+                f.write('using GameCore.States.Managers;\n\n')
                 f.write('namespace GameCore.States.Branch\n{\n')
                 f.write(f'    public abstract class Base{name}{label}{node_id:02d}DetailStateBranch : Base{name}{label}DetailStateBranch\n')
                 f.write('    {\n')
-                f.write(f'        public override GameCore.States.ID.{name}StateID ConditionsBranch(GameCore.States.Managers.{name}StateManagerData manager_data, GameCore.States.{name}{label}State state)\n')
+                f.write(f'        public override {name}StateID ConditionsBranch({name}StateManagerData manager_data, {name}{label}State state)\n')
                 f.write('        {\n')
                 for target_id in targets:
                     target_label = node_dict.get(target_id, {}).get("data", {}).get("label", "")
                     if target_label:
                         f.write(f'            if ({name}{label}_to_{target_label}{int(target_id):02d}(manager_data, state))\n')
-                        f.write(f'                return GameCore.States.ID.{name}StateID.{target_label}{int(target_id):02d};\n')
-                f.write(f'            return GameCore.States.ID.{name}StateID.None;\n')
+                        f.write(f'                return {name}StateID.{target_label}{int(target_id):02d};\n')
+                f.write(f'            return {name}StateID.None;\n')
                 f.write('        }\n\n')
                 for target_id in targets:
                     target_label = node_dict.get(target_id, {}).get("data", {}).get("label", "")
                     if target_label:
-                        f.write(f'        public abstract bool {name}{label}_to_{target_label}{int(target_id):02d}(GameCore.States.Managers.{name}StateManagerData manager_data, GameCore.States.{name}{label}State state);\n')
+                        f.write(f'        public override abstract bool {name}{label}_to_{target_label}{int(target_id):02d}({name}StateManagerData manager_data, {name}{label}State state);\n')
                 f.write('    }\n')
                 f.write('}\n')
 
+            # {name}{label}{node_id:02d}DetailStateBranch.cs
             impl_id_path = os.path.join(branch_dir, f'{name}{label}{node_id:02d}DetailStateBranch.cs')
             with open(impl_id_path, 'w', encoding='utf-8') as f:
-                f.write('using System.Collections.Generic;\n')
-                f.write('using UnityEngine;\n\n')
+                f.write('using System;\n')
+                f.write('using UnityEngine;\n')
+                f.write('using GameCore.States.ID;\n')
+                f.write('using GameCore.States.Managers;\n\n')
                 f.write('namespace GameCore.States.Branch\n{\n')
                 f.write(f'    public class {name}{label}{node_id:02d}DetailStateBranch : Base{name}{label}{node_id:02d}DetailStateBranch\n')
                 f.write('    {\n')
                 for target_id in targets:
                     target_label = node_dict.get(target_id, {}).get("data", {}).get("label", "")
                     if target_label:
-                        f.write(f'        public override bool {name}{label}_to_{target_label}{int(target_id):02d}(GameCore.States.Managers.{name}StateManagerData manager_data, {name}{label}State state)\n')
+                        f.write(f'        public override bool {name}{label}_to_{target_label}{int(target_id):02d}({name}StateManagerData manager_data, {name}{label}State state)\n')
                         f.write('        {\n')
                         f.write('            return false;\n')
                         f.write('        }\n\n')
                 f.write('    }\n')
                 f.write('}\n')
 
-   
     # --- {name}{label}StateBranch.cs を生成 ---
     for label, nodes in label_groups.items():
         branch_path = os.path.join(branch_dir, f'{name}{label}StateBranch.cs')
-        if os.path.exists(branch_path): continue  # 既に生成されている場合はスキップ
+        if os.path.exists(branch_path):
+            continue  # 既に生成されている場合はスキップ
         with open(branch_path, 'w', encoding='utf-8') as f:
-            f.write('using System.Collections.Generic;\n')
-            f.write('using UnityEngine;\n\n')
+            f.write('using System;\n')
+            f.write('using UnityEngine;\n')
+            f.write('using GameCore.States.ID;\n')
+            f.write('using GameCore.States.Managers;\n\n')
             f.write('namespace GameCore.States.Branch\n{\n')
-            f.write(f'    public class {name}{label}StateBranch : GameCore.States.Base{name}StateBranch<{name}{label}State>\n')
+            f.write(f'    public class {name}{label}StateBranch : Base{name}StateBranch<{name}{label}State, Base{name}{label}DetailStateBranch>\n')
             f.write('    {\n')
-            f.write(f'        public override GameCore.States.ID.{name}StateID ConditionsBranch(GameCore.States.Managers.{name}StateManagerData manager_data, {name}{label}State state)\n')
+            f.write(f'        public override {name}StateID ConditionsBranch({name}StateManagerData manager_data, {name}{label}State state)\n')
             f.write('        {\n')
-            f.write('            var id = manager_data.GetNowID();\n')
+            f.write('            var id = manager_data.GetNowStateID();\n')
             f.write('            var branch = Factory(id);\n')
-            f.write('            return branch != null ? branch.ConditionsBranch(manager_data, state) : ')
-            f.write(f'GameCore.States.ID.{name}StateID.None;\n')
+            f.write(f'            return branch != null ? branch.ConditionsBranch(manager_data, state) : {name}StateID.None;\n')
             f.write('        }\n\n')
-            f.write(f'        public Base{name}DetailStateBranch Factory(GameCore.States.ID.{name}StateID id)\n')
+            f.write(f'        public override Base{name}{label}DetailStateBranch Factory({name}StateID id)\n')
             f.write('        {\n')
             f.write('            switch (id)\n')
             f.write('            {\n')
             for node in nodes:
-                f.write(f'                case GameCore.States.ID.{name}StateID.{label}{int(node["id"]):02d}:\n')
+                f.write(f'                case {name}StateID.{label}{int(node["id"]):02d}:\n')
                 f.write(f'                    return new {name}{label}{int(node["id"]):02d}DetailStateBranch();\n')
             f.write('                default:\n')
             f.write('                    return null;\n')
@@ -1339,7 +1386,6 @@ def generate_state_branch(file_path, name, json_data):
             f.write('        }\n')
             f.write('    }\n')
             f.write('}\n')
-            
 
 
 #stateの作成
@@ -1373,9 +1419,11 @@ def generate_state_classes(file_path, name, json_data):
         
     base_state_path = os.path.join(state_dir, f'Base{name}State.cs')
     with open(base_state_path, 'w', encoding='utf-8') as f:
-        f.write('using UnityEngine;\n\n')
+        f.write('using UnityEngine;\n')
+        f.write('using GameCore.States.Managers;\n')
+        f.write('using GameCore.States.ID;\n\n')
         f.write('namespace GameCore.States\n{\n')
-        f.write(f'    public abstract class Base{name}State : BaseState<GameCore.States.Managers.{name}StateManagerData>\n')
+        f.write(f'    public abstract class Base{name}State : BaseState<{name}StateID, {name}StateManagerData>\n')
         f.write('    {\n')
         for data in base_code_str:
             f.write(data)
@@ -1400,29 +1448,77 @@ def generate_state_classes(file_path, name, json_data):
             f.write('namespace GameCore.States\n{\n')
             f.write(f'    public abstract class Base{name}{label}State : GameCore.States.Base{name}State\n')
             f.write('    {\n')
-            if len(targets) > 1:
-                f.write(f'        public override GameCore.States.ID.{name}StateID BranchNextState(GameCore.States.Managers.{name}StateManagerData state_manager_data)\n')
-                f.write('        {\n')
-                f.write(f'            var branch = new {name}{label}StateBranch();\n')
-                f.write(f'            var next_id = branch.ConditionsBranch(state_manager_data, this);\n')
-                f.write('            return next_id;\n')
-                f.write('        }\n')
+
+
             f.write('    }\n')
             f.write('}\n')
 
         # {name}{label}{id:02d}State.cs
         state_class_path = os.path.join(state_dir, f'{name}{label}State.cs')
-        if os.path.exists(state_class_path): continue  # 既に生成されている場合はスキップ
-        with open(state_class_path, 'w', encoding='utf-8') as f:
-            f.write('using UnityEngine;\n\n')
-            f.write('namespace GameCore.States\n{\n')
-            f.write(f'    public class {name}{label}State : Base{name}{label}State\n')
-            f.write('    {\n')
-            f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write('    }\n')
-            f.write('}\n')
+        if os.path.exists(state_class_path):
+            # 既存なら追記・削除の調整を実施
+            ensure_branchnext_in_state_class(state_class_path, name, label, targets)
+        else:
+            # 新規生成
+            with open(state_class_path, 'w', encoding='utf-8') as f:
+                f.write('using UnityEngine;\n\n')
+                f.write('using GameCore.States.Branch;\n')
+                f.write('namespace GameCore.States\n{\n')
+                f.write(f'    public class {name}{label}State : Base{name}{label}State\n')
+                f.write('    {\n')
+                f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+                f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+                f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+                if len(targets) > 1:
+                    f.write(
+                        f'        public override GameCore.States.ID.{name}StateID BranchNextState(GameCore.States.Managers.{name}StateManagerData state_manager_data)\n'
+                        f'        {{\n'
+                        f'            var branch = new {name}{label}StateBranch();\n'
+                        f'            var next_id = branch.ConditionsBranch(state_manager_data, this);\n'
+                        f'            return next_id;\n'
+                        f'        }}\n'
+                    )
+                f.write('    }\n')
+                f.write('}\n')
+            
+def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
+    """既存ファイルに BranchNextState を追記・削除する"""
+    branch_code = (
+        f'        public override GameCore.States.ID.{name}StateID BranchNextState(GameCore.States.Managers.{name}StateManagerData state_manager_data)\n'
+        f'        {{\n'
+        f'            var branch = new {name}{label}StateBranch();\n'
+        f'            var next_id = branch.ConditionsBranch(state_manager_data, this);\n'
+        f'            return next_id;\n'
+        f'        }}\n'
+    )
+
+    if not os.path.exists(state_class_path):
+        return False  # 新規生成時に書き込むので何もしない
+
+    with open(state_class_path, 'r', encoding='utf-8') as fr:
+        content = fr.read()
+
+    has_branch_code = branch_code in content
+
+    if len(targets) > 1 and not has_branch_code:
+        # --- 追記処理 ---
+        # クラスの終わりの直前 } に挿入する
+        content = re.sub(r'^\s*}\s*\Z',
+                         branch_code + '    }\n}',
+                         content,
+                         flags=re.MULTILINE)
+        with open(state_class_path, 'w', encoding='utf-8') as fw:
+            fw.write(content)
+        return True
+
+    elif len(targets) <= 1 and has_branch_code:
+        # --- 削除処理 ---
+        content = content.replace(branch_code, '')
+        with open(state_class_path, 'w', encoding='utf-8') as fw:
+            fw.write(content)
+        return True
+
+    return False
 
 
 
@@ -1614,9 +1710,9 @@ def generate_control_classes(file_path, name, json_data):
         # BranchState()
         f.write('        public override void BranchState()\n')
         f.write('        {\n')
-        f.write('            if (!state.IsActive) return;\n\n')
+        f.write('            if (state.IsActive) return;\n\n')
         f.write('            var id = state_manager_data.PopStateID();\n')
-        f.write('            if(id == default) id = state_manager_data.GetNowID();\n')
+        f.write('            if(id == default) id = state_manager_data.GetNowStateID();\n')
         f.write('            switch (id)\n')
         f.write('            {\n')
         
@@ -1632,8 +1728,8 @@ def generate_control_classes(file_path, name, json_data):
                 f.write(f'                case {state_id}:\n')
                 f.write('                {\n')
                 f.write('                    state.Exit(state_manager_data);\n')
-                f.write('                    var id = state_manager_data.PopStateID();\n')
-                f.write('                    if(id == default) id = state_manager_data.GetNowID();\n')
+                f.write('                    id = state_manager_data.PopStateID();\n')
+                f.write('                    if(id == default) id = state_manager_data.GetNowStateID();\n')
                 f.write('                    state = FactoryState(id);\n')
                 f.write('                    if (state == null)\n')
                 f.write('                    {\n')
@@ -1641,6 +1737,7 @@ def generate_control_classes(file_path, name, json_data):
                 f.write('                        return;\n')
                 f.write('                    }\n')
                 f.write('                    state.Enter(state_manager_data);\n')
+                f.write('                    return;\n')
                 f.write('                }\n')
 
         for node in nodes:
@@ -1664,8 +1761,15 @@ def generate_control_classes(file_path, name, json_data):
                 target_label = next(
                     (n["data"]["label"] for n in nodes if n["id"] == next_node), None)
                 if target_label:
-                    f.write(f'                    state_manager_data.ChangeStateNowID({name}StateID.{target_label}{int(next_node):02d});\n')
-                    f.write('                    state = FactoryState(state_manager_data.GetNowID());\n')
+                    f.write(f'                    var next_id = {name}StateID.{target_label}{int(next_node):02d};\n')
+                    f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
+                    if len(node["data"].get("subNodes", [])) > 0:
+                        for child in node["data"].get("subNodes", []):
+                            child_label = child["label"]
+                            child_id = f"{name}StateID.{child_label}"
+                            f.write(f'                    state_manager_data.PushStateID({child_id});\n')
+                        f.write(f'                    next_id = state_manager_data.PopStateID();\n')
+                    f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
                     f.write('                        is_finish = true;\n')
@@ -1674,8 +1778,8 @@ def generate_control_classes(file_path, name, json_data):
                     f.write('                    state.Enter(state_manager_data);\n')
                     f.write('                    return;\n')
             # 複数ターゲット → BranchNextStateを呼び出し
-            else:
-                f.write('                    var next_id = state.BranchNextState(state_manager_data);\n')
+            else:                
+                f.write(f'                   var next_id = state.BranchNextState(state_manager_data);\n')
                 f.write('                    state_manager_data.ChangeStateNowID(next_id);\n')
                 if len(node["data"].get("subNodes", [])) > 0:
                     for child in node["data"].get("subNodes", []):
