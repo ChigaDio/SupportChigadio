@@ -100,13 +100,22 @@ const gridRows = useMemo(() => {
           throw new Error('class-dataエンドポイントからJSON以外のレスポンスを受信');
         }
         return res.json();
-      })
-    ]).then(([enumList, classList]) => {
+      }),
+      fetch('/api/class-data-id').then(res => {
+        if (!res.ok) throw new Error(`class-id-data取得に失敗: ${res.status}`);
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('class-id-dataエンドポイントからJSON以外のレスポンスを受信');
+        }
+        return res.json();
+      }),
+    ]).then(([enumList, classList, classIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
       const enumTypes = enumList.map(item => item.name);
       const classTypes = classList.map(item => item.name);
-      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes]);
+      const classIdTypes = classIdList.map(item => item.name);
+      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIdTypes]);
 
       const enumPromises = enumList.map(enumItem =>
         fetch(`/api/enum/${encodeURIComponent(enumItem.name)}`)
@@ -123,7 +132,24 @@ const gridRows = useMemo(() => {
           })
           .then(data => ({ [enumItem.name]: data || [] }))
       );
-      return Promise.all(enumPromises);
+
+      const classIdPromises = classIdList.map(classIdItem =>
+        fetch(`/api/class-data-id/${encodeURIComponent(classIdItem.name)}`)
+          .then(res => {
+            if (!res.ok) {
+              console.warn(`classId値取得に失敗: ${classIdItem.name} (${res.status})`);
+              return [];
+            }
+            const contentType = res.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+              throw new Error(`classId ${classIdItem.name} のレスポンスがJSONではありません`);
+            }
+            return res.json();
+          })
+          .then(data => ({ [classIdItem.name]: data.rows.map(row => row.enum_property) || [] }))
+      );
+
+      return Promise.all([...enumPromises, ...classIdPromises]);
     }).then(results => {
       const enumValuesMap = Object.assign({}, ...results);
       setEnumValues(enumValuesMap);

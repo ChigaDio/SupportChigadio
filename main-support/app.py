@@ -48,12 +48,22 @@ def get_type_lists():
     unity_types = ['GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 'Color', 'Rect', 'Bounds', 'Matrix4x4', 'AnimationCurve', 'Sprite', 'Texture', 'Material', 'Mesh', 'Rigidbody', 'Collider', 'AudioClip', 'ScriptableObject']
     enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')) else []
+    class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
     return (
     basic_types,
     unity_types,
     [e.get('name') for e in enum_list] if enum_list else [],
-    [c.get('name') for c in class_list] if class_list else []
+    [c.get('name') for c in class_list] if class_list else [],
+    [c.get('name') for c in class_data_id_list] if class_data_id_list else []
 )
+    
+def get_json_enum(name):
+    enum_data = json.load(open(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json")) else []
+    return enum_data
+
+def get_json_data_id(name):
+    data_id = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID,f"{name}", f"{name}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID,f"{name}", f"{name}.json")) else []
+    return data_id
 
 
 # ディレクトリ作成
@@ -260,14 +270,35 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
 
     namespace GameCore.Tables
     {
-        public abstract class BaseClassDataID<T,E> where T : Enum where E : BaseClassDataRow
+        public abstract class BaseClassDataID<T,E> : BaseTable where T : Enum where E : BaseClassDataRow
         {
             public static Dictionary<T,E> Table = new Dictionary<T,E>();
-            public abstract void Read(BinaryReader reader);
-            public void Release()
+            public override abstract void Read(BinaryReader reader);
+            public override void Release()
             {
                 Table.Clear();
             }
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+        
+# BaseTable.cs を生成
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs")):
+    code_str = """
+    using System.IO;
+    using System;
+    using System.Collections.Generic;
+
+    namespace GameCore.Tables
+    {
+        public abstract class BaseTable
+        {
+
+            public abstract void Read(BinaryReader reader);
+            public abstract void Release();
+
         }
     }
     """
@@ -538,7 +569,7 @@ def manage_class_detail(name):
 def generate_class_cs(name):
     try:
         data = request.get_json()
-        basic_types, unity_types, enum_list, class_list = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name)):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA, name), exist_ok=True)
         cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
@@ -615,10 +646,19 @@ def generate_binary_data(name, json_data):
     binary_data = bytearray()
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
-    
+    basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
     binary_data.extend(struct.pack('i', len(rows)))
     binary_data.extend(struct.pack('i', len(columns)))
     
+    enum_map = []
+    class_data_id_map = []
+    
+    for col in columns:
+        type_name = col['type']
+        if type_name in enum_list:
+            enum_map.append((type_name, get_json_enum(type_name)))
+        elif type_name in class_data_id_list:
+            class_data_id_map.append((type_name, get_json_data_id(type_name)))
     for col in columns:
         name_encoded = col['name'].encode('utf-8')
         type_encoded = col['type'].encode('utf-8')
@@ -650,11 +690,25 @@ def generate_binary_data(name, json_data):
                     binary_data.extend(struct.pack('ff', *value))
                 elif type_.lower() == 'vector3':
                     binary_data.extend(struct.pack('fff', *value))
-            elif type_ in get_type_lists()[2]:
-                try:
-                    enum_id = int(value.split('.')[-1]) if value else 0
-                    binary_data.extend(struct.pack('i', enum_id))
-                except (ValueError, IndexError):
+            elif type_ in [t for t, _ in enum_map]:
+                # Handle enum types
+                enum_data = next((m for t, m in enum_map if t == type_), None)
+                if enum_data:
+                    property_name = value.split('.')[-1] if '.' in value else value
+                    matching_entry = next((entry for entry in enum_data if entry['property'] == property_name), None)
+                    num_value = matching_entry['value'] if matching_entry else 0
+                    binary_data.extend(struct.pack('i', num_value))
+                else:
+                    binary_data.extend(struct.pack('i', 0))
+            elif type_ in [t for t, _ in class_data_id_map]:
+                # Handle class_data_id types
+                class_data = next((m for t, m in class_data_id_map if t == type_), None)
+                if class_data:
+                    property_name = value.split('.')[-1] if '.' in value else value
+                    matching_entry = next((entry for entry in class_data['rows'] if entry['enum_property'] == property_name), None)
+                    num_value = matching_entry['id'] if matching_entry else 0
+                    binary_data.extend(struct.pack('i', num_value))
+                else:
                     binary_data.extend(struct.pack('i', 0))
     return binary_data
 
@@ -812,10 +866,7 @@ namespace GameCore.Tables
             }
         }
 
-        public TTable GetData<TTable, TEnum, TRow>(TableID id, BinaryReader reader)
-            where TEnum : Enum
-            where TRow : BaseClassDataRow
-            where TTable : BaseClassDataID<TEnum, TRow>, new()
+        public TTable GetData<TTable>(TableID id, BinaryReader reader) where TTable : BaseTable,new()
         {
             if (!Entries.TryGetValue(id, out var entry)) return null;
             reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
@@ -1048,14 +1099,13 @@ def class_data_id_detail(name):
             logger.error(f"Error deleting class-data-id {name}: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
-# ClassDataIDのCS生成
 @app.route('/api/generate-class-data-id/<name>', methods=['POST'])
 def generate_class_data_id_cs(name):
     try:
         data = request.get_json()
         columns = data['columns']
         rows = data['rows']
-        basic_types, unity_types, enum_list, class_list = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
         enum_name = f"{name}TableID"  # Enum名をTableIDに変更
 
         # 出力ディレクトリ作成
@@ -1074,35 +1124,39 @@ def generate_class_data_id_cs(name):
                     type_str = f"GameCore.Enums.{type_str}"
                 elif type_str in class_list:
                     type_str = f"GameCore.Classes.{type_str}"
+                elif type_str in class_data_id_list:
+                    type_str = f"GameCore.Tables.ID.{type_str}TableID"
                 elif type_str.lower() in ['vector2', 'vector3']:
                     type_str = type_str.capitalize()
                 lf.write(f"            private {type_str} {col['name']};\n")
                 lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
                 
-                # --- Read Method ---
-                lf.write("\n            public override void Read(BinaryReader reader)\n")
-                lf.write("            {\n")
-                for i, col in enumerate(columns):
-                    type_lower = col['type'].lower()
-                    if type_lower in TYPE_MAP:
-                        if type_lower == 'string':
-                            lf.write(f"                int len{i} = reader.ReadInt32();\n")
-                            lf.write(f"                {col['name']} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{i}));\n")
-                        elif type_lower == 'vector2':
-                            lf.write(f"                {col['name']} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
-                        elif type_lower == 'vector3':
-                            lf.write(f"                {col['name']} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
-                        else:
-                            lf.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
-                    elif col['type'] in enum_list:
-                        lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']})Enum.ToObject(typeof(GameCore.Enums.{col['type']}), reader.ReadInt32());\n")
-                    elif col['type'] in class_list:
-                        lf.write(f"                {col['name']} = new GameCore.Classes.{col['type']}(reader);\n")
+            # --- Read Method ---
+            lf.write("\n            public override void Read(BinaryReader reader)\n")
+            lf.write("            {\n")
+            for i, col in enumerate(columns):
+                type_lower = col['type'].lower()
+                if type_lower in TYPE_MAP:
+                    if type_lower == 'string':
+                        lf.write(f"                int len{i} = reader.ReadInt32();\n")
+                        lf.write(f"                {col['name']} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{i}));\n")
+                    elif type_lower == 'vector2':
+                        lf.write(f"                {col['name']} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
+                    elif type_lower == 'vector3':
+                        lf.write(f"                {col['name']} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
                     else:
-                        lf.write(f"                {col['name']} = default; // Unsupported\n")
+                        lf.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
+                elif col['type'] in enum_list:
+                    lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']})Enum.ToObject(typeof(GameCore.Enums.{col['type']}), reader.ReadInt32());\n")
+                elif col['type'] in class_list:
+                    lf.write(f"                {col['name']} = new GameCore.Classes.{col['type']}(reader);\n")
+                elif col['type'] in class_data_id_list:
+                    lf.write(f"                {col['name']} = (GameCore.Tables.ID.{col['type']}TableID)Enum.ToObject(typeof(GameCore.Tables.ID.{col['type']}TableID), reader.ReadInt32());\n")
+                else:
+                    lf.write(f"                {col['name']} = default; // Unsupported\n")
             lf.write("            }\n")
             lf.write("        }\n\n")
-            lf.write("  }\n}")
+            lf.write("}\n\n")
 
         # --- Main Table File ---
         cs_path = os.path.join(table_dir, f"{name}Table.cs")
@@ -1112,12 +1166,9 @@ def generate_class_data_id_cs(name):
             f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
             #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
 
-
-
-
-
             # --- Table Constructor ---
             f.write(f"        public override void Read(BinaryReader reader)\n        {{\n")
+            f.write(f"            {name}Table.Table.Clear();\n")
             f.write("            int rowCount = reader.ReadInt32();\n")
             f.write("            int colCount = reader.ReadInt32();\n")
             f.write("            var colNames = new string[colCount];\n")
@@ -1149,28 +1200,26 @@ def generate_class_data_id_cs(name):
             ef.write("        Max\n")
             ef.write("    }\n}\n")
             
-            
-        #Exsample
+        # Example
         exsample_cs_path = os.path.join(table_dir, f"{name}TableExample.cs")
         with open(exsample_cs_path, 'w', encoding='utf-8') as ef:
-           ef.write("using System;\nusing UnityEngine;\n")
-           ef.write("using GameCore.Tables;\nusing GameCore.Tables.ID;\n\n")
-           ef.write("namespace GameCore.Tables\n{\n")
-           ef.write(f"    public static class {name}IDExtensions\n    {{\n")
-           ef.write(f"        public static {name}Row GetRow(this {name}TableID id)\n")
-           ef.write("        {\n")
-           ef.write(f"            if ({name}Table.Table.TryGetValue(id, out var row))\n")
-           ef.write("            {\n")
-           ef.write("                return row;\n")
-           ef.write("            }\n")
-           ef.write("            else\n")
-           ef.write("            {\n")
-           ef.write("                return null; // または throw new KeyNotFoundException()\n")
-           ef.write("            }\n")
-           ef.write("        }\n")
-           ef.write("    }\n")
-           ef.write("}\n")
-
+            ef.write("using System;\nusing UnityEngine;\n")
+            ef.write("using GameCore.Tables;\nusing GameCore.Tables.ID;\n\n")
+            ef.write("namespace GameCore.Tables\n{\n")
+            ef.write(f"    public static class {name}IDExtensions\n    {{\n")
+            ef.write(f"        public static {name}Row GetRow(this {name}TableID id)\n")
+            ef.write("        {\n")
+            ef.write(f"            if ({name}Table.Table.TryGetValue(id, out var row))\n")
+            ef.write("            {\n")
+            ef.write("                return row;\n")
+            ef.write("            }\n")
+            ef.write("            else\n")
+            ef.write("            {\n")
+            ef.write("                return null; // または throw new KeyNotFoundException()\n")
+            ef.write("            }\n")
+            ef.write("        }\n")
+            ef.write("    }\n")
+            ef.write("}\n")
 
         return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
     except Exception as e:
@@ -1248,7 +1297,7 @@ def generate_binary(name):
         if  not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, f"{name}",f"{name}Table.bin")):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA_ID, f"{name}"), exist_ok=True)
         bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bin")
-        basic_types, unity_types, enum_list, class_list = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
         with open(bin_path, 'wb') as f:
             # ヘッダ: 行数, カラム数
             f.write(struct.pack('ii', len(rows), len(columns)))
@@ -1436,16 +1485,17 @@ def generate_state_manager_data(file_path, name, json_data):
         f.write('   }\n')
         f.write('}\n')
         
-    with open(file_state_manager_data_path, 'w', encoding='utf-8') as f:
-        f.write('using System.Collections.Generic;\n')
-        f.write('using UnityEngine;\n\n')
+    if os.path.exists(file_state_manager_data_path) == False:
+        with open(file_state_manager_data_path, 'w', encoding='utf-8') as f:
+            f.write('using System.Collections.Generic;\n')
+            f.write('using UnityEngine;\n\n')
 
 
-        f.write('namespace GameCore.States.Managers\n{\n')
-        f.write(f'    public class {name}StateManagerData : Base{name}StateManagerData\n    {{\n')
-        f.write('    }\n')
-        f.write('}\n')
-        
+            f.write('namespace GameCore.States.Managers\n{\n')
+            f.write(f'    public class {name}StateManagerData : Base{name}StateManagerData\n    {{\n')
+            f.write('    }\n')
+            f.write('}\n')
+
 
 
 def generate_state_branch(file_path, name, json_data):
