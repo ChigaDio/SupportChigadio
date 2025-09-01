@@ -362,10 +362,7 @@ def manage_enum_id():
         except Exception as e:
             logger.error(f"Error removing enum-id: {str(e)}")
             return jsonify({"error": str(e)}), 500
-        
 
-
-# Enum詳細管理
 @app.route('/api/enum/<name>', methods=['GET', 'POST', 'DELETE'])
 def manage_enum_detail(name):
     file_path = os.path.join(DATA_DIR, ENUM, name, f'{name}.json')
@@ -408,7 +405,6 @@ def manage_enum_detail(name):
             logger.error(f"Error deleting enum {name}: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
-# Enum C#生成
 @app.route('/api/generate-enum/<name>', methods=['POST'])
 def generate_enum_cs(name):
     try:
@@ -423,13 +419,12 @@ def generate_enum_cs(name):
         max_value = max([item['value'] for item in valid_data], default=-1) + 1
         cs_content += f"        Max = {max_value}\n"
         cs_content += "    }\n}"
-        file_path = os.path.join(DATA_DIR, ENUM, name, f'{name}.cs')
-        with open(file_path, 'w', encoding='utf-8') as f:
+        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}.cs")
+        with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
-        logger.info(f"Generated {name}.cs")
-        return jsonify({"message": f"{name}.cs generated successfully"})
+        return jsonify({"message": f"C# enum {name} generated successfully"})
     except Exception as e:
-        logger.error(f"Error generating {name}.cs: {str(e)}")
+        logger.error(f"Error generating C# enum {name}: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ClassData-ID管理
@@ -612,6 +607,249 @@ def generate_class_cs(name):
         return jsonify({"message": f"{name}.cs generated successfully"})
     except Exception as e:
         logger.error(f"Error generating {name}.cs: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+def generate_binary_data(name, json_data):
+    binary_data = bytearray()
+    rows = json_data.get('rows', [])
+    columns = json_data.get('columns', [])
+    
+    binary_data.extend(struct.pack('i', len(rows)))
+    binary_data.extend(struct.pack('i', len(columns)))
+    
+    for col in columns:
+        name_encoded = col['name'].encode('utf-8')
+        type_encoded = col['type'].encode('utf-8')
+        binary_data.extend(struct.pack('i', len(name_encoded)))
+        binary_data.extend(name_encoded)
+        binary_data.extend(struct.pack('i', len(type_encoded)))
+        binary_data.extend(type_encoded)
+    
+    for row in rows:
+        enum_val = row.get('enum_property', '')
+        try:
+            enum_id = int(enum_val.split('.')[-1]) if enum_val else 0
+            binary_data.extend(struct.pack('i', enum_id))
+        except (ValueError, IndexError):
+            binary_data.extend(struct.pack('i', 0))
+        for col in columns:
+            cell = row['data'][col['name']]
+            value = cell['value']
+            type_ = col['type']
+            if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
+                continue
+            if type_.lower() in TYPE_MAP:
+                if TYPE_MAP[type_.lower()]['pack'] is not None:
+                    binary_data.extend(struct.pack(TYPE_MAP[type_.lower()]['pack'], value))
+                elif type_.lower() == 'string':
+                    encoded = value.encode('utf-8')
+                    binary_data.extend(struct.pack('i', len(encoded)) + encoded)
+                elif type_.lower() == 'vector2':
+                    binary_data.extend(struct.pack('ff', *value))
+                elif type_.lower() == 'vector3':
+                    binary_data.extend(struct.pack('fff', *value))
+            elif type_ in get_type_lists()[2]:
+                try:
+                    enum_id = int(value.split('.')[-1]) if value else 0
+                    binary_data.extend(struct.pack('i', enum_id))
+                except (ValueError, IndexError):
+                    binary_data.extend(struct.pack('i', 0))
+    return binary_data
+
+@app.route('/api/generate-all-binary', methods=['POST'])
+def generate_all_binary():
+    try:
+        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'all_class_data.bin')
+        header = bytearray()
+        data_sections = bytearray()
+        
+        list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+        with open(list_path, 'r', encoding='utf-8') as f:
+            class_list = json.load(f)
+        
+        header.extend(struct.pack('i', len(class_list)))
+        
+        offsets = {}
+        current_offset = 4 + sum(4 + 4 + len(item['name'].encode('utf-8')) + 8 + 4 for item in class_list)
+        
+        for item in class_list:
+            name = item['name']
+            id_ = item['id']
+            name_encoded = name.encode('utf-8')
+            
+            header.extend(struct.pack('i', id_))
+            header.extend(struct.pack('i', len(name_encoded)))
+            header.extend(name_encoded)
+            header.extend(struct.pack('q', 0))
+            header.extend(struct.pack('i', 0))
+            
+            file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f'{name}.json')
+            with open(file_path, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+            section = generate_binary_data(name, json_data)
+            
+            offsets[name] = current_offset
+            current_offset += len(section)
+            data_sections.extend(section)
+        
+        with open(all_binary_path, 'wb') as f:
+            f.write(header)
+            f.write(data_sections)
+        
+        with open(all_binary_path, 'r+b') as f:
+            pos = 4
+            for item in class_list:
+                name = item['name']
+                name_len = len(name.encode('utf-8'))
+                pos += 4 + 4 + name_len
+                
+                f.seek(pos)
+                f.write(struct.pack('q', offsets[name]))
+                
+                pos += 8
+                section_size = len(generate_binary_data(name, json_data))
+                f.write(struct.pack('i', section_size))
+                
+                pos += 4
+        
+        logger.info("Generated all_class_data.bin")
+        return jsonify({"message": "All binary generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating all binary: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-table-id', methods=['POST'])
+def generate_table_id():
+    try:
+        table_id_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'TableID.cs')
+        class_list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+        with open(class_list_path, 'r', encoding='utf-8') as f:
+            class_list = json.load(f)
+        
+        cs_content = "namespace GameCore.Enums\n{\n"
+        cs_content += "    public enum TableID\n    {\n"
+        cs_content += "        None = 0,\n"
+        for item in class_list:
+            cs_content += f"        {item['name']} = {item['id']},\n"
+        max_id = max([item['id'] for item in class_list], default=0) + 1
+        cs_content += f"        Max = {max_id}\n"
+        cs_content += "    }\n}"
+        
+        with open(table_id_path, 'w', encoding='utf-8') as f:
+            f.write(cs_content)
+        
+        return jsonify({"message": "TableID enum generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating TableID: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-all-enums', methods=['POST'])
+def generate_all_enums():
+    try:
+        enum_list_path = os.path.join(DATA_DIR, ENUM, 'enum_list.json')
+        with open(enum_list_path, 'r', encoding='utf-8') as f:
+            enum_list = json.load(f)
+        
+        for enum_item in enum_list:
+            name = enum_item['name']
+            file_path = os.path.join(DATA_DIR, ENUM, name, f'{name}.json')
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            valid_data = [item for item in data if not isnan(item['value']) and isfinite(item['value'])]
+            cs_content = "namespace GameCore.Enums\n{\n"
+            cs_content += f"    public enum {name}\n    {{\n"
+            cs_content += "        None = 0, // デフォルト値\n"
+            for item in valid_data:
+                cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
+            max_value = max([item['value'] for item in valid_data], default=-1) + 1
+            cs_content += f"        Max = {max_value}\n"
+            cs_content += "    }\n}"
+            
+            cs_path = os.path.join(DATA_DIR, ENUM, f"{name}.cs")
+            with open(cs_path, 'w', encoding='utf-8') as f:
+                f.write(cs_content)
+        
+        return jsonify({"message": "All enums (excluding TableID) generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating all enums: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-all-cs-header', methods=['POST'])
+def generate_all_cs_header():
+    try:
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'ClassDataHeader.cs')
+        list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+        with open(list_path, 'r', encoding='utf-8') as f:
+            class_list = json.load(f)
+        
+        cs_content = """
+using System;
+using System.IO;
+using System.Collections.Generic;
+using GameCore.Enums;
+
+namespace GameCore.Tables
+{
+    public class ClassDataHeader
+    {
+        public Dictionary<TableID, (string Name, long Offset, int Size)> Entries = new Dictionary<TableID, (string, long, int)>();
+
+        public ClassDataHeader(BinaryReader reader)
+        {
+            int count = reader.ReadInt32();
+            for(int i = 0; i < count; i++)
+            {
+                int id = reader.ReadInt32();
+                TableID tableId = (TableID)Enum.ToObject(typeof(TableID), id);
+                int nameLen = reader.ReadInt32();
+                string name = new string(reader.ReadChars(nameLen));
+                long offset = reader.ReadInt64();
+                int size = reader.ReadInt32();
+                Entries[tableId] = (name, offset, size);
+            }
+        }
+
+        public T GetData<T, E>(TableID id, BinaryReader reader) where T : BaseClassDataID<E, BaseClassDataRow>, new() where E : Enum
+        {
+            if (!Entries.TryGetValue(id, out var entry)) return null;
+            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
+            T data = new T();
+            data.Read(reader);
+            return data;
+        }
+
+        public T GetData<T>(TableID id, BinaryReader reader) where T : BaseClassDataID<T, BaseClassDataRow>, new()
+        {
+            if (!Entries.TryGetValue(id, out var entry)) return null;
+            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
+            T data = new T();
+            data.Read(reader);
+            return data;
+        }
+    }
+
+    public static class ClassDataFactory
+    {
+        public static BaseClassDataRow Create(TableID id, ClassDataHeader header, BinaryReader reader)
+        {
+            switch (id)
+            {
+"""
+        for item in class_list:
+            name = item['name']
+            cs_content += f"                case TableID.{name}: return new {name}ClassDataRow(reader);\n"
+        cs_content += """                default: return null;
+            }
+        }
+    }
+}
+"""
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(cs_content)
+        return jsonify({"message": "C# header generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating C# header: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # StateData-ID管理

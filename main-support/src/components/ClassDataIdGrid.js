@@ -127,6 +127,45 @@ function ClassDataIdGrid() {
       >
         新しいClassDataIDを作成
       </Button>
+      <Button 
+        variant="contained" 
+        color="secondary" 
+        onClick={() => {
+          fetch('/api/generate-all-binary', { method: 'POST' })
+            .then(res => res.json())
+            .then(result => alert(result.message))
+            .catch(err => alert('エラー: ' + err.message));
+        }}
+        sx={{ mb: 2, ml: 2 }}
+      >
+        全バイナリ生成
+      </Button>
+      <Button 
+        variant="contained" 
+        color="secondary" 
+        onClick={() => {
+          fetch('/api/generate-all-cs-header', { method: 'POST' })
+            .then(res => res.json())
+            .then(result => alert(result.message))
+            .catch(err => alert('エラー: ' + err.message));
+        }}
+        sx={{ mb: 2, ml: 2 }}
+      >
+        全C#ヘッダー生成
+      </Button>
+      <Button 
+        variant="contained" 
+        color="secondary" 
+        onClick={() => {
+          fetch('/api/generate-table-id', { method: 'POST' })
+            .then(res => res.json())
+            .then(result => alert(result.message))
+            .catch(err => alert('エラー: ' + err.message));
+        }}
+        sx={{ mb: 2, ml: 2 }}
+      >
+        TableID生成
+      </Button>
       <DataGrid
         rows={classDataIdData}
         columns={columns}
