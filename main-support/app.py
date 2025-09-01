@@ -263,9 +263,10 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
         public abstract class BaseClassDataID<T,E> where T : Enum where E : BaseClassDataRow
         {
             public static Dictionary<T,E> Table = new Dictionary<T,E>();
-            protected BaseClassDataID(BinaryReader reader)
+            public abstract void Read(BinaryReader reader);
+            public void Release()
             {
-                // ここで共通の処理を追加可能（例：ヘッダチェックなど）
+                Table.Clear();
             }
         }
     }
@@ -556,6 +557,7 @@ def generate_class_cs(name):
                 f.write(read_code)
             f.write("        }\n")
             f.write("    }\n}\n")
+            f.r
         return jsonify({"message": f"C# file generated: {cs_path}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -628,7 +630,7 @@ def generate_binary_data(name, json_data):
     for row in rows:
         enum_val = row.get('enum_property', '')
         try:
-            enum_id = int(enum_val.split('.')[-1]) if enum_val else 0
+            enum_id = int(row['id'])
             binary_data.extend(struct.pack('i', enum_id))
         except (ValueError, IndexError):
             binary_data.extend(struct.pack('i', 0))
@@ -810,38 +812,19 @@ namespace GameCore.Tables
             }
         }
 
-        public T GetData<T, E>(TableID id, BinaryReader reader) where T : BaseClassDataID<E, BaseClassDataRow>, new() where E : Enum
+        public TTable GetData<TTable, TEnum, TRow>(TableID id, BinaryReader reader)
+            where TEnum : Enum
+            where TRow : BaseClassDataRow
+            where TTable : BaseClassDataID<TEnum, TRow>, new()
         {
             if (!Entries.TryGetValue(id, out var entry)) return null;
             reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
-            T data = new T();
+            TTable data = new TTable();
             data.Read(reader);
             return data;
         }
 
-        public T GetData<T>(TableID id, BinaryReader reader) where T : BaseClassDataID<T, BaseClassDataRow>, new()
-        {
-            if (!Entries.TryGetValue(id, out var entry)) return null;
-            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
-            T data = new T();
-            data.Read(reader);
-            return data;
-        }
-    }
 
-    public static class ClassDataFactory
-    {
-        public static BaseClassDataRow Create(TableID id, ClassDataHeader header, BinaryReader reader)
-        {
-            switch (id)
-            {
-"""
-        for item in class_list:
-            name = item['name']
-            cs_content += f"                case TableID.{name}: return new {name}ClassDataRow(reader);\n"
-        cs_content += """                default: return null;
-            }
-        }
     }
 }
 """
@@ -1095,6 +1078,30 @@ def generate_class_data_id_cs(name):
                     type_str = type_str.capitalize()
                 lf.write(f"            private {type_str} {col['name']};\n")
                 lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
+                
+                # --- Read Method ---
+                lf.write("\n            public override void Read(BinaryReader reader)\n")
+                lf.write("            {\n")
+                for i, col in enumerate(columns):
+                    type_lower = col['type'].lower()
+                    if type_lower in TYPE_MAP:
+                        if type_lower == 'string':
+                            lf.write(f"                int len{i} = reader.ReadInt32();\n")
+                            lf.write(f"                {col['name']} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{i}));\n")
+                        elif type_lower == 'vector2':
+                            lf.write(f"                {col['name']} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
+                        elif type_lower == 'vector3':
+                            lf.write(f"                {col['name']} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
+                        else:
+                            lf.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
+                    elif col['type'] in enum_list:
+                        lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']})Enum.ToObject(typeof(GameCore.Enums.{col['type']}), reader.ReadInt32());\n")
+                    elif col['type'] in class_list:
+                        lf.write(f"                {col['name']} = new GameCore.Classes.{col['type']}(reader);\n")
+                    else:
+                        lf.write(f"                {col['name']} = default; // Unsupported\n")
+            lf.write("            }\n")
+            lf.write("        }\n\n")
             lf.write("  }\n}")
 
         # --- Main Table File ---
@@ -1107,32 +1114,10 @@ def generate_class_data_id_cs(name):
 
 
 
-            # --- Read Method ---
-            f.write("\n            public override void Read(BinaryReader reader)\n")
-            f.write("            {\n")
-            for i, col in enumerate(columns):
-                type_lower = col['type'].lower()
-                if type_lower in TYPE_MAP:
-                    if type_lower == 'string':
-                        f.write(f"                int len{i} = reader.ReadInt32();\n")
-                        f.write(f"                {col['name']} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{i}));\n")
-                    elif type_lower == 'vector2':
-                        f.write(f"                {col['name']} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
-                    elif type_lower == 'vector3':
-                        f.write(f"                {col['name']} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
-                    else:
-                        f.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
-                elif col['type'] in enum_list:
-                    f.write(f"                {col['name']} = (GameCore.Enums.{col['type']})Enum.ToObject(typeof(GameCore.Enums.{col['type']}), reader.ReadInt32());\n")
-                elif col['type'] in class_list:
-                    f.write(f"                {col['name']} = new GameCore.Classes.{col['type']}(reader);\n")
-                else:
-                    f.write(f"                {col['name']} = default; // Unsupported\n")
-            f.write("            }\n")
-            f.write("        }\n\n")
+
 
             # --- Table Constructor ---
-            f.write(f"        public {name}Table(BinaryReader reader) : base(reader)\n        {{\n")
+            f.write(f"        public override void Read(BinaryReader reader)\n        {{\n")
             f.write("            int rowCount = reader.ReadInt32();\n")
             f.write("            int colCount = reader.ReadInt32();\n")
             f.write("            var colNames = new string[colCount];\n")
@@ -1462,9 +1447,6 @@ def generate_state_manager_data(file_path, name, json_data):
         f.write('}\n')
         
 
-
-
-import os
 
 def generate_state_branch(file_path, name, json_data):
     """
