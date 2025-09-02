@@ -13,6 +13,9 @@ import StateDetailGridGrid from './components/StateDetailGrid';
 import ClassDataIdGrid from './components/ClassDataIdGrid';
 import ClassDataIdDetailGrid from './components/ClassDataIdDetailGrid';
 
+import ClassDataMatrinxIdGrid from './components/ClassDataMatrixIdGrid';
+import ClassDataMatrinxIdDetailGrid from './components/ClassDataMatrixIdDetailGrid';
+
 function AppContent() {
   const navigate = useNavigate();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
@@ -31,6 +34,9 @@ function AppContent() {
           break;
         case 'class-data-id':
           navigate('/class-data-id');
+          break;
+          case 'class-data-matrix-id':
+          navigate('/class-data-matrix-id');
           break;
         case 'state':
           navigate('/state');
@@ -55,6 +61,8 @@ function AppContent() {
           <Route path="/class/:name" element={<ClassDataDetailGrid />} />
           <Route path="/class-data-id" element={<ClassDataIdGrid />} />
           <Route path="/class-data-id/:name" element={<ClassDataIdDetailGrid />} />
+          <Route path="/class-data-matrix-id" element={<ClassDataMatrinxIdGrid />} />
+          <Route path="/class-data-matrix-id/:name" element={<ClassDataMatrinxIdDetailGrid />} />
           <Route path="/state" element={<StateGrid />} />
           <Route path="/state/:name" element={<StateDetailGridGrid />} />
         </Routes>

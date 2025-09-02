@@ -22,7 +22,7 @@ STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
 CLASS_DATA_ID = 'class-data-id'
-
+CLASS_DATA_MATRIX_ID = 'class-data-matrix-id'
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,18 @@ TYPE_MAP = {
     'vector2': {'pack': None, 'cs_read': None}, # 特殊処理
     'vector3': {'pack': None, 'cs_read': None}  # 特殊処理
 }
+
+def get_enum_values():
+    enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
+    class_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
+    enum_values = {}
+    for e in enum_list:
+        enum_data = json.load(open(os.path.join(DATA_DIR, ENUM, e['name'], f"{e['name']}.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM, e['name'], f"{e['name']}.json")) else []
+        enum_values[e['name']] = enum_data
+    for c in class_id_list:
+        class_id_data = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, c['name'], f"{c['name']}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, c['name'], f"{c['name']}.json")) else {'rows': []}
+        enum_values[c['name']] = [r['enum_property'] for r in class_id_data['rows']]
+    return enum_values
 
 # 型リスト取得
 def get_type_lists():
@@ -285,7 +297,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
         f.write(code_str.strip() + "\n")
         
 # BaseTable.cs を生成
-if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs")):
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseTable.cs")):
     code_str = """
     using System.IO;
     using System;
@@ -302,7 +314,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
         }
     }
     """
-    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseTable.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
 
 
@@ -338,6 +350,70 @@ with open(base_detail_path, 'w', encoding='utf-8') as f:
     f.write('        public abstract TStateId ConditionsBranch(TManagerData manager_data, TState state);\n')
     f.write('    }\n')
     f.write('}\n')
+    
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)):
+    os.makedirs(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID))
+    
+    
+# BaseTable.cs を生成
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseTableMatrix.cs")):
+    code_str = """
+    using System.IO;
+    using System;
+    using System.Collections.Generic;
+
+    namespace GameCore.Tables
+    {
+        public abstract class BaseTableMatrix : BaseTable
+        {
+
+            public override abstract void Read(BinaryReader reader);
+            public override abstract void Release();
+
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseTableMatrix.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+
+# BaseClassDataMatrixID.cs 生成 (初回のみ)
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixID.cs")):
+    code_str = """
+    using System.IO;
+    using System;
+    using System.Collections.Generic;
+
+    namespace GameCore.Tables
+    {
+        public abstract class BaseClassDataMatrixID<TRow, TCol, E> : BaseTableMatrix where TRow : Enum where TCol : Enum where E : BaseClassDataMatrixRow
+        {
+            public static Dictionary<TRow, Dictionary<TCol, E>> Table = new Dictionary<TRow, Dictionary<TCol, E>>();
+            public override abstract void Read(BinaryReader reader);
+            public override void Release()
+            {
+                Table.Clear();
+            }
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixID.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+
+# BaseClassDataMatrixRow.cs 生成
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixRow.cs")):
+    code_str = """
+    using System.IO;
+
+    namespace GameCore.Tables
+    {
+        public abstract class BaseClassDataMatrixRow
+        {
+            public abstract void Read(BinaryReader reader);
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixRow.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
 # Enum-ID管理
 @app.route('/api/enum-id', methods=['GET', 'POST', 'PATCH'])
 def manage_enum_id():
@@ -1462,7 +1538,7 @@ def generate_state_manager_data(file_path, name, json_data):
     base_code_str = []
 
 
-    base_list,unity_types,enum_list, class_list = get_type_lists()
+    base_list,unity_types,enum_list, class_list,class_data_id_list = get_type_lists()
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
     unity_types = [
     'GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 
@@ -1669,7 +1745,7 @@ def generate_state_classes(file_path, name, json_data):
 
 
     # 型情報の取得（ダミー関数、外で定義する想定）
-    basic_types, unity_types, enum_list, class_list = get_type_lists()  
+    basic_types, unity_types, enum_list, class_list,class_data_id_list = get_type_lists()  
 
     basic_types = [
         'int', 'float', 'bool', 'string', 'double',
@@ -2114,6 +2190,331 @@ def generate_control_classes(file_path, name, json_data):
             f.write('    {\n')
             f.write('    }\n')
             f.write('}\n')
+            
+# MatrixID管理
+@app.route('/api/class-data-matrix-id', methods=['GET', 'POST', 'PATCH'])
+def manage_matrix_id():
+    file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data)
+        except FileNotFoundError:
+            return jsonify([]), 404
+    elif request.method == 'POST':
+        new_matrix = request.get_json()
+        name = new_matrix['name']
+        if not name or ':' in name:
+            return jsonify({"error": "Invalid name"}), 400
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            data = []
+        if any(item['name'] == name for item in data):
+            return jsonify({"error": f"Matrix {name} already exists"}), 400
+        max_id = max([item['id'] for item in data], default=0) + 1
+        new_entry = {"id": max_id, "name": name}
+        data.append(new_entry)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        os.makedirs(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name), exist_ok=True)
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.json"), 'w', encoding='utf-8') as f:
+            json.dump(new_matrix, f, indent=2)
+        return jsonify({"message": f"Matrix {name} created", "data": new_entry})
+    elif request.method == 'PATCH':
+        delete_name = request.get_json()['name']
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            data = [item for item in data if item['name'] != delete_name]
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            shutil.rmtree(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, delete_name), ignore_errors=True)
+            return jsonify({"message": "Deleted"})
+        except FileNotFoundError:
+            return jsonify({"error": "List file not found"}), 404
+
+@app.route('/api/class-data-matrix-id/<name>', methods=['GET', 'POST', 'DELETE'])
+def handle_matrix_data(name):
+    file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data)
+        except FileNotFoundError:
+            return jsonify({"error": f"Matrix {name} not found"}), 404
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            return jsonify({"message": f"Matrix {name} saved"})
+        except Exception as e:
+            logger.error(f"Error saving {name}: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+    elif request.method == 'DELETE':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            os.remove(file_path)
+            return jsonify({"message": f"Matrix {name} deleted"})
+        except FileNotFoundError:
+            return jsonify({"error": f"Matrix {name} not found"}), 404
+        
+# C#生成
+@app.route('/api/generate-class-data-matrix-id/<name>', methods=['POST'])
+def generate_cs_matrix(name):
+    file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        row_id = json_data['rowId']
+        col_id = json_data['colId']
+        fields = json_data['fields']
+
+        # {name}MatrixRow.cs
+        row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\n\n"
+        row_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixRow : BaseClassDataMatrixRow {{\n"
+        read_code = "        public override void Read(BinaryReader reader) {\n"
+        for field in fields:
+            field_info = generate_csharp_field(field, get_type_lists()[2], get_type_lists()[3], get_type_lists()[1], get_type_lists()[0])
+            row_cs += field_info['field']
+            read_code += field_info['read']
+        row_cs += read_code + "        }\n    }\n}\n"
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixRow.cs"), 'w', encoding='utf-8') as f:
+            f.write(row_cs)
+
+        # {name}MatrixID.cs
+        matrix_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\n\n"
+        matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixID : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
+        matrix_cs += "        public override void Read(BinaryReader reader) {\n"
+        matrix_cs += f"            {name}MatrixID.Table.Clear();\n"
+        matrix_cs += f"            int rowCount = reader.ReadInt32();\n"
+        matrix_cs += f"            List<{row_id}ID> rowKeys = new List<{row_id}ID>(); for(int i=0; i<rowCount; i++) rowKeys.Add(({row_id}ID)reader.ReadInt32());\n"
+        matrix_cs += f"            int colCount = reader.ReadInt32();\n"
+        matrix_cs += f"            List<{col_id}ID> colKeys = new List<{col_id}ID>(); for(int i=0; i<colCount; i++) colKeys.Add(({col_id}ID)reader.ReadInt32());\n"
+        matrix_cs += f"            foreach(var rk in rowKeys) {{ Table[rk] = new Dictionary<{col_id}ID, {name}MatrixRow>(); }}\n"
+        matrix_cs += f"            foreach(var rk in rowKeys) {{ foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(reader); Table[rk][ck] = row; }} }}\n"
+        matrix_cs += "        }\n    }\n}\n"
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixID.cs"), 'w', encoding='utf-8') as f:
+            f.write(matrix_cs)
+        return jsonify({"message": f"C# generated for {name}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# バイナリ生成
+@app.route('/api/generate-binary-matrix/<name>', methods=['POST'])
+def generate_binary_matrix(name):
+    file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        row_keys = list(json_data['data'].keys())
+        col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
+        fields = json_data['fields']
+        enum_values = get_enum_values()
+
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}.bin"), 'wb') as f:
+            f.write(struct.pack('i', len(row_keys)))
+            for rk in row_keys:
+                f.write(struct.pack('i', enum_values[json_data['rowId']].index(rk)))
+            f.write(struct.pack('i', len(col_keys)))
+            for ck in col_keys:
+                f.write(struct.pack('i', enum_values[json_data['colId']].index(ck)))
+            for rk in row_keys:
+                for ck in col_keys:
+                    cell = json_data['data'][rk][ck]
+                    for field in fields:
+                        value = cell[field['name']]
+                        t = field['type'].lower()
+                        if t in TYPE_MAP:
+                            if t == 'vector2':
+                                f.write(struct.pack('ff', *value))
+                            elif t == 'vector3':
+                                f.write(struct.pack('fff', *value))
+                            else:
+                                f.write(struct.pack(TYPE_MAP[t]['pack'], value))
+                        elif t in enum_values:
+                            f.write(struct.pack('i', enum_values[t].index(value.split('.')[-1])))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"message": f"Binary generated for {name}"})
+
+
+
+#バイナリデータ生成
+def generate_binary_matrix_data(name, json_data):
+    binary_data = bytearray()
+    row_keys = list(json_data['data'].keys())
+    col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
+    fields = json_data['fields']
+    enum_values = get_enum_values()
+
+    binary_data.extend(struct.pack('i', len(row_keys)))
+    for rk in row_keys:
+        binary_data.extend(struct.pack('i', enum_values[json_data['rowId']].index(rk)))
+    binary_data.extend(struct.pack('i', len(col_keys)))
+    for ck in col_keys:
+        binary_data.extend(struct.pack('i', enum_values[json_data['colId']].index(ck)))
+    for rk in row_keys:
+        for ck in col_keys:
+            cell = json_data['data'][rk][ck]
+            for field in fields:
+                value = cell[field['name']]
+                t = field['type'].lower()
+                if t in TYPE_MAP:
+                    if t == 'vector2':
+                        binary_data.extend(struct.pack('ff', *value))
+                    elif t == 'vector3':
+                        binary_data.extend(struct.pack('fff', *value))
+                    elif t == 'string':
+                        encoded = value.encode('utf-8')
+                        binary_data.extend(struct.pack('i', len(encoded)) + encoded)
+                    else:
+                        binary_data.extend(struct.pack(TYPE_MAP[t]['pack'], value))
+                elif t in enum_values:
+                    binary_data.extend(struct.pack('i', enum_values[t].index(value.split('.')[-1])))
+    return binary_data
+#Matrixを一つのバイナリファイルにまとめる
+@app.route('/api/generate-all-binary-matrix', methods=['POST'])
+def generate_all_binary_matrix():
+    try:
+        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'all_class_data_matrix.bin')
+        header = bytearray()
+        data_sections = bytearray()
+        
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json'), 'r', encoding='utf-8') as f:
+            matrix_list = json.load(f)
+        
+        header.extend(struct.pack('i', len(matrix_list)))
+        
+        offsets = {}
+        current_offset = 4 + sum(4 + 4 + len(item['name'].encode('utf-8')) + 8 + 4 for item in matrix_list)
+        
+        for matrix in matrix_list:
+            name = matrix['name']
+            matrix_id = matrix.get('id', 0)  # IDが定義されていると仮定
+            name_encoded = name.encode('utf-8')
+            
+            header.extend(struct.pack('i', matrix_id))
+            header.extend(struct.pack('i', len(name_encoded)))
+            header.extend(name_encoded)
+            header.extend(struct.pack('q', 0))  # 仮オフセット
+            header.extend(struct.pack('i', 0))  # 仮サイズ
+            
+            file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                section = generate_binary_matrix_data(name, json_data)
+                
+                offsets[name] = current_offset
+                current_offset += len(section)
+                data_sections.extend(section)
+        
+        with open(all_binary_path, 'wb') as f:
+            f.write(header)
+            f.write(data_sections)
+        
+        with open(all_binary_path, 'r+b') as f:
+            pos = 4
+            for matrix in matrix_list:
+                name = matrix['name']
+                name_len = len(name.encode('utf-8'))
+                pos += 4 + 4 + name_len
+                
+                f.seek(pos)
+                f.write(struct.pack('q', offsets.get(name, 0)))
+                
+                pos += 8
+                file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
+                section_size = 0
+                if os.path.exists(file_path):
+                    with open(file_path, 'r', encoding='utf-8') as f2:
+                        json_data = json.load(f2)
+                    section_size = len(generate_binary_matrix_data(name, json_data))
+                f.write(struct.pack('i', section_size))
+                
+                pos += 4
+        
+        logger.info("Generated all_class_data_matrix.bin")
+        return jsonify({"message": "All matrix binary generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating all matrix binary: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+#Matrixのヘルパークラス生成
+@app.route('/api/generate-all-cs-matrix-header', methods=['POST'])
+def generate_all_cs_matrix_header():
+    try:
+        # ClassDataMatrixHeader.cs
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'ClassDataMatrixHeader.cs')
+        list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+        with open(list_path, 'r', encoding='utf-8') as f:
+            matrix_list = json.load(f)
+        
+        cs_content = """
+using System;
+using System.IO;
+using System.Collections.Generic;
+using GameCore.Enums;
+
+namespace GameCore.Tables
+{
+    public class ClassDataMatrixHeader
+    {
+        public Dictionary<TableID, (string Name, long Offset, int Size)> Entries = new Dictionary<TableID, (string, long, int)>();
+
+        public ClassDataMatrixHeader(BinaryReader reader)
+        {
+            int count = reader.ReadInt32();
+            for(int i = 0; i < count; i++)
+            {
+                int id = reader.ReadInt32();
+                TableID tableId = (TableID)Enum.ToObject(typeof(TableID), id);
+                int nameLen = reader.ReadInt32();
+                string name = new string(reader.ReadChars(nameLen));
+                long offset = reader.ReadInt64();
+                int size = reader.ReadInt32();
+                Entries[tableId] = (name, offset, size);
+            }
+        }
+
+        public TTable GetData<TTable>(TableID id, BinaryReader reader) where TTable : BaseTableMatrix, new()
+        {
+            if (!Entries.TryGetValue(id, out var entry)) return null;
+            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
+            TTable data = new TTable();
+            data.Read(reader);
+            return data;
+        }
+    }
+}
+"""
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(cs_content)
+        
+        return jsonify({"message": "All C# headers and helper generated"})
+    except Exception as e:
+        logger.error(f"Error generating C# headers: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-matrix-table-id', methods=['POST'])
+def generate_matrix_table_id():
+    try:
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json'), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        cs = "namespace GameCore.Tables {\n    public enum MatrixTableID {\n        None = 0,\n"
+        for item in data:
+            cs += f"        {item['name']} = {item['id']},\n"
+        cs += "    }\n}\n"
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "MatrixTableID.cs"), 'w', encoding='utf-8') as f:
+            f.write(cs)
+        return jsonify({"message": "MatrixTableID generated"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
         
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
