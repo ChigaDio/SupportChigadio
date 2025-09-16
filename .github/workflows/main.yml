@@ -1,0 +1,71 @@
+name: Build React & Python App
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Install Node.js dependencies
+        run: npm install
+        working-directory: ./main-support
+
+      - name: Build React app
+        run: npm run build
+        working-directory: ./main-support
+
+      - name: Remove old build directory in repo root
+        run: if exist build rmdir /s /q build
+
+      - name: Copy new build to repo root
+        run: xcopy /E /I /Y main-support\build build
+
+      - name: Remove old app.exe in repo root
+        run: if exist app.exe del app.exe
+
+      - name: Build app.py with pyinstaller
+        run: pyinstaller --onefile app.py
+        working-directory: ./main-support
+
+      - name: Copy app.exe to repo root
+        run: copy main-support\dist\app.exe app.exe
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/**
+            app.exe
