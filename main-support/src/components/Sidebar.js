@@ -1,17 +1,34 @@
 import React from 'react';
-import { Drawer, List, ListItem, ListItemText, ListItemButton, Collapse } from '@mui/material';
+import { Drawer, List, ListItem, ListItemText, Collapse } from '@mui/material';
 import { ExpandLess, ExpandMore } from '@mui/icons-material';
 
 function Sidebar({ selectedMenu, handleMenuClick }) {
-  const [open, setOpen] = React.useState(true); // GenerateToolのサブメニュー展開状態
+  const [open, setOpen] = React.useState({});
 
-  const handleGenerateToolClick = () => {
-    setOpen(!open);
+  const handleClick = (menu) => {
+    setOpen((prev) => ({ ...prev, [menu]: !prev[menu] }));
   };
 
-  const handleSubMenuClick = (subMenu) => {
-    handleMenuClick('GenerateTool', subMenu);
-  };
+  const menuItems = [
+    {
+      name: 'GenerateTool',
+      subItems: [
+        { name: 'Enum ID', key: 'enum-id' },
+        { name: 'Class Data', key: 'class-data' },
+        { name: 'Class Data ID', key: 'class-data-id' },
+        { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
+        { name: 'State', key: 'state' },
+      ],
+    },
+    {
+      name: 'Scenario',
+      subItems: [
+        { name: 'ScenarioRole', key: 'scenario-role' },
+        { name: 'ScenarioEvent', key: 'scenario-event' },
+        { name: 'ScenarioConditions', key: 'scenario-conditions' },
+      ],
+    },
+  ];
 
   return (
     <Drawer
@@ -19,53 +36,43 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
       sx={{
         width: 240,
         flexShrink: 0,
-        '& .MuiDrawer-paper': { width: 240, boxSizing: 'border-box' },
+        '& .MuiDrawer-paper': {
+          width: 240,
+          boxSizing: 'border-box',
+        },
       }}
     >
       <List>
-        <ListItemButton
-          selected={selectedMenu === 'GenerateTool'}
-          onClick={handleGenerateToolClick}
-        >
-          <ListItemText primary="GenerateTool" />
-          {open ? <ExpandLess /> : <ExpandMore />}
-        </ListItemButton>
-        <Collapse in={open} timeout="auto" unmountOnExit>
-          <List component="div" disablePadding>
-            <ListItemButton
-              sx={{ pl: 4 }}
-              onClick={() => handleSubMenuClick('enum-id')}
+        {menuItems.map((item) => (
+          <React.Fragment key={item.name}>
+            <ListItem
+              button
+              onClick={() => {
+                handleClick(item.name);
+                handleMenuClick(item.name, null);
+              }}
+              selected={selectedMenu === item.name}
             >
-              <ListItemText primary="Enum ID" />
-            </ListItemButton>
-            <ListItemButton
-              sx={{ pl: 4 }}
-              onClick={() => handleSubMenuClick('class-data')}
-            >
-              <ListItemText primary="Class Data" />
-            </ListItemButton>
-              <ListItemButton
-              sx={{ pl: 4 }}
-              onClick={() => handleSubMenuClick('class-data-id')}
-            >
-              <ListItemText primary="Class Data ID" />
-              
-            </ListItemButton>
-              <ListItemButton
-              sx={{ pl: 4 }}
-              onClick={() => handleSubMenuClick('class-data-matrix-id')}
-            >
-              <ListItemText primary="Class Data Matrix ID" />
-
-            </ListItemButton>
-            <ListItemButton
-              sx={{ pl: 4 }}
-              onClick={() => handleSubMenuClick('state')}
-            >
-              <ListItemText primary="State" />
-            </ListItemButton>
-          </List>
-        </Collapse>
+              <ListItemText primary={item.name} />
+              {open[item.name] ? <ExpandLess /> : <ExpandMore />}
+            </ListItem>
+            <Collapse in={open[item.name]} timeout="auto" unmountOnExit>
+              <List component="div" disablePadding>
+                {item.subItems.map((subItem) => (
+                  <ListItem
+                    button
+                    key={subItem.key}
+                    sx={{ pl: 4 }}
+                    onClick={() => handleMenuClick(item.name, subItem.key)}
+                    selected={selectedMenu === item.name && subItem.key === selectedMenu}
+                  >
+                    <ListItemText primary={subItem.name} />
+                  </ListItem>
+                ))}
+              </List>
+            </Collapse>
+          </React.Fragment>
+        ))}
       </List>
     </Drawer>
   );

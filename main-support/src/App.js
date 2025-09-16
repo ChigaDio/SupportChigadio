@@ -7,20 +7,23 @@ import EnumIdGrid from './components/EnumIdGrid';
 import EnumDetailGrid from './components/EnumDetailGrid';
 import ClassDataGrid from './components/ClassDataGrid';
 import ClassDataDetailGrid from './components/ClassDataDetailGrid';
-
-import StateGrid from './components/StateGrid';
-import StateDetailGridGrid from './components/StateDetailGrid';
 import ClassDataIdGrid from './components/ClassDataIdGrid';
 import ClassDataIdDetailGrid from './components/ClassDataIdDetailGrid';
-
 import ClassDataMatrinxIdGrid from './components/ClassDataMatrixIdGrid';
 import ClassDataMatrinxIdDetailGrid from './components/ClassDataMatrixIdDetailGrid';
+import StateGrid from './components/StateGrid';
+import StateDetailGridGrid from './components/StateDetailGrid';
+import ScenarioRoleGrid from './components/ScenarioRoleGrid';
+import ScenarioRoleDetailGrid from './components/ScenarioRoleDetailGrid';
+import ScenarioEventGrid from './components/ScenarioEventGrid';
+import ScenarioEventTransition from './components/ScenarioEventTransition';
+import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 
 function AppContent() {
   const navigate = useNavigate();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
 
-  // メニュークリックハンドラ
+  // Menu click handler
   const handleMenuClick = (menu, subMenu) => {
     setSelectedMenu(menu);
     console.log('Menu clicked:', menu, 'SubMenu:', subMenu);
@@ -35,14 +38,28 @@ function AppContent() {
         case 'class-data-id':
           navigate('/class-data-id');
           break;
-          case 'class-data-matrix-id':
+        case 'class-data-matrix-id':
           navigate('/class-data-matrix-id');
           break;
         case 'state':
           navigate('/state');
           break;
         default:
-          navigate('/enum-id'); // GenerateToolのデフォルト
+          navigate('/enum-id'); // GenerateTool default
+      }
+    } else if (menu === 'Scenario' && subMenu) {
+      switch (subMenu) {
+        case 'scenario-role':
+          navigate('/scenario-role');
+          break;
+        case 'scenario-event':
+          navigate('/scenario-event');
+          break;
+        case 'scenario-conditions':
+          navigate('/scenario-conditions');
+          break;
+        default:
+          navigate('/scenario-role'); // Scenario default
       }
     } else {
       navigate('/');
@@ -65,6 +82,11 @@ function AppContent() {
           <Route path="/class-data-matrix-id/:name" element={<ClassDataMatrinxIdDetailGrid />} />
           <Route path="/state" element={<StateGrid />} />
           <Route path="/state/:name" element={<StateDetailGridGrid />} />
+          <Route path="/scenario-role" element={<ScenarioRoleGrid />} />
+          <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
+          <Route path="/scenario-event" element={<ScenarioEventGrid />} />
+          <Route path="/scenario-event/:parentId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+          <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
         </Routes>
       </Box>
     </Box>

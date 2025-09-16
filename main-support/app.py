@@ -7,6 +7,7 @@ import sys
 from flask import Flask, send_from_directory, jsonify, request
 import os
 import json
+import pythonSrc.scenario as scenario
 
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -30,6 +31,11 @@ app = Flask(__name__, static_folder=STATIC_FOLDER)
 ENUM = 'enum'
 CLASS_DATA = 'class-data'
 STATE_DATA = 'state-data'
+
+scenario.generate_scenario_folder(DATA_DIR)
+scenario.generate_base_script_file(DATA_DIR)
+
+
 
 # 型マッピング（Vector2, Vector3追加）
 TYPE_MAP = {
@@ -2515,6 +2521,565 @@ def generate_matrix_table_id():
         return jsonify({"message": "MatrixTableID generated"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+    
+##--------------------------------------------------
+# Scenario
+def generate_scenario_role_factory():
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
+    roles = []
+    if os.path.exists(list_path):
+        with open(list_path, 'r', encoding='utf-8') as f:
+            roles = json.load(f)
+
+    # Generate ScenarioRoleID enum
+    enum_content = """using System;
+
+namespace GameCore.Scenario {
+    public enum ScenarioRoleID {
+        None = 0,
+"""
+    for role in roles:
+        enum_content += f"        {role['name']} = {role['id']},\n"
+    enum_content += """        Max
+    }
+}
+"""
+    with open(os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, "ScenarioRoleID.cs"), 'w', encoding='utf-8') as f:
+        f.write(enum_content)
+
+    # Generate ScenarioRoleFactory class
+    factory_content = """using System;
+
+namespace GameCore.Scenario {
+    public static class ScenarioRoleFactory {
+        public static BaseScenarioRoleData CreateRoleData(ScenarioRoleID id) {
+            switch (id) {
+"""
+    for role in roles:
+        factory_content += f"""                case ScenarioRoleID.{role['name']}:
+                    return new {role['name']}RoleData();
+"""
+    factory_content += """                default:
+                    return null;
+            }
+        }
+
+        public static BaseOrigintScenarioRoleAction CreateRoleAction(BaseScenarioRoleData data) {
+            if (data == null) return null;
+            switch (data.RoleID) {
+"""
+    for role in roles:
+        factory_content += f"""                case ScenarioRoleID.{role['name']}:
+                    return new {role['name']}RoleAction(data as {role['name']}RoleData);
+"""
+    factory_content += """                default:
+                    return null;
+            }
+        }
+    }
+}
+"""
+    with open(os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
+        f.write(factory_content)
+
+@app.route('/api/scenario-role', methods=['GET', 'POST', 'PATCH'])
+def handle_scenario_role_list():
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
+    if request.method == 'GET':
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                return jsonify(json.load(f))
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        return jsonify([])
+    elif request.method == 'POST':
+        data = request.json
+        name = data.get('name')
+        description = data.get('description', '')
+        branchType = data.get('branchType', 'General')
+        if not name:
+            return jsonify({"error": "Name is required"}), 400
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                roles = json.load(f)
+                max_id = max([r['id'] for r in roles], default=0) + 1
+                new_role = {"id": max_id, "name": name, "description": description, "branchType": branchType}
+                roles.append(new_role)
+                f.seek(0)
+                json.dump(roles, f)
+        else:
+            new_role = {"id": 1, "name": name, "description": description, "branchType": branchType}
+            with open(list_path, 'w', encoding='utf-8') as f:
+                json.dump([new_role], f)
+        role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
+        os.makedirs(role_dir, exist_ok=True)
+        with open(os.path.join(role_dir, f"{name}.json"), 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        generate_scenario_role_factory()  # Generate enum and factory
+        return jsonify({"message": "Role created", "data": new_role})
+    elif request.method == 'PATCH':  # Used for delete
+        data = request.json
+        name = data.get('name')
+        if not name:
+            return jsonify({"error": "Name is required"}), 400
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                roles = json.load(f)
+                roles = [r for r in roles if r['name'] != name]
+                f.seek(0)
+                f.truncate()
+                json.dump(roles, f)
+        role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
+        if os.path.exists(role_dir):
+            shutil.rmtree(role_dir)
+        generate_scenario_role_factory()  # Regenerate enum and factory
+        return jsonify({"message": "Role deleted"})
+
+@app.route('/api/scenario-role/<name>', methods=['GET', 'POST', 'DELETE'])
+def handle_scenario_role_detail(name):
+    role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
+    data_path = os.path.join(role_dir, f"{name}.json")
+    if request.method == 'GET':
+        if os.path.exists(data_path):
+            with open(data_path, 'r', encoding='utf-8') as f:
+                return jsonify(json.load(f))
+        return jsonify([])
+    elif request.method == 'POST':
+        data = request.json
+        with open(data_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        return jsonify({"message": "Data saved"})
+    elif request.method == 'DELETE':
+        list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                roles = json.load(f)
+                roles = [r for r in roles if r['name'] != name]
+                f.seek(0)
+                f.truncate()
+                json.dump(roles, f)
+        if os.path.exists(role_dir):
+            shutil.rmtree(role_dir)
+        return jsonify({"message": "Role deleted"})
+
+@app.route('/api/generate-scenario-role/<name>', methods=['POST'])
+def generate_scenario_role_cs(name):
+    role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
+    data_path = os.path.join(role_dir, f"{name}.json")
+    if not os.path.exists(data_path):
+        return jsonify({"error": "Data not found"}), 404
+    with open(data_path, 'r', encoding='utf-8') as f:
+        json_data = json.load(f)
+    data = json_data.get('data', [])
+    branch_type = json_data.get('branchType', 'General')
+    
+    # Generate Data class inheriting from BaseScenarioRoleData
+    cs_data_content = f"""using System;
+using System.IO;
+using UnityEngine;
+
+namespace GameCore.Scenario {{
+    public class {name}RoleData : BaseScenarioRoleData {{
+        
+"""
+    for item in data:
+        type_ = item['type']
+        name_ = item['name']
+        array_size = item['arraySize']
+        if array_size > 0:
+            cs_data_content += f"        public {type_}[] {name_} {{ get; set; }}\n"
+        else:
+            cs_data_content += f"        public {type_} {name_} {{ get; set; }}\n"
+            
+    cs_data_content += f"""       public override void ReadBinary(BinaryReader reader) {{
+            base.ReadBinary(reader);
+"""
+    for item in data:
+        type_ = item['type']
+        name_ = item['name']
+        array_size = item['arraySize']
+        if array_size > 0:
+            cs_data_content += f"            {name_} = new {type_}[{array_size}];\n"
+            if type_.lower() in TYPE_MAP:
+                if type_.lower() == 'string':
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = reader.ReadString(); }}\n"
+                elif type_.lower() == 'vector2':
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = new Vector2(reader.ReadSingle(), reader.ReadSingle()); }}\n"
+                elif type_.lower() == 'vector3':
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()); }}\n"
+                else:
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = reader.{TYPE_MAP[type_.lower()]['cs_read']}(); }}\n"
+            else:
+                cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = ({type_})reader.ReadInt32(); }}\n"
+        else:
+            if type_.lower() in TYPE_MAP:
+                if type_.lower() == 'string':
+                    cs_data_content += f"            {name_} = reader.ReadString();\n"
+                elif type_.lower() == 'vector2':
+                    cs_data_content += f"            {name_} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
+                elif type_.lower() == 'vector3':
+                    cs_data_content += f"            {name_} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n"
+                else:
+                    cs_data_content += f"            {name_} = reader.{TYPE_MAP[type_.lower()]['cs_read']}();\n"
+            else:
+                cs_data_content += f"            {name_} = ({type_})reader.ReadInt32();\n"
+    
+
+    
+    cs_data_content += "    }\n  }\n}\n"
+    base_action_class = "BaseScenarioRoleBranchAction" if branch_type == 'Branch' else "BaseScenarioRoleAction"
+    # Generate Action class inheriting from BaseScenarioRoleAction
+    cs_action_content = f"""using System;
+using UnityEngine;
+
+namespace GameCore.Scenario {{
+    public class {name}RoleAction : {base_action_class}<{name}RoleData> {{
+        public {name}RoleAction({name}RoleData roleData) : base(roleData) {{
+        }}
+
+        public override void OnInitialize() {{
+            // Custom initialization logic
+            base.OnInitialize();
+        }}
+
+        public override void OnExecute() {{
+            // Custom action logic using RoleData
+            Debug.Log($"Executing {name} with RoleID: {{RoleData.RoleID}}");
+        }}
+
+        public override void OnFinalize() {{
+            // Custom cleanup logic
+        }}
+    }}
+}}
+"""
+    
+    # Write both files
+    cs_data_path = os.path.join(role_dir, f"{name}RoleData.cs")
+    cs_action_path = os.path.join(role_dir, f"{name}RoleAction.cs")
+    with open(cs_data_path, 'w', encoding='utf-8') as f:
+        f.write(cs_data_content)
+    with open(cs_action_path, 'w', encoding='utf-8') as f:
+        f.write(cs_action_content)
+    
+    return jsonify({"message": "C# data and action classes generated"})
+
+#============================================================================
+#ScenarioEvent管理
+@app.route('/api/scenario-event', methods=['GET', 'POST'])
+def handle_scenario_event_list():
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    if request.method == 'GET':
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                return jsonify(json.load(f))
+        return jsonify([])
+    elif request.method == 'POST':
+        data = request.json
+        id = data.get('id')
+        name = data.get('name')
+        description = data.get('description', '')
+        if not id or not name:
+            return jsonify({"error": "ID and Name are required"}), 400
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                events = json.load(f)
+                if any(e['id'] == id for e in events):
+                    return jsonify({"error": "ID already exists"}), 400
+                new_event = {"id": id, "name": name, "description": description, "subEvents": []}
+                events.append(new_event)
+                f.seek(0)
+                f.truncate()
+                json.dump(events, f)
+        else:
+            new_event = {"id": id, "name": name, "description": description, "subEvents": []}
+            with open(list_path, 'w', encoding='utf-8') as f:
+                json.dump([new_event], f)
+        event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
+        os.makedirs(event_dir, exist_ok=True)
+        with open(os.path.join(event_dir, f"{id}.json"), 'w', encoding='utf-8') as f:
+            json.dump(new_event, f)
+        return jsonify({"message": "Event created"})
+
+@app.route('/api/scenario-event/<id>', methods=['PATCH', 'DELETE'])
+def handle_scenario_event(id):
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
+    event_path = os.path.join(event_dir, f"{id}.json")
+    if request.method == 'PATCH':
+        data = request.json
+        name = data.get('name')
+        description = data.get('description')
+        if not os.path.exists(list_path):
+            return jsonify({"error": "Event not found"}), 404
+        with open(list_path, 'r+', encoding='utf-8') as f:
+            events = json.load(f)
+            for event in events:
+                if event['id'] == id:
+                    if name is not None:
+                        event['name'] = name
+                    if description is not None:
+                        event['description'] = description
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(events, f)
+                    with open(event_path, 'w', encoding='utf-8') as ef:
+                        json.dump(event, ef)
+                    return jsonify({"message": "Event updated"})
+        return jsonify({"error": "Event not found"}), 404
+    elif request.method == 'DELETE':
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                events = json.load(f)
+                events = [e for e in events if e['id'] != id]
+                f.seek(0)
+                f.truncate()
+                json.dump(events, f)
+        if os.path.exists(event_dir):
+            shutil.rmtree(event_dir)
+        return jsonify({"message": "Event deleted"})
+
+@app.route('/api/scenario-event/<id>/sub', methods=['POST'])
+def add_sub_event(id):
+    data = request.json
+    name = data.get('name')
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
+    if os.path.exists(list_path):
+        with open(list_path, 'r+', encoding='utf-8') as f:
+            events = json.load(f)
+            for event in events:
+                if event['id'] == id:
+                    max_sub_id = max([s['subId'] for s in event.get('subEvents', [])], default=0) + 1
+                    new_sub = {"subId": max_sub_id, "name": name}
+                    event['subEvents'].append(new_sub)
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(events, f)
+                    with open(event_path, 'w', encoding='utf-8') as ef:
+                        json.dump(event, ef)
+                    return jsonify({"message": "Sub event added", "subId": max_sub_id})
+        return jsonify({"error": "Event not found"}), 404
+    return jsonify({"error": "Event not found"}), 404
+
+@app.route('/api/scenario-event/<id>/sub/<int:subId>', methods=['PATCH', 'DELETE'])
+def handle_sub_event(id, subId):
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
+    if request.method == 'PATCH':
+        data = request.json
+        name = data.get('name')
+        if not os.path.exists(list_path):
+            return jsonify({"error": "Event not found"}), 404
+        with open(list_path, 'r+', encoding='utf-8') as f:
+            events = json.load(f)
+            for event in events:
+                if event['id'] == id:
+                    for sub in event['subEvents']:
+                        if sub['subId'] == subId:
+                            if name is not None:
+                                sub['name'] = name
+                            f.seek(0)
+                            f.truncate()
+                            json.dump(events, f)
+                            with open(event_path, 'w', encoding='utf-8') as ef:
+                                json.dump(event, ef)
+                            return jsonify({"message": "Sub event updated"})
+            return jsonify({"error": "Sub event not found"}), 404
+    elif request.method == 'DELETE':
+        if os.path.exists(list_path):
+            with open(list_path, 'r+', encoding='utf-8') as f:
+                events = json.load(f)
+                for event in events:
+                    if event['id'] == id:
+                        event['subEvents'] = [s for s in event['subEvents'] if s['subId'] != subId]
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(events, f)
+                        with open(event_path, 'w', encoding='utf-8') as ef:
+                            json.dump(event, ef)
+                        return jsonify({"message": "Sub event deleted"})
+        return jsonify({"error": "Event or sub event not found"}), 404
+    
+# Transition管理
+# 既存のエンドポイント（省略された部分は前のコードと同じ）
+@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition', methods=['GET', 'POST'])
+def handle_transition(eventId, subId):
+    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
+    transition_path = os.path.join(event_dir, f"sub_{subId}_transition.json")
+    if request.method == 'GET':
+        try:
+            if os.path.exists(transition_path):
+                with open(transition_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for node in data.get('nodes', []):
+                        if node.get('type') == 'customGroup':
+                            node['data']['isSubGroup'] = False
+                            node['data']['isSubView'] = False
+                    return jsonify(data)
+            return jsonify({"nodes": [], "edges": []})
+        except Exception as e:
+            app.logger.error(f"Error reading transition {transition_path}: {str(e)}")
+            return jsonify({"error": "Failed to read transition"}), 500
+    elif request.method == 'POST':
+        try:
+            data = request.json
+            if not data or 'nodes' not in data or 'edges' not in data:
+                return jsonify({"error": "Invalid data format"}), 400
+            for node in data.get('nodes', []):
+                if node.get('type') == 'customGroup':
+                    node['data']['isSubGroup'] = False
+                    node['data']['isSubView'] = False
+                elif node.get('type') == 'subGroupNode':
+                    node['data']['isSubGroup'] = True
+                    node['data']['isSubView'] = True
+            if not os.path.exists(event_dir):
+                os.makedirs(event_dir)
+            with open(transition_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return jsonify({"message": "Transition saved", "data": data})
+        except Exception as e:
+            app.logger.error(f"Error saving transition {transition_path}: {str(e)}")
+            return jsonify({"error": "Failed to save transition"}), 500
+
+@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/subgroup', methods=['GET', 'POST'])
+def handle_subgroup(eventId, subId, nodeId):
+    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
+    subgroup_path = os.path.join(event_dir, f"sub_{subId}_node_{nodeId}_subgroup.json")
+    if request.method == 'GET':
+        try:
+            if os.path.exists(subgroup_path):
+                with open(subgroup_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for node in data.get('nodes', []):
+                        node['data']['isSubGroup'] = True
+                        node['data']['isSubView'] = True
+                    return jsonify(data)
+            return jsonify({"nodes": [], "edges": []})
+        except Exception as e:
+            app.logger.error(f"Error reading subgroup {subgroup_path}: {str(e)}")
+            return jsonify({"error": "Failed to read subgroup"}), 500
+    elif request.method == 'POST':
+        try:
+            data = request.json
+            if not data or 'nodes' not in data or 'edges' not in data:
+                return jsonify({"error": "Invalid data format"}), 400
+            for node in data.get('nodes', []):
+                node['data']['isSubGroup'] = True
+                node['data']['isSubView'] = True
+            if not os.path.exists(event_dir):
+                os.makedirs(event_dir)
+            with open(subgroup_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return jsonify({"message": "Subgroup saved", "data": data})
+        except Exception as e:
+            app.logger.error(f"Error saving subgroup {subgroup_path}: {str(e)}")
+            return jsonify({"error": "Failed to save subgroup"}), 500
+
+@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/role', methods=['POST'])
+def add_role(eventId, subId, nodeId):
+    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
+    subgroup_path = os.path.join(event_dir, f"sub_{subId}_node_{nodeId}_subgroup.json")
+
+    data = request.json
+    roleId = data.get('roleId')
+    name = data.get('name')
+    actions = data.get('actions', [])
+    description = data.get('description', '')
+    branchType = data.get('branchType', 'General')
+    role_data = data.get('data', [])
+    if not roleId or not name:
+        return jsonify({"error": "Role ID and name are required"}), 400
+    if os.path.exists(subgroup_path):
+        with open(subgroup_path, 'r+', encoding='utf-8') as f:
+            subgroup = json.load(f)
+            for node in subgroup['nodes']:
+                if node['id'] == nodeId:
+                    if 'roles' not in node['data']:
+                        node['data']['roles'] = []
+                    node['data']['roles'].append({
+                        'id': roleId,
+                        'name': name,
+                        'actions': actions,
+                        'description': description,
+                        'branchType': branchType,
+                        'data': role_data
+                    })
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(subgroup, f, ensure_ascii=False, indent=2)
+                    return jsonify({"message": "Role and actions added", "data": subgroup})
+            return jsonify({"error": "Node not found"}), 404
+    return json
+
+@app.route('/api/scenario-role', methods=['GET', 'POST'])
+def handle_roles():
+    roles_path = os.path.join(DATA_DIR, 'scenario_role.json')
+    if request.method == 'GET':
+        try:
+            if os.path.exists(roles_path):
+                with open(roles_path, 'r', encoding='utf-8') as f:
+                    return jsonify(json.load(f))
+            return jsonify([])
+        except Exception as e:
+            app.logger.error(f"Error reading roles {roles_path}: {str(e)}")
+            return jsonify({"error": "Failed to read roles"}), 500
+    elif request.method == 'POST':
+        try:
+            data = request.json
+            role_id = data.get('id')
+            name = data.get('name')
+            description = data.get('description', '')
+            actions = data.get('actions', [])
+            if not role_id or not name:
+                return jsonify({"error": "ID and name are required"}), 400
+            roles = []
+            if os.path.exists(roles_path):
+                with open(roles_path, 'r', encoding='utf-8') as f:
+                    roles = json.load(f)
+            if any(r['id'] == role_id for r in roles):
+                return jsonify({"error": "Role ID already exists"}), 400
+            roles.append({"id": role_id, "name": name, "description": description, "actions": actions})
+            with open(roles_path, 'w', encoding='utf-8') as f:
+                json.dump(roles, f, ensure_ascii=False, indent=2)
+            return jsonify({"message": "Role added", "data": roles})
+        except Exception as e:
+            app.logger.error(f"Error adding role to {roles_path}: {str(e)}")
+            return jsonify({"error": "Failed to add role"}), 500
+
+@app.route('/api/scenario-role/<roleId>', methods=['PATCH', 'DELETE'])
+def handle_role(roleId):
+    roles_path = os.path.join(DATA_DIR, 'scenario_role.json')
+    try:
+        if not os.path.exists(roles_path):
+            return jsonify({"error": "No roles found"}), 404
+        with open(roles_path, 'r', encoding='utf-8') as f:
+            roles = json.load(f)
+        if request.method == 'PATCH':
+            data = request.json
+            for role in roles:
+                if role['id'] == roleId:
+                    role.update({
+                        "name": data.get('name', role['name']),
+                        "description": data.get('description', role['description']),
+                        "actions": data.get('actions', role['actions'])
+                    })
+                    with open(roles_path, 'w', encoding='utf-8') as f:
+                        json.dump(roles, f, ensure_ascii=False, indent=2)
+                    return jsonify({"message": "Role updated", "data": roles})
+            return jsonify({"error": "Role not found"}), 404
+        elif request.method == 'DELETE':
+            roles = [role for role in roles if role['id'] != roleId]
+            with open(roles_path, 'w', encoding='utf-8') as f:
+                json.dump(roles, f, ensure_ascii=False, indent=2)
+            return jsonify({"message": "Role deleted", "data": roles})
+    except Exception as e:
+        app.logger.error(f"Error handling role {roleId}: {str(e)}")
+        return jsonify({"error": "Failed to handle role"}), 500
+
         
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
