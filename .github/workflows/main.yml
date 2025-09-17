@@ -41,16 +41,17 @@ jobs:
         env:
           CI: false
 
-
-
       - name: Remove old build directory in repo root
         run: if exist build rmdir /s /q build
+        shell: cmd
 
       - name: Copy new build to repo root
         run: xcopy /E /I /Y main-support\build build
+        shell: cmd
 
       - name: Remove old app.exe in repo root
         run: if exist app.exe del app.exe
+        shell: cmd
 
       - name: Build app.py with pyinstaller
         run: pyinstaller --onefile app.py
@@ -58,6 +59,7 @@ jobs:
 
       - name: Copy app.exe to repo root
         run: copy main-support\dist\app.exe app.exe
+        shell: cmd
 
   release:
     needs: build
@@ -73,3 +75,4 @@ jobs:
           files: |
             build/**
             app.exe
+
