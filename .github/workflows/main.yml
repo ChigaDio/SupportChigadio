@@ -36,8 +36,11 @@ jobs:
         working-directory: ./main-support
 
       - name: Build React app
-        run: npm run build
+        run: |
+          set CI=false
+          npm run build
         working-directory: ./main-support
+
 
       - name: Remove old build directory in repo root
         run: if exist build rmdir /s /q build
