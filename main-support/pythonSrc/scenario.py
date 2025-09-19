@@ -193,7 +193,7 @@ namespace GameCore.Scenario {
         }
     }
 """
-        with open(os.path.join(DATA_DIR, SCENARIO_ROLE, "ScenarioRoleID.cs"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(parent_path, SCENARIO_ROLE, "ScenarioRoleID.cs"), 'w', encoding='utf-8') as f:
             f.write(enum_content)
             
      
@@ -222,7 +222,7 @@ namespace GameCore.Scenario {
     }
 }
 """
-        with open(os.path.join(DATA_DIR, SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(parent_path, SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
 
 # app.pyから借用/統合するための関数 (実際はapp.pyからインポート)
