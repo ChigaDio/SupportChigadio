@@ -112,7 +112,7 @@ namespace GameCore.Scenario
         }
 
 
-        public virtual void OnInitialize()
+        public override void OnInitialize()
         {
             base.OnInitialize();
         }
@@ -133,9 +133,12 @@ namespace GameCore.Scenario
     public class BaseScenarioRoleAction<T> : BaseGeneralScenarioRoleAction<T> where T : BaseScenarioRoleData
     {
 
-        public BaseScenarioRoleAction(T roleData) : base(roleData);
+        public BaseScenarioRoleAction(T roleData) : base(roleData)
+        {
+            
+        }
 
-        public override virtual void OnInitialize()
+        public override void OnInitialize()
         {
             base.OnInitialize();
         }
@@ -160,9 +163,12 @@ namespace GameCore.Scenario
     {
 
 
-        public BaseScenarioRoleBranchAction(T roleData) : base(roleData);
+        public BaseScenarioRoleBranchAction(T roleData) : base(roleData)
+        {
+            
+        }
 
-        public virtual void OnInitialize()
+        public override void OnInitialize()
         {
             base.OnInitialize();
         }
@@ -173,6 +179,51 @@ namespace GameCore.Scenario
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleBranchAction.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
+            
+            
+    
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioEventManager.cs")):        
+        # Generate ScenarioRoleID enum
+        enum_content = """using System;
+
+namespace GameCore.Scenario {
+    public enum ScenarioRoleID {
+        None = 0,
+        Max
+        }
+    }
+"""
+        with open(os.path.join(DATA_DIR, SCENARIO_ROLE, "ScenarioRoleID.cs"), 'w', encoding='utf-8') as f:
+            f.write(enum_content)
+            
+     
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioRoleFactory.cs")):       
+        # Generate ScenarioRoleFactory class
+        factory_content = """
+using System;
+namespace GameCore.Scenario {
+    public static class ScenarioRoleFactory {
+        public static BaseScenarioRoleData CreateRoleData(ScenarioRoleID id) {
+            switch (id) {
+
+                default:
+                    return null;
+            }
+        }
+
+        public static BaseOrigintScenarioRoleAction CreateRoleAction(BaseScenarioRoleData data) {
+            if (data == null) return null;
+            switch (data.RoleID) {
+
+                default:
+                    return null;
+            }
+        }
+    }
+}
+"""
+        with open(os.path.join(DATA_DIR, SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
+            f.write(factory_content)
 
 # app.pyから借用/統合するための関数 (実際はapp.pyからインポート)
 def get_enum_values():

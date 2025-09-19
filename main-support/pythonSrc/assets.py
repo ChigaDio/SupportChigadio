@@ -529,6 +529,56 @@ namespace GameCore.Sound
         with open(os.path.join(SOUND_DATA,"SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
+
+
+    if not os.path.exists('SoundEnums.cs'):
+        with open('SoundEnums.cs', 'w', encoding='utf-8') as f:
+            f.write('namespace GameCore.Sound {\n')
+            f.write('    public enum SoundGroup { None, UI, Battle, BGM };\n')
+            f.write('    public enum SoundType { SE, BGM };\n')
+            f.write('}\n')
+            
+    # SoundDatabase.cs
+    if not os.path.exists('SoundDatabase.cs'):
+        with open('SoundDatabase.cs', 'w', encoding='utf-8') as f:
+            f.write('using System.Collections.Generic;\n\n')
+            f.write('namespace GameCore.Sound {\n')
+            f.write('    public class SoundDatabase {\n')
+            f.write('        [System.Serializable]\n')
+            f.write('        public class SoundData {\n')
+            f.write('            private readonly string idName;\n')
+            f.write('            private readonly string addressablePath;\n')
+            f.write('            private readonly float baseVolume;\n')
+            f.write('            private readonly SoundType type;\n')
+            f.write('            public SoundData(string idName, string addressablePath, float baseVolume, SoundType type) {\n')
+            f.write('                this.idName = idName;\n')
+            f.write('                this.addressablePath = addressablePath;\n')
+            f.write('                this.baseVolume = baseVolume;\n')
+            f.write('                this.type = type;\n')
+            f.write('            }\n')
+            f.write('            public string IdName => idName;\n')
+            f.write('            public string AddressablePath => addressablePath;\n')
+            f.write('            public float BaseVolume => baseVolume;\n')
+            f.write('            public SoundType Type => type;\n')
+            f.write('        }\n')
+            f.write('        [System.Serializable]\n')
+            f.write('        public class GroupedSounds {\n')
+            f.write('            private readonly SoundGroup group;\n')
+            f.write('            private readonly List<SoundData> sounds;\n')
+            f.write('            public GroupedSounds(SoundGroup group, List<SoundData> sounds) {\n')
+            f.write('                this.group = group;\n')
+            f.write('                this.sounds = sounds ?? new List<SoundData>();\n')
+            f.write('            }\n')
+            f.write('            public SoundGroup Group => group;\n')
+            f.write('            public IReadOnlyList<SoundData> Sounds => sounds.AsReadOnly();\n')
+            f.write('        }\n')
+            f.write('        private readonly List<GroupedSounds> groupedSounds;\n')
+            f.write('        public SoundDatabase() {\n')
+            f.write('            groupedSounds = new List<GroupedSounds>();\n')
+            f.write('        }\n')
+            f.write('        public IReadOnlyList<GroupedSounds> GroupedSounds => groupedSounds.AsReadOnly();\n')
+            f.write('    }\n')
+            f.write('}\n')
         
     
 
