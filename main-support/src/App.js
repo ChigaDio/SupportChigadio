@@ -19,6 +19,8 @@ import ScenarioEventGrid from './components/ScenarioEventGrid';
 import ScenarioEventTransition from './components/ScenarioEventTransition';
 import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 
+import Sound from './assets/sound';
+
 function AppContent() {
   const navigate = useNavigate();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
@@ -61,7 +63,16 @@ function AppContent() {
         default:
           navigate('/scenario-role'); // Scenario default
       }
-    } else {
+    } else if (menu === 'Assets' && subMenu) {
+      switch (subMenu) {
+        case 'sound':
+          navigate('sound');
+          break;
+        default:
+          navigate('sound'); // Assets default
+      }
+    }
+     else {
       navigate('/');
     }
   };
@@ -85,8 +96,9 @@ function AppContent() {
           <Route path="/scenario-role" element={<ScenarioRoleGrid />} />
           <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
           <Route path="/scenario-event" element={<ScenarioEventGrid />} />
-          <Route path="/scenario-event/:parentId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+          <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
           <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
+          <Route path="/sound" element={<Sound />} />
         </Routes>
       </Box>
     </Box>

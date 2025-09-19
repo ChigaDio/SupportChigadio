@@ -8,6 +8,8 @@ from flask import Flask, send_from_directory, jsonify, request
 import os
 import json
 import pythonSrc.scenario as scenario
+import pythonSrc.assets as assets
+
 
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -34,6 +36,7 @@ STATE_DATA = 'state-data'
 
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
+assets.generate_base()
 
 
 
@@ -2906,114 +2909,115 @@ def handle_sub_event(id, subId):
     
 # Transition管理
 # 既存のエンドポイント（省略された部分は前のコードと同じ）
-@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition', methods=['GET', 'POST'])
+@app.route('/api/scenario-event/<eventId>/sub/<subId>/transition', methods=['GET', 'POST'])
 def handle_transition(eventId, subId):
-    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
-    transition_path = os.path.join(event_dir, f"sub_{subId}_transition.json")
+    app.logger.debug(f"Received eventId: {eventId}, subId: {subId}")
+    if not eventId or eventId == 'undefined' or not subId or subId == 'undefined':
+        app.logger.error(f"Invalid parameters: eventId={eventId}, subId={subId}")
+        return jsonify({'error': 'Invalid eventId or subId'}), 400
+    file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
     if request.method == 'GET':
         try:
-            if os.path.exists(transition_path):
-                with open(transition_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    for node in data.get('nodes', []):
-                        if node.get('type') == 'customGroup':
-                            node['data']['isSubGroup'] = False
-                            node['data']['isSubView'] = False
-                    return jsonify(data)
-            return jsonify({"nodes": [], "edges": []})
+                return jsonify(data.get('subgroups', {}).get(subId, {'nodes': [], 'edges': []}))
+            return jsonify({'nodes': [], 'edges': []})
         except Exception as e:
-            app.logger.error(f"Error reading transition {transition_path}: {str(e)}")
-            return jsonify({"error": "Failed to read transition"}), 500
-    elif request.method == 'POST':
+            app.logger.error(f"Error reading {file_path}: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    else:  # POST
         try:
-            data = request.json
-            if not data or 'nodes' not in data or 'edges' not in data:
-                return jsonify({"error": "Invalid data format"}), 400
-            for node in data.get('nodes', []):
-                if node.get('type') == 'customGroup':
-                    node['data']['isSubGroup'] = False
-                    node['data']['isSubView'] = False
-                elif node.get('type') == 'subGroupNode':
-                    node['data']['isSubGroup'] = True
-                    node['data']['isSubView'] = True
-            if not os.path.exists(event_dir):
-                os.makedirs(event_dir)
-            with open(transition_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return jsonify({"message": "Transition saved", "data": data})
+            data = request.get_json()
+            current_data = {}
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    current_data = json.load(f)
+            current_data.setdefault('subgroups', {}).update({subId: data})
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(current_data, f, ensure_ascii=False, indent=2)
+            return jsonify({'message': 'Transition saved'})
         except Exception as e:
-            app.logger.error(f"Error saving transition {transition_path}: {str(e)}")
-            return jsonify({"error": "Failed to save transition"}), 500
+            app.logger.error(f"Error saving {file_path}: {str(e)}")
+            return jsonify({'error': str(e)}), 500
 
-@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/subgroup', methods=['GET', 'POST'])
-def handle_subgroup(eventId, subId, nodeId):
-    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
-    subgroup_path = os.path.join(event_dir, f"sub_{subId}_node_{nodeId}_subgroup.json")
+@app.route('/api/scenario-event/<eventId>/sub/<subId>/transition/<parentId>/subgroup', methods=['GET', 'POST'])
+def handle_subgroup(eventId, subId, parentId):
+    app.logger.debug(f"Subgroup request: eventId={eventId}, subId={subId}, parentId={parentId}")
+    if not eventId or eventId == 'undefined' or not subId or subId == 'undefined' or not parentId:
+        app.logger.error(f"Invalid parameters: eventId={eventId}, subId={subId}, parentId={parentId}")
+        return jsonify({'error': 'Invalid parameters'}), 400
+    file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
     if request.method == 'GET':
         try:
-            if os.path.exists(subgroup_path):
-                with open(subgroup_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    for node in data.get('nodes', []):
-                        node['data']['isSubGroup'] = True
-                        node['data']['isSubView'] = True
-                    return jsonify(data)
-            return jsonify({"nodes": [], "edges": []})
+                subgroups = data.get('subgroups', {}).get(subId, {}).get('nodes', [])
+                for node in subgroups:
+                    if node['id'] == parentId:
+                        return jsonify(node['data'].get('subgroups', {}).get(parentId, {'nodes': [], 'edges': []}))
+                return jsonify({'nodes': [], 'edges': []})
+            return jsonify({'nodes': [], 'edges': []})
         except Exception as e:
-            app.logger.error(f"Error reading subgroup {subgroup_path}: {str(e)}")
-            return jsonify({"error": "Failed to read subgroup"}), 500
-    elif request.method == 'POST':
+            app.logger.error(f"Error reading {file_path}: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    else:  # POST
         try:
-            data = request.json
-            if not data or 'nodes' not in data or 'edges' not in data:
-                return jsonify({"error": "Invalid data format"}), 400
-            for node in data.get('nodes', []):
-                node['data']['isSubGroup'] = True
-                node['data']['isSubView'] = True
-            if not os.path.exists(event_dir):
-                os.makedirs(event_dir)
-            with open(subgroup_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return jsonify({"message": "Subgroup saved", "data": data})
+            data = request.get_json()
+            current_data = {}
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    current_data = json.load(f)
+            subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
+            updated_nodes = subgroups
+            for node in updated_nodes:
+                if node['id'] == parentId:
+                    node['data']['subgroups'] = node['data'].get('subgroups', {})
+                    node['data']['subgroups'][parentId] = data
+            current_data.setdefault('subgroups', {}).setdefault(subId, {})['nodes'] = updated_nodes
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(current_data, f, ensure_ascii=False, indent=2)
+            return jsonify({'message': 'Subgroup saved'})
         except Exception as e:
-            app.logger.error(f"Error saving subgroup {subgroup_path}: {str(e)}")
-            return jsonify({"error": "Failed to save subgroup"}), 500
+            app.logger.error(f"Error saving {file_path}: {str(e)}")
+            return jsonify({'error': str(e)}), 500
 
 @app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/role', methods=['POST'])
 def add_role(eventId, subId, nodeId):
-    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId)
-    subgroup_path = os.path.join(event_dir, f"sub_{subId}_node_{nodeId}_subgroup.json")
-
-    data = request.json
-    roleId = data.get('roleId')
-    name = data.get('name')
-    actions = data.get('actions', [])
-    description = data.get('description', '')
-    branchType = data.get('branchType', 'General')
-    role_data = data.get('data', [])
-    if not roleId or not name:
-        return jsonify({"error": "Role ID and name are required"}), 400
-    if os.path.exists(subgroup_path):
-        with open(subgroup_path, 'r+', encoding='utf-8') as f:
-            subgroup = json.load(f)
-            for node in subgroup['nodes']:
-                if node['id'] == nodeId:
-                    if 'roles' not in node['data']:
-                        node['data']['roles'] = []
-                    node['data']['roles'].append({
-                        'id': roleId,
-                        'name': name,
-                        'actions': actions,
-                        'description': description,
-                        'branchType': branchType,
-                        'data': role_data
-                    })
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(subgroup, f, ensure_ascii=False, indent=2)
-                    return jsonify({"message": "Role and actions added", "data": subgroup})
-            return jsonify({"error": "Node not found"}), 404
-    return json
+    try:
+        data = request.get_json()
+        file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
+        current_data = {}
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                current_data = json.load(f)
+        subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
+        for node in subgroups:
+            if node['id'] == nodeId:
+                node['data']['roles'] = node['data'].get('roles', []) + [{
+                    'id': data['roleId'],
+                    'name': data['name'],
+                    'branchType': data['branchType'],
+                    'data': []
+                }]
+                break
+            if node['data'].get('subgroups', {}).get(nodeId):
+                node['data']['subgroups'][nodeId]['nodes'][0]['data']['roles'] = (
+                    node['data']['subgroups'][nodeId]['nodes'][0]['data'].get('roles', []) + [{
+                        'id': data['roleId'],
+                        'name': data['name'],
+                        'branchType': data['branchType'],
+                        'data': []
+                    }]
+                )
+                break
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(current_data, f, ensure_ascii=False, indent=2)
+        return jsonify({'message': 'Role added'})
+    except Exception as e:
+        app.logger.error(f"Error adding role: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/scenario-role', methods=['GET', 'POST'])
 def handle_roles():
@@ -3079,8 +3083,135 @@ def handle_role(roleId):
     except Exception as e:
         app.logger.error(f"Error handling role {roleId}: {str(e)}")
         return jsonify({"error": "Failed to handle role"}), 500
+    
+    
+# API追加
+@app.route('/api/role-form-schema/<roleName>', methods=['GET'])
+def get_role_form_schema(roleName):
+    try:
+        schema = scenario.generate_role_form_schema(roleName,DATA_DIR)
+        return jsonify(schema)
+    except Exception as e:
+        app.logger.error(f"Error fetching role schema: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
-        
+@app.route('/api/scenario-role', methods=['GET'])
+def get_roles():
+    try:
+        roles = []
+        for file in os.listdir('data/scenario-role'):
+            if file.endswith('.json'):
+                with open(f'data/scenario-role/{file}', 'r', encoding='utf-8') as f:
+                    role_data = json.load(f)
+                    roles.append({
+                        'id': file.replace('.json', ''),
+                        'name': file.replace('.json', ''),
+                        'description': role_data.get('description', ''),
+                        'branchType': role_data.get('branchType', 'General')
+                    })
+        return jsonify(roles)
+    except Exception as e:
+        app.logger.error(f"Error fetching roles: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/save-role-data/<eventId>/<subId>/<nodeId>/<roleId>', methods=['POST'])
+def save_role_data(eventId, subId, nodeId, roleId):
+    try:
+        data = request.get_json()
+        formData = data.get('formData', {})
+        file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
+        current_data = {}
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                current_data = json.load(f)
+        subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
+        for node in subgroups:
+            if node['id'] == nodeId:
+                node['data']['roles'] = [
+                    role if role['id'] != roleId else { **role, 'data': formData }
+                    for role in node['data'].get('roles', [])
+                ]
+                break
+            if node['data'].get('subgroups', {}).get(nodeId):
+                node['data']['subgroups'][nodeId]['nodes'][0]['data']['roles'] = [
+                    role if role['id'] != roleId else { **role, 'data': formData }
+                    for role in node['data']['subgroups'][nodeId]['nodes'][0]['data'].get('roles', [])
+                ]
+                break
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(current_data, f, ensure_ascii=False, indent=2)
+        return jsonify({'message': 'Role data saved'})
+    except Exception as e:
+        app.logger.error(f"Error saving role data: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    
+# エンドポイント
+@app.route('/api/fix-all-events', methods=['POST'])
+def fix_all_events_endpoint():
+    try:
+        scenario.fix_all_events()
+        return jsonify({"message": "All events fixed successfully"})
+    except Exception as e:
+        logger.error(f"Error fixing all events: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-all-event-bin', methods=['POST'])
+def generate_all_event_bin_endpoint():
+    try:
+        scenario.fix_all_events()  # 先に Fix
+        result = scenario.generate_all_event_bin()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error generating all event bin: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+
+#===============================================================================
+#Assets
+
+#=================================================-----
+# Sound
+
+@app.route('/api/sound', methods=['GET'])
+def get_sound():
+    return jsonify(assets.get_sound_data())
+
+@app.route('/api/sound/add_group', methods=['POST'])
+def add_group():
+    data = request.json
+    assets.add_sound_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/sound/delete_group', methods=['POST'])
+def delete_group():
+    data = request.json
+    assets.delete_sound_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/sound/add_sound', methods=['POST'])
+def add_sound():
+    data = request.json
+    assets.add_sound(
+        data['group_name'],
+        data['name'],
+        data['desc'],
+        data['volume'],
+        data['type']
+    )
+    return jsonify({'status': 'success'})
+
+@app.route('/api/sound/delete_sound', methods=['POST'])
+def delete_sound():
+    data = request.json
+    assets.delete_sound(data['group_name'], data['index'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/sound/generate', methods=['POST'])
+def generate_files():
+    assets.generate_csharp()
+    assets.generate_bin()
+    return jsonify({'status': 'success'})
+
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')

@@ -1,18 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge, Position, Handle } from '@xyflow/react';
+import { ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge, Position, Handle, applyNodeChanges } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box, Drawer, List, ListItem, ListItemText, Button, Typography, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Tabs, Tab, AppBar } from '@mui/material';
+import { Box, Drawer, List, ListItem, ListItemText, Button, Typography, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Tabs, Tab, AppBar, Accordion, AccordionSummary, AccordionDetails, Backdrop, CircularProgress } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import EditIcon from '@mui/icons-material/Edit';
+import RoleInputFactory from '../scenario/RoleInputFactory';
 
-const CustomGroupNode = ({ data, id }) => {
+const CustomGroupNode = ({ data, id, saveCurrentTab }) => {
   const params = useParams();
   const eventId = params.eventId;
   const subId = params.subId;
   const [showMenu, setShowMenu] = useState(false);
+  const [showDataMenu, setShowDataMenu] = useState(false);
   const [roles, setRoles] = useState([]);
+  const [roleForms, setRoleForms] = useState({});
+  const [formErrors, setFormErrors] = useState({});
+  const [formDataState, setFormDataState] = useState({});
+  const formRefs = useRef([]);
+
+  useEffect(() => {
+    console.log('CustomGroupNode params:', { eventId, subId });
+    if (!eventId || !subId) {
+      console.error('CustomGroupNode: eventId or subId is undefined. URL should be /scenario-event/:eventId/sub/:subId/transition');
+    }
+  }, [eventId, subId]);
 
   useEffect(() => {
     fetch('/api/scenario-role')
@@ -21,18 +37,113 @@ const CustomGroupNode = ({ data, id }) => {
       .catch(error => console.error('Error fetching roles:', error));
   }, []);
 
+  useEffect(() => {
+    console.log('showMenu state for node', id, ':', showMenu);
+    console.log('showDataMenu state for node', id, ':', showDataMenu);
+  }, [showMenu, showDataMenu, id]);
+
+  useEffect(() => {
+    if (data.roles && data.roles.length > 0) {
+      data.roles.forEach((role, index) => {
+        setFormDataState(prev => ({ ...prev, [role.uniqueId]: role.data || [] }));
+        formRefs.current[index] = { submit: () => {} }; // 初期化
+      });
+      const loadRoleData = async () => {
+        const updatedRoles = await Promise.all(data.roles.map(async (role) => {
+          try {
+            const res = await fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${role.uniqueId}`);
+            if (res.ok) {
+              const { formData } = await res.json();
+              setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
+              return { ...role, data: formData };
+            } else {
+              return role;
+            }
+          } catch (error) {
+            console.error('Error loading role data:', error);
+            return role;
+          }
+        }));
+        if (updatedRoles.some((r, i) => JSON.stringify(r.data) !== JSON.stringify(data.roles[i].data))) {
+          window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles: updatedRoles } }));
+        }
+      };
+      loadRoleData();
+    }
+  }, [data.roles, eventId, subId, id]);
+
+useEffect(() => {
+  const loadForms = async () => {
+    if (!eventId || !subId) {
+      console.error('Cannot load role forms: eventId or subId is undefined');
+      return;
+    }
+    try {
+      const formPromises = (data.roles || []).map(async (role) => {
+        try {
+          const FormComp = await RoleInputFactory.getForm(
+            role.name,
+            formDataState[role.uniqueId] || role.data || [],
+            (formData) => {
+              console.log(`Form data updated for ${role.uniqueId}:`, formData);
+              setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
+            }
+          );
+          if (typeof FormComp !== 'function') {
+            console.error(`RoleInputFactory.getForm returned non-function for role ${role.name}:`, FormComp);
+            return { uniqueId: role.uniqueId, error: `Invalid form component for role ${role.name}` };
+          }
+          return { uniqueId: role.uniqueId, FormComp };
+        } catch (error) {
+          console.error(`Error loading form for role ${role.name}:`, error);
+          return { uniqueId: role.uniqueId, error: error.message };
+        }
+      });
+      const results = await Promise.all(formPromises);
+      const newRoleForms = {};
+      const newFormErrors = {};
+      results.forEach(({ uniqueId, FormComp, error }) => {
+        if (error) {
+          newFormErrors[uniqueId] = error;
+        } else {
+          newRoleForms[uniqueId] = FormComp;
+        }
+      });
+      setRoleForms(newRoleForms);
+      setFormErrors(newFormErrors);
+    } catch (error) {
+      console.error('Error loading role forms:', error);
+    }
+  };
+  loadForms();
+}, [data.roles, eventId, subId]); // formDataState を依存配列から削除
+
   const handleAddRole = (role) => {
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
+    const uniqueId = Date.now().toString(); // ユニークID生成
     fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${id}/role`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roleId: role.id, name: role.name, actions: role.actions || [] }),
+      body: JSON.stringify({ roleId: role.id, name: role.name, branchType: role.branchType || 'General', uniqueId }),
     })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
       .then(result => {
         alert(result.message);
-        const newRole = { id: role.id, name: role.name, actions: role.actions || [] };
-        window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles: [...data.roles, newRole] } }));
+        const newRole = { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: [] };
+        const newRoles = [...(data.roles || []), newRole];
+        window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
         setShowMenu(false);
+        if (typeof saveCurrentTab === 'function') {
+          saveCurrentTab();
+        } else {
+          console.error('saveCurrentTab is not a function in handleAddRole');
+        }
       })
       .catch(error => {
         console.error('Error adding role:', error);
@@ -40,18 +151,96 @@ const CustomGroupNode = ({ data, id }) => {
       });
   };
 
+  const handleDeleteRole = (uniqueId) => {
+    const newRoles = (data.roles || []).filter(role => role.uniqueId !== uniqueId);
+    window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
+    if (typeof saveCurrentTab === 'function') {
+      saveCurrentTab();
+    } else {
+      console.error('saveCurrentTab is not a function in handleDeleteRole');
+    }
+  };
+
+  const handleSaveRole = (uniqueId, formData) => {
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
+    console.log('Saving role data:', { uniqueId, formData });
+    fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${uniqueId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ formData }),
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
+      .then(result => {
+        console.log('Role save response:', result);
+        alert(result.message);
+        const newRoles = (data.roles || []).map(role =>
+          role.uniqueId === uniqueId ? { ...role, data: formData } : role
+        );
+        window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
+        if (typeof saveCurrentTab === 'function') {
+          saveCurrentTab();
+        } else {
+          console.error('saveCurrentTab is not a function in handleSaveRole');
+        }
+        console.log('Updated nodes after save:', newRoles);
+      })
+      .catch(error => {
+        console.error('Error saving role data:', error);
+        alert('保存エラー: ' + error.message);
+      });
+  };
+
+  const handleBatchSave = () => {
+    data.roles.forEach((role) => {
+      const formData = formDataState[role.uniqueId];
+      if (formData) {
+        handleSaveRole(role.uniqueId, formData);
+      }
+    });
+  };
+
   const handleDeleteNode = (e) => {
     e.stopPropagation();
     window.dispatchEvent(new CustomEvent('deleteNode', { detail: id }));
+  };
+
+  const handleCopyNode = (e) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('copyNode', { detail: id }));
+  };
+
+  const handleEditNodeId = (e) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('editNodeId', { detail: id }));
   };
 
   const hasRoleButton = data.isSubGroup;
   const hasSubGroupButton = !data.isSubGroup;
 
   return (
-    <Box sx={{ bgcolor: 'white', p: 2, borderRadius: 2, border: '1px solid black', width: 200, textAlign: 'center' }}>
+    <Box
+      sx={{ bgcolor: 'white', p: 2, borderRadius: 2, border: '1px solid black', width: 200, textAlign: 'center' }}
+      onClick={(e) => {
+        if (hasRoleButton) {
+          e.stopPropagation();
+          setShowDataMenu(true);
+        }
+      }}
+    >
       <IconButton onClick={handleDeleteNode} sx={{ position: 'absolute', top: 0, right: 0 }}>
         <DeleteIcon />
+      </IconButton>
+      <IconButton onClick={handleCopyNode} sx={{ position: 'absolute', top: 0, left: 0 }}>
+        <ContentCopyIcon />
+      </IconButton>
+      <IconButton onClick={handleEditNodeId} sx={{ position: 'absolute', bottom: 0, left: 0 }}>
+        <EditIcon />
       </IconButton>
       <Typography variant="h6">{data.label}</Typography>
       {data.description && (
@@ -62,8 +251,8 @@ const CustomGroupNode = ({ data, id }) => {
           <Typography variant="subtitle2">Roles:</Typography>
           <List dense>
             {data.roles.map((role, index) => (
-              <ListItem key={index}>
-                <ListItemText primary={role.name} secondary={role.actions.join(', ')} />
+              <ListItem key={role.uniqueId}>
+                <ListItemText primary={role.name} secondary={role.description} />
               </ListItem>
             ))}
           </List>
@@ -75,11 +264,7 @@ const CustomGroupNode = ({ data, id }) => {
           size="small"
           onClick={(e) => {
             e.stopPropagation();
-            if (typeof data.onTabSwitch === 'function') {
-              data.onTabSwitch(`subgroup-${id}`);
-            } else {
-              console.error('onTabSwitch is not a function:', data.onTabSwitch);
-            }
+            data.onTabSwitch?.(id);
           }}
           sx={{ mt: 1 }}
         >
@@ -90,22 +275,93 @@ const CustomGroupNode = ({ data, id }) => {
         <Button
           variant="contained"
           size="small"
-          onClick={(e) => { e.stopPropagation(); setShowMenu(true); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowMenu(true);
+          }}
           sx={{ mt: 1 }}
         >
           Role追加
         </Button>
       )}
-      <Drawer anchor="right" open={showMenu} onClose={() => setShowMenu(false)}>
-        <Box sx={{ width: 250, p: 2 }}>
-          <Typography variant="h6">ScenarioRole 選択</Typography>
+      <Drawer
+        key={`drawer-role-select-${id}-${showMenu}`}
+        anchor="right"
+        open={showMenu}
+        onClose={(e) => {
+          e.stopPropagation();
+          setShowMenu(false);
+        }}
+      >
+        <Box sx={{ width: 600, p: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">ScenarioRole 選択</Typography>
+            <IconButton
+              onClick={(e) => {
+                e.stopPropagation();
+                console.log('Close Role select button clicked for node:', id);
+                setShowMenu(false);
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Box>
           <List>
             {roles.map(role => (
               <ListItem button key={role.id} onClick={() => handleAddRole(role)}>
-                <ListItemText primary={role.name} secondary={role.description + ' | Actions: ' + (role.actions?.join(', ') || 'None')} />
+                <ListItemText primary={role.name} secondary={role.description} />
               </ListItem>
             ))}
           </List>
+        </Box>
+      </Drawer>
+      <Drawer
+        key={`drawer-data-input-${id}-${showDataMenu}`}
+        anchor="right"
+        open={showDataMenu}
+        onClose={(e) => {
+          e.stopPropagation();
+          setShowDataMenu(false);
+        }}
+      >
+        <Box sx={{ width: 600, p: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">Role データ入力</Typography>
+            <IconButton
+              onClick={(e) => {
+                e.stopPropagation();
+                console.log('Close Data input button clicked for node:', id);
+                setShowDataMenu(false);
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Box>
+          {(data.roles || []).map((role, index) => (
+            <Accordion key={role.uniqueId}>
+              <AccordionSummary>
+                <Typography>{role.name}</Typography>
+                <Button onClick={() => handleDeleteRole(role.uniqueId)} sx={{ ml: 'auto' }}>削除</Button>
+              </AccordionSummary>
+              <AccordionDetails>
+                {formErrors[role.uniqueId] ? (
+                  <Typography color="error">フォーム読み込みエラー: {formErrors[role.uniqueId]}</Typography>
+                ) : roleForms[role.uniqueId] ? (
+                  (() => {
+                    const RoleForm = roleForms[role.uniqueId];
+                    return <RoleForm />;
+                  })()
+                ) : (
+                  <Typography>Loading...</Typography>
+                )}
+              </AccordionDetails>
+            </Accordion>
+          ))}
+          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="contained" color="primary" onClick={handleBatchSave}>
+              一括保存
+            </Button>
+          </Box>
         </Box>
       </Drawer>
       <Handle type="source" position={Position.Right} />
@@ -114,53 +370,276 @@ const CustomGroupNode = ({ data, id }) => {
   );
 };
 
-const nodeTypes = {
-  customGroup: CustomGroupNode,
-  subGroupNode: CustomGroupNode
-};
-
 function ScenarioEventTransition() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const params = useParams();
   const eventId = params.eventId;
   const subId = params.subId;
+  const [isLoading, setIsLoading] = useState(true);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editNodeId, setEditNodeId] = useState(null);
   const [newId, setNewId] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [tabs, setTabs] = useState([{ id: 'main', label: 'Group遷移図', type: 'group' }]);
   const [activeTab, setActiveTab] = useState('main');
   const [tabData, setTabData] = useState({ main: { nodes: [], edges: [] } });
+  const [copiedNode, setCopiedNode] = useState(null);
 
-  const addOnShrinkToNodes = (nodeList, isSub = false, parentId = null) => {
+  const saveCurrentTab = useCallback(() => {
+    if (!tabData[activeTab] || !eventId || !subId) {
+      console.error('Cannot save tab: tabData or eventId/subId is undefined');
+      return;
+    }
+    setIsLoading(true);
+    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
+    const saveData = {
+      nodes: tabData[activeTab].nodes.map(n => ({
+        id: n.id,
+        type: n.type,
+        position: n.position,
+        data: {
+          label: n.data.label,
+          description: n.data.description,
+          roles: n.data.roles,
+          subgroups: n.data.subgroups,
+          isSubGroup: n.data.isSubGroup
+        },
+        draggable: n.draggable
+      })),
+      edges: tabData[activeTab].edges
+    };
+    console.log('Saving tab data:', saveData);
+    const saveUrl = activeTab.startsWith('subgroup-')
+      ? `/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup`
+      : `/api/scenario-event/${eventId}/sub/${subId}/transition`;
+    fetch(saveUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(saveData),
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
+      .then(result => {
+        console.log('Save response:', result);
+        if (activeTab.startsWith('subgroup-')) {
+          setTabData(prev => ({
+            ...prev,
+            main: {
+              ...prev.main,
+              nodes: prev.main.nodes.map(node =>
+                node.id === parentId ? {
+                  ...node,
+                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: saveData } }
+                } : node
+              )
+            }
+          }));
+        }
+        alert(result.message);
+      })
+      .catch(error => {
+        console.error('Error saving:', error);
+        alert('保存エラー: ' + error.message);
+      })
+      .finally(() => setIsLoading(false));
+  }, [tabData, activeTab, eventId, subId]);
+
+const nodeTypes = useMemo(() => ({
+  customGroup: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} />,
+  subGroupNode: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} />
+}), [saveCurrentTab]);
+
+  const addOnShrinkToNodes = (nodeList, isSub = false) => {
     return nodeList.map(node => ({
-      ...node,
+      id: node.id,
+      type: node.type,
+      position: node.position,
       data: {
-        ...node.data,
+        label: node.data.label,
+        description: node.data.description || '',
+        roles: node.data.roles || [],
+        subgroups: isSub ? {} : node.data.subgroups || {},
         isSubGroup: isSub || node.type === 'subGroupNode',
-        onTabSwitch: () => handleTabSwitch(`subgroup-${node.id}`, node.id)
-      }
+        onTabSwitch: node.type === 'customGroup' ? (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId) : undefined,
+        saveCurrentTab,
+      },
+      draggable: true,
     }));
   };
 
-  // 初期データロード
   useEffect(() => {
-    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`)
-      .then(res => res.json())
+    const handleUpdateNodeRoles = (event) => {
+      const { id, newRoles } = event.detail;
+      console.log('updateNodeRoles event:', { id, newRoles });
+      setTabData(prev => {
+        const updatedNodes = prev[activeTab].nodes.map(node =>
+          node.id === id ? { ...node, data: { ...node.data, roles: newRoles } } : node
+        );
+        const newTabData = { ...prev, [activeTab]: { ...prev[activeTab], nodes: updatedNodes } };
+        if (activeTab.startsWith('subgroup-')) {
+          const parentId = activeTab.split('-')[1];
+          newTabData.main = {
+            ...prev.main,
+            nodes: prev.main.nodes.map(node =>
+              node.id === parentId ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  subgroups: {
+                    ...node.data.subgroups,
+                    [parentId]: { nodes: updatedNodes, edges: prev[activeTab].edges }
+                  }
+                }
+              } : node
+            )
+          };
+        }
+        return newTabData;
+      });
+      setNodes(prev => prev.map(node =>
+        node.id === id ? { ...node, data: { ...node.data, roles: newRoles } } : node
+      ));
+      saveCurrentTab();
+    };
+
+    const handleDeleteNode = (event) => {
+      handleDeleteNode(event.detail);
+    };
+
+    const handleCopyNode = (event) => {
+      handleCopyNode(event.detail);
+    };
+
+    const handleEditNodeId = (event) => {
+      handleOpenEditDialog(event.detail);
+    };
+
+    window.addEventListener('updateNodeRoles', handleUpdateNodeRoles);
+    window.addEventListener('deleteNode', handleDeleteNode);
+    window.addEventListener('copyNode', handleCopyNode);
+    window.addEventListener('editNodeId', handleEditNodeId);
+
+    return () => {
+      window.removeEventListener('updateNodeRoles', handleUpdateNodeRoles);
+      window.removeEventListener('deleteNode', handleDeleteNode);
+      window.removeEventListener('copyNode', handleCopyNode);
+      window.removeEventListener('editNodeId', handleEditNodeId);
+    };
+  }, [activeTab, tabData, saveCurrentTab]);
+
+  useEffect(() => {
+    if (!eventId || !subId) {
+      console.error('Cannot fetch transition: eventId or subId is undefined');
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      setIsLoading(false);
+      return;
+    }
+    const abortController = new AbortController();
+    setIsLoading(true);
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, { signal: abortController.signal })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
       .then(result => {
         let loadedNodes = result.nodes || [];
-        loadedNodes = addOnShrinkToNodes(loadedNodes, false, null);
+        loadedNodes = addOnShrinkToNodes(loadedNodes, false);
         setTabData(prev => ({ ...prev, main: { nodes: loadedNodes, edges: result.edges || [] } }));
         setNodes(loadedNodes);
         setEdges(result.edges || []);
       })
       .catch(error => {
+        if (error.name === 'AbortError') return;
         console.error('Error fetching transition:', error);
         setTabData(prev => ({ ...prev, main: { nodes: [], edges: [] } }));
         setNodes([]);
         setEdges([]);
-      });
+      })
+      .finally(() => setIsLoading(false));
+    return () => abortController.abort();
   }, [eventId, subId]);
+
+  const handleTabSwitch = useCallback((tabId, parentId = null) => {
+    if (tabId === activeTab) return;
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
+    setIsLoading(true);
+    const existingTab = tabs.find(t => t.id === tabId);
+    if (tabId.startsWith('subgroup-')) {
+      if (existingTab) {
+        setActiveTab(tabId);
+        const parentNode = tabData.main.nodes.find(n => n.id === parentId);
+        const subGroupData = parentNode?.data.subgroups?.[parentId] || { nodes: [], edges: [] };
+        setNodes(addOnShrinkToNodes(subGroupData.nodes, true));
+        setEdges(subGroupData.edges);
+        setTabData(prev => ({ ...prev, [tabId]: subGroupData }));
+        setIsLoading(false);
+        return;
+      }
+      const newTab = { id: tabId, label: `SubGroup: ${parentId}`, type: 'subgroup', parentId };
+      setTabs(prev => {
+        if (!prev.find(t => t.id === tabId)) return [...prev, newTab];
+        return prev;
+      });
+      fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup`)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          return res.json();
+        })
+        .then(result => {
+          let loadedNodes = result.nodes || [];
+          loadedNodes = addOnShrinkToNodes(loadedNodes, true);
+          setTabData(prev => ({
+            ...prev,
+            [tabId]: { nodes: loadedNodes, edges: result.edges || [] },
+            main: {
+              ...prev.main,
+              nodes: prev.main.nodes.map(node =>
+                node.id === parentId ? {
+                  ...node,
+                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: { nodes: loadedNodes, edges: result.edges || [] } } }
+                } : node
+              )
+            }
+          }));
+          setNodes(loadedNodes);
+          setEdges(result.edges || []);
+          setActiveTab(tabId);
+        })
+        .catch(error => {
+          console.error('Error fetching subgroup:', error);
+          setTabData(prev => ({ ...prev, [tabId]: { nodes: [], edges: [] } }));
+          setNodes([]);
+          setEdges([]);
+          setActiveTab(tabId);
+        })
+        .finally(() => setIsLoading(false));
+    } else {
+      setActiveTab(tabId);
+      const currentTabData = tabData[tabId] || { nodes: [], edges: [] };
+      setNodes(addOnShrinkToNodes(currentTabData.nodes, false));
+      setEdges(currentTabData.edges);
+      setIsLoading(false);
+    }
+  }, [eventId, subId, activeTab, tabData]);
+
+  const handleTabClose = (tabId) => {
+    if (tabId === 'main') return;
+    setTabs(prev => prev.filter(t => t.id !== tabId));
+    setTabData(prev => {
+      const { [tabId]: _, ...rest } = prev;
+      return rest;
+    });
+    if (activeTab === tabId) {
+      handleTabSwitch('main');
+    }
+  };
 
   const onConnect = (params) => {
     const sourceEdges = edges.filter(edge => edge.source === params.source);
@@ -183,7 +662,36 @@ function ScenarioEventTransition() {
       ...prev,
       [activeTab]: { nodes: prev[activeTab].nodes, edges: [...prev[activeTab].edges, newEdge] }
     }));
+    adjustTargetIds(params.source, params.target);
     saveCurrentTab();
+  };
+
+  const adjustTargetIds = (sourceId, targetId, visited = new Set()) => {
+    if (visited.has(targetId)) return;
+    visited.add(targetId);
+
+    const currentNodes = tabData[activeTab].nodes;
+    const sourceNode = currentNodes.find(n => n.id === sourceId);
+    const targetNode = currentNodes.find(n => n.id === targetId);
+
+    if (!sourceNode || !targetNode) return;
+
+    const sourceNum = parseInt(sourceId, 10);
+    if (isNaN(sourceNum)) return;
+
+    let newTargetId = (sourceNum + 1).toString();
+    while (currentNodes.some(n => n.id === newTargetId && n.id !== targetId)) {
+      newTargetId = (parseInt(newTargetId, 10) + 1).toString();
+    }
+
+    if (newTargetId !== targetId) {
+      updateNodeId(targetId, newTargetId);
+    }
+
+    const nextEdges = tabData[activeTab].edges.filter(e => e.source === targetId);
+    nextEdges.forEach(edge => {
+      adjustTargetIds(newTargetId, edge.target, visited);
+    });
   };
 
   const handleOpenAddDialog = () => {
@@ -197,11 +705,15 @@ function ScenarioEventTransition() {
   };
 
   const handleAddNode = () => {
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
     if (!newId.trim()) {
       alert('IDを入力してください（数値推奨）');
       return;
     }
-    if (nodes.find(node => node.id === newId)) {
+    if (tabData[activeTab].nodes.find(node => node.id === newId)) {
       alert('IDが重複しています');
       return;
     }
@@ -217,229 +729,392 @@ function ScenarioEventTransition() {
         label: label,
         description: newDescription.trim() || '',
         roles: [],
+        subgroups: nodeType === 'customGroup' ? {} : {},
         isSubGroup: activeTab.startsWith('subgroup-'),
-        onTabSwitch: nodeType === 'customGroup' ? () => handleTabSwitch(`subgroup-${newNodeId}`, newNodeId) : undefined
+        onTabSwitch: nodeType === 'customGroup' ? (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId) : undefined,
+        saveCurrentTab,
       },
       draggable: true,
     };
-    const currentNodes = tabData[activeTab]?.nodes || [];
-    const currentEdges = tabData[activeTab]?.edges || [];
-    const updatedNodes = [...currentNodes, newNode];
-    setTabData(prev => ({ ...prev, [activeTab]: { nodes: updatedNodes, edges: currentEdges } }));
+    let updatedNodes = [...(tabData[activeTab]?.nodes || []), newNode];
+    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: tabData[activeTab]?.edges || [] } };
+    if (activeTab.startsWith('subgroup-')) {
+      newTabData.main = {
+        ...tabData.main,
+        nodes: tabData.main.nodes.map(node => {
+          if (node.id === parentId) {
+            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
+            const newSubNodes = [...currentSubData.nodes, newNode];
+            const newSubData = { nodes: newSubNodes, edges: currentSubData.edges };
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subgroups: {
+                  ...node.data.subgroups,
+                  [parentId]: newSubData
+                }
+              }
+            };
+          }
+          return node;
+        })
+      };
+    }
+    setTabData(newTabData);
     setNodes(updatedNodes);
-    const apiUrl = activeTab.startsWith('subgroup-') 
-      ? `/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup` 
-      : `/api/scenario-event/${eventId}/sub/${subId}/transition`;
-    fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nodes: updatedNodes, edges: currentEdges }),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(result => {
-        alert(result.message);
-        // 再読み込みで最新データを取得
-        fetch(apiUrl)
-          .then(res => res.json())
-          .then(result => {
-            let loadedNodes = result.nodes || [];
-            loadedNodes = addOnShrinkToNodes(loadedNodes, activeTab.startsWith('subgroup-'), parentId);
-            setTabData(prev => ({ ...prev, [activeTab]: { nodes: loadedNodes, edges: result.edges || [] } }));
-            setNodes(loadedNodes);
-            setEdges(result.edges || []);
-          })
-          .catch(error => console.error('Error re-fetching data:', error));
-      })
-      .catch(error => {
-        console.error('Error adding node:', error);
-        alert('ノード追加エラー: ' + error.message);
-      });
-    handleCloseAddDialog();
+    saveCurrentTab();
   };
 
   const handleDeleteNode = (nodeId) => {
-    const currentNodes = tabData[activeTab]?.nodes || [];
-    const updatedNodes = currentNodes.filter(node => node.id !== nodeId);
-    const currentEdges = tabData[activeTab]?.edges || [];
-    const updatedEdges = currentEdges.filter(edge => edge.source !== nodeId && edge.target !== nodeId);
-    setTabData(prev => ({ ...prev, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } }));
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
+    setIsLoading(true);
+    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
+    let updatedNodes = tabData[activeTab]?.nodes.filter(node => node.id !== nodeId) || [];
+    const currentEdges = tabData[activeTab]?.edges.filter(edge => edge.source !== nodeId && edge.target !== nodeId) || [];
+    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: currentEdges } };
+    if (activeTab.startsWith('subgroup-')) {
+      newTabData.main = {
+        ...tabData.main,
+        nodes: tabData.main.nodes.map(node => {
+          if (node.id === parentId) {
+            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
+            const newSubNodes = currentSubData.nodes.filter(n => n.id !== nodeId);
+            const newSubEdges = currentSubData.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+            const newSubData = { nodes: newSubNodes, edges: newSubEdges };
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subgroups: {
+                  ...node.data.subgroups,
+                  [parentId]: newSubData
+                }
+              }
+            };
+          }
+          return node;
+        })
+      };
+    }
+    setTabData(newTabData);
+    setNodes(updatedNodes);
+    setEdges(currentEdges);
+    saveCurrentTab();
+  };
+
+  const handleCopyNode = (nodeId) => {
+    const nodeToCopy = (tabData[activeTab]?.nodes || []).find(n => n.id === nodeId);
+    if (nodeToCopy) {
+      const isSub = activeTab.startsWith('subgroup-');
+      setCopiedNode({
+        ...nodeToCopy,
+        type: isSub ? 'subGroupNode' : 'customGroup',
+        data: {
+          ...nodeToCopy.data,
+          subgroups: isSub ? {} : nodeToCopy.data.subgroups || {}
+        }
+      });
+    } else {
+      alert('ノードが見つかりません（tabDataに存在しません）');
+    }
+  };
+
+  const handlePasteNode = () => {
+    if (!copiedNode) {
+      alert('コピーされたノードがありません');
+      return;
+    }
+    if (!eventId || !subId) {
+      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      return;
+    }
+    setIsLoading(true);
+    const currentNodes = tabData[activeTab].nodes;
+    const isSub = activeTab.startsWith('subgroup-');
+    const expectedType = isSub ? 'subGroupNode' : 'customGroup';
+    if (copiedNode.type !== expectedType) {
+      alert('このタブでは異なるタイプのノードをペーストできません');
+      setIsLoading(false);
+      return;
+    }
+    const ids = currentNodes.map(n => parseInt(n.id, 10)).filter(id => !isNaN(id));
+    const maxId = ids.length > 0 ? Math.max(...ids) : 0;
+    const newNodeId = (maxId + 1).toString();
+    const parentId = isSub ? activeTab.split('-')[1] : null;
+    const label = isSub ? `Group: ${parentId} / Sub: ${newNodeId}` : newNodeId;
+    const newNode = {
+      ...copiedNode,
+      id: newNodeId,
+      type: isSub ? 'subGroupNode' : 'customGroup',
+      position: { x: copiedNode.position.x + 20, y: copiedNode.position.y + 20 },
+      data: {
+        ...copiedNode.data,
+        label: label,
+        subgroups: isSub ? {} : copiedNode.data.subgroups || {},
+        isSubGroup: isSub,
+        onTabSwitch: isSub ? undefined : (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId),
+        saveCurrentTab,
+      }
+    };
+    let updatedNodes = [...currentNodes, newNode];
+    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: tabData[activeTab].edges } };
+    if (isSub) {
+      newTabData.main = {
+        ...tabData.main,
+        nodes: tabData.main.nodes.map(node => {
+          if (node.id === parentId) {
+            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
+            const newSubNodes = [...currentSubData.nodes, newNode];
+            const newSubData = { nodes: newSubNodes, edges: currentSubData.edges };
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subgroups: {
+                  ...node.data.subgroups,
+                  [parentId]: newSubData
+                }
+              }
+            };
+          }
+          return node;
+        })
+      };
+    }
+    setTabData(newTabData);
+    setNodes(updatedNodes);
+    saveCurrentTab();
+  };
+
+  const handleOpenEditDialog = (nodeId) => {
+    const node = tabData[activeTab].nodes.find(n => n.id === nodeId);
+    if (node) {
+      setEditNodeId(nodeId);
+      setNewId(node.id);
+      setNewDescription(node.data.description || '');
+      setEditDialogOpen(true);
+    }
+  };
+
+  const handleCloseEditDialog = () => {
+    setEditDialogOpen(false);
+    setEditNodeId(null);
+  };
+
+  const updateNodeId = (oldId, newId) => {
+    if (oldId === newId) return;
+    const currentNodes = tabData[activeTab].nodes;
+    if (currentNodes.some(n => n.id === newId)) {
+      alert('IDが重複しています');
+      return;
+    }
+    setIsLoading(true);
+    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
+    let updatedNodes = currentNodes.map(node =>
+      node.id === oldId ? {
+        ...node,
+        id: newId,
+        data: {
+          ...node.data,
+          label: activeTab.startsWith('subgroup-') ? `Group: ${parentId} / Sub: ${newId}` : newId,
+          subgroups: node.data.subgroups || {}
+        }
+      } : node
+    );
+    const updatedEdges = tabData[activeTab].edges.map(edge => ({
+      ...edge,
+      source: edge.source === oldId ? newId : edge.source,
+      target: edge.target === oldId ? newId : edge.target
+    }));
+    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } };
+    if (activeTab.startsWith('subgroup-')) {
+      newTabData.main = {
+        ...tabData.main,
+        nodes: tabData.main.nodes.map(node => {
+          if (node.id === parentId) {
+            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
+            const newSubNodes = currentSubData.nodes.map(n =>
+              n.id === oldId ? {
+                ...n,
+                id: newId,
+                data: { ...n.data, label: `Group: ${parentId} / Sub: ${newId}` }
+              } : n
+            );
+            const newSubEdges = currentSubData.edges.map(e => ({
+              ...e,
+              source: e.source === oldId ? newId : e.source,
+              target: e.target === oldId ? newId : e.target
+            }));
+            const newSubData = { nodes: newSubNodes, edges: newSubEdges };
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subgroups: {
+                  ...node.data.subgroups,
+                  [parentId]: newSubData
+                }
+              }
+            };
+          }
+          return node;
+        })
+      };
+    }
+    setTabData(newTabData);
     setNodes(updatedNodes);
     setEdges(updatedEdges);
     saveCurrentTab();
   };
 
-  const handleTabSwitch = (tabId, parentId = null) => {
-    if (tabId === activeTab) return;
-    if (tabId.startsWith('subgroup-') && !tabs.find(t => t.id === tabId)) {
-      const newTab = { id: tabId, label: `SubGroup: ${parentId}`, type: 'subgroup', parentId };
-      setTabs(prev => [...prev, newTab]);
-      fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup`)
-        .then(res => res.json())
-        .then(result => {
-          let loadedNodes = result.nodes || [];
-          loadedNodes = addOnShrinkToNodes(loadedNodes, true, parentId);
-          setTabData(prev => ({ ...prev, [tabId]: { nodes: loadedNodes, edges: result.edges || [] } }));
-        })
-        .catch(error => {
-          console.error('Error fetching subgroup:', error);
-          setTabData(prev => ({ ...prev, [tabId]: { nodes: [], edges: [] } }));
-        });
+  const handleEditNode = () => {
+    if (!newId.trim()) {
+      alert('IDを入力してください（数値推奨）');
+      return;
     }
-    setActiveTab(tabId);
-    const currentTabData = tabData[tabId] || { nodes: [], edges: [] };
-    setNodes(addOnShrinkToNodes(currentTabData.nodes, tabId.startsWith('subgroup-'), parentId));
-    setEdges(currentTabData.edges);
+    updateNodeId(editNodeId, newId.trim());
+    const updatedNodes = tabData[activeTab].nodes.map(node =>
+      node.id === newId ? { ...node, data: { ...node.data, description: newDescription.trim() } } : node
+    );
+    setTabData(prev => ({ ...prev, [activeTab]: { nodes: updatedNodes, edges: prev[activeTab].edges } }));
+    setNodes(updatedNodes);
+    saveCurrentTab();
+    handleCloseEditDialog();
   };
-
-  const handleTabClose = (tabId) => {
-    if (tabId === 'main') return;
-    setTabs(prev => prev.filter(t => t.id !== tabId));
-    if (activeTab === tabId) {
-      const newActive = 'main';
-      handleTabSwitch(newActive);
-    }
-    setTabData(prev => {
-      const { [tabId]: omitted, ...rest } = prev;
-      return rest;
-    });
-  };
-
-  const saveCurrentTab = () => {
-    if (!tabData[activeTab]) return;
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
-    const saveData = { 
-      nodes: tabData[activeTab].nodes.map(n => ({ ...n, data: { ...n.data, onTabSwitch: undefined } })), 
-      edges: tabData[activeTab].edges 
-    };
-    const saveUrl = activeTab.startsWith('subgroup-') 
-      ? `/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup` 
-      : `/api/scenario-event/${eventId}/sub/${subId}/transition`;
-    fetch(saveUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(saveData),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .catch(error => console.error('Error saving:', error));
-  };
-
-  useEffect(() => {
-    const deleteNodeHandler = (e) => handleDeleteNode(e.detail);
-    const updateRolesHandler = (e) => {
-      setTabData(prev => {
-        const current = prev[activeTab];
-        if (!current) return prev;
-        const updatedNodes = current.nodes.map(node => 
-          node.id === e.detail.id 
-            ? { ...node, data: { ...node.data, roles: e.detail.newRoles } }
-            : node
-        );
-        return { ...prev, [activeTab]: { ...current, nodes: updatedNodes } };
-      });
-      setNodes(prevNodes => prevNodes.map(node => 
-        node.id === e.detail.id 
-          ? { ...node, data: { ...node.data, roles: e.detail.newRoles } }
-          : node
-      ));
-    };
-    window.addEventListener('deleteNode', deleteNodeHandler);
-    window.addEventListener('updateNodeRoles', updateRolesHandler);
-    return () => {
-      window.removeEventListener('deleteNode', deleteNodeHandler);
-      window.removeEventListener('updateNodeRoles', updateRolesHandler);
-    };
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (tabData[activeTab]?.nodes?.length || tabData[activeTab]?.edges?.length) {
-      saveCurrentTab();
-    }
-  }, [tabData, activeTab]);
-
-  const currentNodes = tabData[activeTab]?.nodes || [];
-  const currentEdges = tabData[activeTab]?.edges || [];
 
   return (
-    <Box sx={{ height: '100vh', width: '100vw', bgcolor: 'black' }}>
-      <AppBar position="static" sx={{ bgcolor: 'grey.800' }}>
-        <Tabs value={activeTab} onChange={(e, newValue) => handleTabSwitch(newValue)} variant="scrollable" scrollButtons="auto">
-          {tabs.map((tab) => (
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <Backdrop open={isLoading} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
+        <CircularProgress color="inherit" />
+      </Backdrop>
+      <AppBar position="static">
+        <Tabs value={activeTab} onChange={(e, newValue) => handleTabSwitch(newValue)} sx={{ bgcolor: 'primary.main' }}>
+          {tabs.map(tab => (
             <Tab
               key={tab.id}
+              value={tab.id}
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  {tab.label}
-                  {tab.type === 'subgroup' && (
+                  <Typography>{tab.label}</Typography>
+                  {tab.id !== 'main' && (
                     <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleTabClose(tab.id); }}>
                       <CloseIcon />
                     </IconButton>
                   )}
                 </Box>
               }
-              value={tab.id}
             />
           ))}
         </Tabs>
+        <Box sx={{ p: 1, display: 'flex', gap: 1 }}>
+          <Button variant="contained" color="secondary" onClick={handleOpenAddDialog} disabled={isLoading}>
+            ノード追加
+          </Button>
+          <Button variant="contained" color="secondary" onClick={handlePasteNode} disabled={isLoading || !copiedNode}>
+            ノードペースト
+          </Button>
+          <Button variant="contained" color="primary" onClick={saveCurrentTab} disabled={isLoading}>
+            保存
+          </Button>
+        </Box>
       </AppBar>
       <Box sx={{ flexGrow: 1, height: 'calc(100vh - 64px)' }}>
         <ReactFlow
-          nodes={currentNodes}
-          edges={currentEdges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={(changes) => {
+            onNodesChange(changes);
+            setTabData(prev => {
+              const updated = applyNodeChanges(changes, prev[activeTab].nodes);
+              const newTabData = { ...prev, [activeTab]: { ...prev[activeTab], nodes: updated } };
+              if (activeTab.startsWith('subgroup-')) {
+                const parentId = activeTab.split('-')[1];
+                newTabData.main = {
+                  ...prev.main,
+                  nodes: prev.main.nodes.map(node =>
+                    node.id === parentId ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        subgroups: {
+                          ...node.data.subgroups,
+                          [parentId]: { nodes: updated, edges: prev[activeTab].edges }
+                        }
+                      }
+                    } : node
+                  )
+                };
+              }
+              return newTabData;
+            });
+            if (changes.some(change => change.type === 'add' || change.type === 'remove')) {
+              saveCurrentTab();
+            }
+          }}
+          onEdgesChange={(changes) => {
+            onEdgesChange(changes);
+            saveCurrentTab();
+          }}
           onConnect={onConnect}
           nodeTypes={nodeTypes}
           style={{ backgroundColor: 'black' }}
           fitView
           nodesDraggable={true}
-          minZoom={1}
-          maxZoom={1}
+          minZoom={0.5}
+          maxZoom={2}
         >
           <Background variant="lines" color="white" gap={20} size={1} />
           <Controls />
         </ReactFlow>
       </Box>
-      <Button 
-        variant="contained" 
-        startIcon={<AddIcon />} 
-        onClick={handleOpenAddDialog} 
-        sx={{ position: 'absolute', bottom: 10, right: 10 }}
-      >
-        {activeTab.startsWith('subgroup-') ? 'SubGroupNode追加' : 'Group追加'}
-      </Button>
       <Dialog open={addDialogOpen} onClose={handleCloseAddDialog}>
-        <DialogTitle>{activeTab.startsWith('subgroup-') ? '新しいSubGroupNode追加' : '新しいGroup追加'}</DialogTitle>
+        <DialogTitle>ノード追加</DialogTitle>
         <DialogContent>
           <TextField
-            autoFocus
-            margin="dense"
-            label={activeTab.startsWith('subgroup-') ? 'SubGroup ID (数値推奨)' : 'Group ID (数値推奨)'}
-            type="text"
-            fullWidth
+            label="ID（数値推奨）"
             value={newId}
             onChange={(e) => setNewId(e.target.value)}
-            variant="standard"
-            helperText="数値のIDを入力（例: 1, 2, 3）"
+            fullWidth
+            margin="normal"
           />
           <TextField
-            margin="dense"
-            label="説明 (オプション)"
-            type="text"
-            fullWidth
+            label="説明"
             value={newDescription}
             onChange={(e) => setNewDescription(e.target.value)}
-            variant="standard"
+            fullWidth
+            margin="normal"
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseAddDialog}>キャンセル</Button>
-          <Button onClick={handleAddNode}>追加</Button>
+          <Button onClick={handleAddNode} variant="contained">追加</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog}>
+        <DialogTitle>ノード編集</DialogTitle>
+        <DialogContent>
+          <TextField
+            label="ID（数値推奨）"
+            value={newId}
+            onChange={(e) => setNewId(e.target.value)}
+            fullWidth
+            margin="normal"
+          />
+          <TextField
+            label="説明"
+            value={newDescription}
+            onChange={(e) => setNewDescription(e.target.value)}
+            fullWidth
+            margin="normal"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseEditDialog}>キャンセル</Button>
+          <Button onClick={handleEditNode} variant="contained">保存</Button>
         </DialogActions>
       </Dialog>
     </Box>

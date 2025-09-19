@@ -20,6 +20,12 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'State', key: 'state' },
       ],
     },
+            {
+      name: 'Assets',
+      subItems: [
+        { name: 'Sound', key: 'sound' },
+      ],
+    },
     {
       name: 'Scenario',
       subItems: [

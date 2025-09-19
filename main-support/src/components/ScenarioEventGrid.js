@@ -182,6 +182,48 @@ function ScenarioEventGrid() {
     }
   };
 
+  const handleFixAll = () => {
+  if (window.confirm('全てのイベントの Role データを修正しますか？')) {
+    fetch('/api/fix-all-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return response.json();
+      })
+      .then(result => {
+        alert(result.message);
+        // オプション: データ再取得
+        window.location.reload();
+      })
+      .catch(error => {
+        console.error('Error fixing all:', error);
+        alert('修正エラー: ' + error.message);
+      });
+  }
+};
+
+const handleGenerateAllBin = () => {
+  if (window.confirm('全てのイベントバイナリを生成しますか？ (先に Fix 実行)')) {
+    fetch('/api/generate-all-event-bin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return response.json();
+      })
+      .then(result => {
+        alert(result.message);
+      })
+      .catch(error => {
+        console.error('Error generating bin:', error);
+        alert('生成エラー: ' + error.message);
+      });
+  }
+};
+
   // Add sub event
   const handleAddSubEvent = (eventId) => {
     setSelectedEventId(eventId);
@@ -449,8 +491,14 @@ function ScenarioEventGrid() {
           onChange={(e) => setFilterText(e.target.value)}
           sx={{ width: 300, mr: 2 }}
         />
-        <Button variant="contained" onClick={handleAddEvent}>
+        <Button variant="contained" onClick={handleAddEvent} sx={{ mr: 1 }}>
           追加
+        </Button>
+        <Button variant="contained" color="secondary" onClick={handleFixAll} sx={{ mr: 1 }}>
+          Fix
+        </Button>
+        <Button variant="contained" color="primary" onClick={handleGenerateAllBin}>
+          全bin生成
         </Button>
       </Box>
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>
