@@ -131,7 +131,7 @@ public class EditorCommunication : EditorWindow
         pendingCommand = false;
     }
 
-    private static string HandleCommand(string command, CommData data) // 修正: string から CommData に変更
+    private static string HandleCommand(string command, CommData data)
     {
         if (command == "get_project_path")
         {
@@ -139,19 +139,46 @@ public class EditorCommunication : EditorWindow
         }
         else if (command == "get_addressable_path")
         {
-            string filePath = data.file_path; // 修正: data.file_path を使用
-            string assetPath = filePath.Replace(Path.GetFullPath(Application.dataPath + "/.."), "").TrimStart(Path.DirectorySeparatorChar);
+            string filePath = data.file_path;
+            Debug.Log($"Received filePath: {filePath}");
+    
+            // プロジェクトルートからの相対パスを作成
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            Debug.Log($"Project root: {projectRoot}");
+    
+            string assetPath = filePath;
+            if (filePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                assetPath = filePath.Substring(projectRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
             assetPath = assetPath.Replace("\\", "/");
+            if (!assetPath.StartsWith("Assets/"))
+            {
+                assetPath = "Assets/" + assetPath;
+            }
+            Debug.Log($"Computed assetPath: {assetPath}");
+    
+            // GUID を取得
             string guid = AssetDatabase.AssetPathToGUID(assetPath);
+            Debug.Log($"GUID: {guid}");
+    
+            if (string.IsNullOrEmpty(guid))
+            {
+                Debug.LogWarning($"No GUID found for assetPath: {assetPath}");
+                return assetPath; // 相対パスを返す
+            }
+    
+            // Addressable 設定からエントリを検索
             AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
             var entry = settings.FindAssetEntry(guid);
             if (entry != null)
             {
+                Debug.Log($"Found Addressable entry: {entry.address}");
                 return entry.address;
             }
             else
             {
-                Debug.LogWarning($"アセットがAddressableではありません: {assetPath}。相対パスを返します。");
+                Debug.LogWarning($"Asset not Addressable: {assetPath}. Returning relative path.");
                 return assetPath;
             }
         }
@@ -172,6 +199,7 @@ public class EditorCommunication : EditorWindow
         public string file_path; // JSON の "file_path" に対応
     }
 }
+
         """
         with open(os.path.join(EDITOR_DATA,"EditorCommunication.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
