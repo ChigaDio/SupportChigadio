@@ -253,19 +253,16 @@ namespace GameCore.Sound
 
             using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
             {
-                // Read group count
                 int groupCount = reader.ReadInt32();
                 int[] offsets = new int[groupCount];
 
-                // Read offsets
                 for (int i = 0; i < groupCount; i++)
                 {
                     offsets[i] = reader.ReadInt32();
                 }
 
-                // Read each group
                 string[] groupNames = Enum.GetNames(typeof(SoundGroup));
-                if (groupCount > groupNames.Length - 1) // -1 for None
+                if (groupCount > groupNames.Length - 1)
                 {
                     Debug.LogError("Binary contains more groups than defined in SoundGroup enum.");
                     return null;
@@ -285,21 +282,10 @@ namespace GameCore.Sound
                         byte typeByte = reader.ReadByte();
                         SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
 
-                        // Map ID to name using per-group enum
-                        string enumName;
-                        try
-                        {
-                            Type enumType = Type.GetType($"GameCore.Sound.{groupNames[i + 1]}_SoundID");
-                            enumName = Enum.GetName(enumType, id) ?? $"Unknown_{id}";
-                        }
-                        catch
-                        {
-                            enumName = $"Unknown_{id}";
-                            Debug.LogWarning($"Enum {groupNames[i + 1]}_SoundID not found for group {groupNames[i + 1]}.");
-                        }
-
+                        string groupName = groupNames[i + 1];
+                        string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
                         sounds.Add(new SoundDatabase.SoundData(
-                            idName: enumName,
+                            idName: enumName, // Store only the sound name
                             addressablePath: addressablePath,
                             baseVolume: volume,
                             type: type
@@ -307,7 +293,7 @@ namespace GameCore.Sound
                     }
 
                     database.GroupedSounds.Add(new SoundDatabase.GroupedSounds(
-                        group: (SoundGroup)(i + 1), // +1 because None=0
+                        group: (SoundGroup)(i + 1),
                         sounds: sounds
                     ));
                 }
@@ -328,7 +314,7 @@ namespace GameCore.Sound
         }
     }
 }
-        """""
+        """
         with open(os.path.join(SOUND_DATA,"SoundBinaryReader.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
@@ -349,9 +335,9 @@ namespace GameCore.Sound
     {
         private SoundDatabase database;
         private Dictionary<SoundGroup, Dictionary<SoundID, AudioClip>> loadedClips = new Dictionary<SoundGroup, Dictionary<SoundID, AudioClip>>();
-        private AudioSource bgmSource; // BGM専用ソース
-        private AudioSource crossFadeTempSource; // CrossFade用一時ソース
-        private List<AudioSource> sePool = new List<AudioSource>(); // SEプール
+        private AudioSource bgmSource;
+        private AudioSource crossFadeTempSource;
+        private List<AudioSource> sePool = new List<AudioSource>();
         private const int PoolSize = 30;
 
         public void Awake()
@@ -362,7 +348,6 @@ namespace GameCore.Sound
             bgmSource = gameObject.AddComponent<AudioSource>();
             bgmSource.loop = true;
 
-            // SEプール初期化
             for (int i = 0; i < PoolSize; i++)
             {
                 var source = gameObject.AddComponent<AudioSource>();
@@ -370,7 +355,6 @@ namespace GameCore.Sound
                 sePool.Add(source);
             }
 
-            // Databaseロード (Binary)
             LoadDatabaseAsync().Forget();
         }
 
@@ -384,24 +368,21 @@ namespace GameCore.Sound
             await UniTask.CompletedTask;
         }
 
-        // グループロード (同期)
         public void LoadGroup(SoundGroup group, Action action = null)
         {
             LoadGroupAsync(group, action).Forget();
         }
 
-        // グループロード (非同期)
         public async UniTask LoadGroupAsync(SoundGroup group, Action action = null)
         {
-            while (true)
+            while (database == null)
             {
-                if (database != null) break;
                 await UniTask.Yield();
             }
             if (loadedClips.ContainsKey(group)) return;
-            if (database.GroupedSounds.Find(data => data.Group == group) == null) return;
-
             var sounds = database.GroupedSounds.Find(data => data.Group == group);
+            if (sounds == null) return;
+
             loadedClips[group] = new Dictionary<SoundID, AudioClip>();
             foreach (var sound in sounds.Sounds)
             {
@@ -409,21 +390,27 @@ namespace GameCore.Sound
                 await handle;
                 if (handle.Status == AsyncOperationStatus.Succeeded)
                 {
-                    SoundID id = (SoundID)Enum.Parse(typeof(SoundID), sound.IdName);
-                    loadedClips[group][id] = handle.Result;
+                    // Combine group and sound name to form SoundID
+                    string soundIdName = $"{group}_{sound.IdName}";
+                    if (Enum.TryParse<SoundID>(soundIdName, out SoundID id))
+                    {
+                        loadedClips[group][id] = handle.Result;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"Invalid SoundID: {soundIdName}");
+                    }
                 }
             }
 
             action?.Invoke();
         }
 
-        // グループアンロード (同期)
         public void UnloadGroup(SoundGroup group)
         {
             UnloadGroupAsync(group).Forget();
         }
 
-        // グループアンロード (非同期)
         public async UniTask UnloadGroupAsync(SoundGroup group)
         {
             if (!loadedClips.TryGetValue(group, out var clips)) return;
@@ -436,13 +423,11 @@ namespace GameCore.Sound
             await UniTask.CompletedTask;
         }
 
-        // SE再生 (同期)
         public void PlaySE(SoundGroup group, SoundID id, float volume = 1.0f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
         {
             PlaySEInternal(group, id, volume, is3D, position, maxDistance, async: true).Forget();
         }
 
-        // SE再生 (非同期)
         public async UniTask PlaySEAsync(SoundGroup group, SoundID id, float volume = 1.0f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
         {
             await PlaySEInternal(group, id, volume, is3D, position, maxDistance, async: true);
@@ -453,7 +438,7 @@ namespace GameCore.Sound
             if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.SE) return;
 
             var source = GetPooledSource();
-            if (source == null) return; // プール満杯時、無視
+            if (source == null) return;
 
             source.clip = clip;
             source.volume = data.BaseVolume * volume;
@@ -471,13 +456,11 @@ namespace GameCore.Sound
             }
         }
 
-        // BGM再生 (同期, FadeIn対応)
         public void PlayBGM(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 0f)
         {
             PlayBGMAsync(group, id, volume, fadeTime).Forget();
         }
 
-        // BGM再生 (非同期, FadeIn対応)
         public async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 0f)
         {
             if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
@@ -501,13 +484,11 @@ namespace GameCore.Sound
             }
         }
 
-        // BGM FadeOut (同期)
         public void FadeOutBGM(float fadeTime)
         {
             FadeOutAsync(fadeTime).Forget();
         }
 
-        // BGM FadeOut (非同期)
         public async UniTask FadeOutAsync(float fadeTime)
         {
             if (!bgmSource.isPlaying) return;
@@ -524,7 +505,6 @@ namespace GameCore.Sound
             ResetSource(bgmSource);
         }
 
-        // BGM FadeIn (内部用)
         private async UniTask FadeInAsync(float targetVolume, float fadeTime)
         {
             float timer = 0f;
@@ -536,18 +516,15 @@ namespace GameCore.Sound
             }
         }
 
-        // BGM CrossFade (同期)
         public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
         {
             CrossFadeBGMAsync(group, id, volume, fadeTime).Forget();
         }
 
-        // BGM CrossFade (非同期)
         public async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
         {
             if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
 
-            // 一時ソース作成
             crossFadeTempSource = gameObject.AddComponent<AudioSource>();
             crossFadeTempSource.loop = true;
             crossFadeTempSource.clip = clip;
@@ -578,7 +555,8 @@ namespace GameCore.Sound
             clip = null;
             data = null;
             if (!loadedClips.TryGetValue(group, out var groupClips) || !groupClips.TryGetValue(id, out clip)) return false;
-            data = database.GroupedSounds.Find(g => g.Group == group)?.Sounds.FirstOrDefault(s => s.IdName == id.ToString());
+            string soundName = id.ToString().Replace($"{group}_", ""); // Remove group prefix
+            data = database.GroupedSounds.Find(g => g.Group == group)?.Sounds.FirstOrDefault(s => s.IdName == soundName);
             return data != null;
         }
 
@@ -597,22 +575,20 @@ namespace GameCore.Sound
 
         private void Update()
         {
-            // 懸念点対応: 再生中ソースの監視
             sePool.RemoveAll(s => s == null);
             if (bgmSource == null) bgmSource = gameObject.AddComponent<AudioSource>();
         }
 
         private void OnDestroy()
         {
-            // 全アンロード
             foreach (var group in loadedClips.Keys.ToArray())
             {
                 UnloadGroup(group);
             }
-            // No Addressables.Release for database since it's not a ScriptableObject
         }
     }
-}"""
+}
+"""
         with open(os.path.join(SOUND_DATA,"SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
@@ -621,8 +597,9 @@ namespace GameCore.Sound
     if not os.path.exists(os.path.join(SOUND_DATA,'SoundEnums.cs')):
         with open(os.path.join(SOUND_DATA,'SoundEnums.cs'), 'w', encoding='utf-8') as f:
             f.write('namespace GameCore.Sound {\n')
-            f.write('    public enum SoundGroup { None, UI, Battle, BGM };\n')
+            f.write('    public enum SoundGroup { None, UI, Battle, BGM,Max};\n')
             f.write('    public enum SoundType { SE, BGM };\n')
+            f.write('    public enum SoundID { None, Max};\n')
             f.write('}\n')
             
     # SoundDatabase.cs
@@ -758,15 +735,15 @@ def generate_csharp():
         f.write('public enum SoundGroup { None')
         for group in sound_data['groups']:
             f.write(f', {group}')
-        f.write(' };\n')
+        f.write(' Max\n  };\n')
         # SoundType enum
         f.write('public enum SoundType { SE, BGM };\n')
         # Per-group enums
+        f.write('public enum SoundID { None')
         for group, sounds in sound_data['groups'].items():
-            f.write(f'public enum {group}_SoundID {{ None')
             for sound in sounds:
-                f.write(f', {sound["name"]}')
-            f.write(' };\n')
+                f.write(f', {group}_{sound["name"]}')  # Prefix with group name
+        f.write(' Max\n  };\n')
         f.write('}\n')
 
     with open('SoundDatabase.cs', 'w') as f:
@@ -817,12 +794,24 @@ def generate_bin():
         offset_pos = f.tell()
         f.write(struct.pack('i' * group_count, *offsets))
         current_offset = f.tell()
+
+        # SoundID マッピングを作成
+        sound_id_map = {'None': 0}
+        sound_id_counter = 1
+        for group, sounds in sound_data['groups'].items():
+            for sound in sounds:
+                sound_id = f"{group}_{sound['name']}"
+                if sound_id not in sound_id_map:
+                    sound_id_map[sound_id] = sound_id_counter
+                    sound_id_counter += 1
+
         for i, group in enumerate(groups):
             offsets[i] = current_offset
             sounds = sound_data['groups'][group]
             f.write(struct.pack('i', len(sounds)))
-            for j, sound in enumerate(sounds, 1):  # ID from 1 (None=0)
-                f.write(struct.pack('i', j))
+            for sound in sounds:
+                sound_id = sound_id_map.get(f"{group}_{sound['name']}", 0)
+                f.write(struct.pack('i', sound_id))
                 path_bytes = sound['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
                 f.write(struct.pack('f', sound['volume']))
