@@ -1546,8 +1546,8 @@ def generate_state_id(file_path, name, json_data):
     
     code_str = []
     code_label = []
-    for data in json_data.get('nodes', []):
-        label = data.get("data", {}).get("label", "")
+    for data in json_data.get('transitions', []):
+        label = data.get("fromState", {})
         if label not in code_label:
             code_str.append(f'      {label},\n')
             code_label.append(label)
