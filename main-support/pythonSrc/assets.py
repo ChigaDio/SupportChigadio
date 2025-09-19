@@ -130,46 +130,72 @@ public class EditorCommunication : EditorWindow
         commandResult = HandleCommand(pendingCommandName, pendingCommandData);
         pendingCommand = false;
     }
-
+    
     private static string HandleCommand(string command, CommData data)
     {
         if (command == "get_project_path")
         {
-            return Path.GetFullPath(Application.dataPath + "/..");
+            return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
         }
         else if (command == "get_addressable_path")
         {
             string filePath = data.file_path;
             Debug.Log($"Received filePath: {filePath}");
     
-            // プロジェクトルートからの相対パスを作成
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            Debug.Log($"Project root: {projectRoot}");
+            // プロジェクトルートを取得
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
+            Debug.Log($"Project root (normalized): {projectRoot}");
     
-            string assetPath = filePath;
-            if (filePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            // filePath を正規化（スラッシュを統一）
+            string normalizedFilePath = filePath.Replace("\\", "/").TrimEnd('/');
+            Debug.Log($"Normalized filePath: {normalizedFilePath}");
+    
+            // 相対パスを計算
+            string assetPath = normalizedFilePath;
+            if (normalizedFilePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
-                assetPath = filePath.Substring(projectRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                assetPath = normalizedFilePath.Substring(projectRoot.Length).TrimStart('/');
+                Debug.Log($"Trimmed assetPath: {assetPath}");
             }
-            assetPath = assetPath.Replace("\\", "/");
-            if (!assetPath.StartsWith("Assets/"))
+            else
             {
-                assetPath = "Assets/" + assetPath;
+                Debug.LogWarning($"filePath does not start with project root: {projectRoot}");
             }
-            Debug.Log($"Computed assetPath: {assetPath}");
+    
+            // パスを Unity の形式（Assets/ 始まり）に統一
+            assetPath = assetPath.Replace("\\", "/").Trim();
+            if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                assetPath = "Assets/" + assetPath.TrimStart('/');
+            }
+            Debug.Log($"Final assetPath: {assetPath}");
+    
+            // AssetDatabase でパスを検証
+            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\", "/");
+            if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(assetPath)) && !File.Exists(fullPath))
+            {
+                Debug.LogWarning($"Invalid asset path for AssetDatabase: {assetPath}");
+                return assetPath; // 無効な場合は相対パスを返す
+            }
     
             // GUID を取得
             string guid = AssetDatabase.AssetPathToGUID(assetPath);
             Debug.Log($"GUID: {guid}");
     
-            if (string.IsNullOrEmpty(guid))
+            if (string.IsNullOrEmpty(guid) || guid == "00000000000000000000000000000000")
             {
-                Debug.LogWarning($"No GUID found for assetPath: {assetPath}");
+                Debug.LogWarning($"No valid GUID found for assetPath: {assetPath}");
                 return assetPath; // 相対パスを返す
             }
     
             // Addressable 設定からエントリを検索
             AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogWarning("AddressableAssetSettings is not initialized.");
+                return assetPath;
+            }
+    
             var entry = settings.FindAssetEntry(guid);
             if (entry != null)
             {
@@ -690,6 +716,7 @@ def select_audio_file(initial_dir):
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in ('.mp3', '.wav'):
         raise ValueError("Only MP3 or WAV files allowed.")
+    root.destroy()
     return file_path
 
 # Sound data management
