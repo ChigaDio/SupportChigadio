@@ -38,7 +38,7 @@ def generate_base():
 
     if not os.path.exists(os.path.join(EDITOR_DATA,"EditorCommunication.cs")):
         code_str = """
-        using System;
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -52,8 +52,12 @@ public class EditorCommunication : EditorWindow
 {
     private static TcpListener listener;
     private static Thread listenerThread;
+    private static volatile bool pendingCommand;
+    private static string pendingCommandName;
+    private static CommData pendingCommandData; // 修正: string から CommData に変更
+    private static string commandResult;
 
-    [MenuItem("Tools/Start Communication Server")]
+    [MenuItem("Tools/通信サーバー開始")]
     public static void StartServer()
     {
         if (listener != null) return;
@@ -62,15 +66,17 @@ public class EditorCommunication : EditorWindow
         listenerThread = new Thread(new ThreadStart(ListenForClients));
         listenerThread.IsBackground = true;
         listenerThread.Start();
-        Debug.Log("Communication server started.");
+        EditorApplication.update += ProcessPendingCommand;
+        Debug.Log("通信サーバーを開始しました。");
     }
 
-    [MenuItem("Tools/Stop Communication Server")]
+    [MenuItem("Tools/通信サーバー停止")]
     public static void StopServer()
     {
         listener?.Stop();
         listener = null;
-        Debug.Log("Communication server stopped.");
+        EditorApplication.update -= ProcessPendingCommand;
+        Debug.Log("通信サーバーを停止しました。");
     }
 
     private static void ListenForClients()
@@ -89,8 +95,20 @@ public class EditorCommunication : EditorWindow
                     stream.Read(msgBytes, 0, len);
                     string msg = System.Text.Encoding.UTF8.GetString(msgBytes);
                     var json = JsonUtility.FromJson<CommMessage>(msg);
-                    string result = HandleCommand(json.command, json.data);
-                    var response = new CommMessage { result = result };
+
+                    // メインスレッドで処理するためにコマンドを保存
+                    pendingCommandName = json.command;
+                    pendingCommandData = json.data; // 修正: string から CommData に変更
+                    pendingCommand = true;
+
+                    // メインスレッドが処理を終えるまで待機
+                    while (pendingCommand)
+                    {
+                        Thread.Sleep(10);
+                    }
+
+                    // レスポンスを送信
+                    var response = new CommMessage { result = commandResult };
                     byte[] respBytes = System.Text.Encoding.UTF8.GetBytes(JsonUtility.ToJson(response));
                     stream.Write(BitConverter.GetBytes(respBytes.Length), 0, 4);
                     stream.Write(respBytes, 0, respBytes.Length);
@@ -104,7 +122,16 @@ public class EditorCommunication : EditorWindow
         }
     }
 
-    private static string HandleCommand(string command, string data)
+    private static void ProcessPendingCommand()
+    {
+        if (!pendingCommand) return;
+
+        // メインスレッドでコマンドを処理
+        commandResult = HandleCommand(pendingCommandName, pendingCommandData);
+        pendingCommand = false;
+    }
+
+    private static string HandleCommand(string command, CommData data) // 修正: string から CommData に変更
     {
         if (command == "get_project_path")
         {
@@ -112,7 +139,7 @@ public class EditorCommunication : EditorWindow
         }
         else if (command == "get_addressable_path")
         {
-            string filePath = data;
+            string filePath = data.file_path; // 修正: data.file_path を使用
             string assetPath = filePath.Replace(Path.GetFullPath(Application.dataPath + "/.."), "").TrimStart(Path.DirectorySeparatorChar);
             assetPath = assetPath.Replace("\\", "/");
             string guid = AssetDatabase.AssetPathToGUID(assetPath);
@@ -124,7 +151,7 @@ public class EditorCommunication : EditorWindow
             }
             else
             {
-                Debug.LogWarning($"Asset not Addressable: {assetPath}. Returning relative path.");
+                Debug.LogWarning($"アセットがAddressableではありません: {assetPath}。相対パスを返します。");
                 return assetPath;
             }
         }
@@ -135,8 +162,14 @@ public class EditorCommunication : EditorWindow
     private class CommMessage
     {
         public string command;
-        public string data;
+        public CommData data; // 修正: string から CommData に変更
         public string result;
+    }
+
+    [System.Serializable]
+    private class CommData
+    {
+        public string file_path; // JSON の "file_path" に対応
     }
 }
         """
@@ -576,7 +609,7 @@ namespace GameCore.Sound
             f.write('        public SoundDatabase() {\n')
             f.write('            groupedSounds = new List<GroupedSounds>();\n')
             f.write('        }\n')
-            f.write('        public IReadOnlyList<GroupedSounds> GroupedSounds => groupedSounds.AsReadOnly();\n')
+            f.write('        public IReadOnlyList<GroupedSounds> GroupedSoundsList => groupedSounds.AsReadOnly();\n')
             f.write('    }\n')
             f.write('}\n')
         
@@ -717,7 +750,7 @@ def generate_csharp():
         f.write('        public SoundDatabase() {\n')
         f.write('            groupedSounds = new List<GroupedSounds>();\n')
         f.write('        }\n')
-        f.write('        public IReadOnlyList<GroupedSounds> GroupedSounds => groupedSounds.AsReadOnly();\n')
+        f.write('        public IReadOnlyList<GroupedSounds> GroupedSoundsList => groupedSounds.AsReadOnly();\n')
         f.write('    }\n')
         f.write('}\n')
 def generate_bin():
