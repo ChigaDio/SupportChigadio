@@ -531,16 +531,16 @@ namespace GameCore.Sound
 
 
 
-    if not os.path.exists(SOUND_DATA,'SoundEnums.cs'):
-        with open('SoundEnums.cs', 'w', encoding='utf-8') as f:
+    if not os.path.exists(os.path.join(SOUND_DATA,'SoundEnums.cs')):
+        with open(os.path.join(SOUND_DATA,'SoundEnums.cs'), 'w', encoding='utf-8') as f:
             f.write('namespace GameCore.Sound {\n')
             f.write('    public enum SoundGroup { None, UI, Battle, BGM };\n')
             f.write('    public enum SoundType { SE, BGM };\n')
             f.write('}\n')
             
     # SoundDatabase.cs
-    if not os.path.exists(SOUND_DATA,'SoundDatabase.cs'):
-        with open('SoundDatabase.cs', 'w', encoding='utf-8') as f:
+    if not os.path.exists(os.path.join(SOUND_DATA,'SoundDatabase.cs')):
+        with open(os.path.join(SOUND_DATA,'SoundDatabase.cs'), 'w', encoding='utf-8') as f:
             f.write('using System.Collections.Generic;\n\n')
             f.write('namespace GameCore.Sound {\n')
             f.write('    public class SoundDatabase {\n')
