@@ -565,10 +565,10 @@ def generate_enum_cs(name):
         max_value = max([item['value'] for item in valid_data], default=-1) + 1
         cs_content += f"        Max = {max_value}\n"
         cs_content += "    }\n}"
-        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}.cs")
+        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}.cs")
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
-        return jsonify({"message": f"C# enum {name} generated successfully"})
+        return jsonify({"message": f"C# enum {name}ID generated successfully"})
     except Exception as e:
         logger.error(f"Error generating C# enum {name}: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -2312,6 +2312,12 @@ def generate_cs_matrix(name):
         row_id = json_data['rowId']
         col_id = json_data['colId']
         fields = json_data['fields']
+        
+        data_id = get_type_lists()[4]
+        if row_id in data_id:
+            row_id += "Table"
+        if col_id in data_id:
+            col_id += "Table"    
 
         # {name}MatrixRow.cs
         row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\n\n"
@@ -2326,7 +2332,7 @@ def generate_cs_matrix(name):
             f.write(row_cs)
 
         # {name}MatrixID.cs
-        matrix_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\n\n"
+        matrix_cs = f"using System.IO;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing System;\nusing System.Collections.Generic;\n\n"
         matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixID : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
         matrix_cs += "        public override void Read(BinaryReader reader) {\n"
         matrix_cs += f"            {name}MatrixID.Table.Clear();\n"
