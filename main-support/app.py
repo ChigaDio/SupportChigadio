@@ -51,16 +51,45 @@ TYPE_MAP = {
     'vector3': {'pack': None, 'cs_read': None}  # 特殊処理
 }
 
+import os
+import json
+
 def get_enum_values():
-    enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
-    class_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
+    enum_list_path = os.path.join(DATA_DIR, ENUM, 'enum_list.json')
+    class_id_list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+
+    if os.path.exists(enum_list_path):
+        with open(enum_list_path, 'r', encoding='utf-8') as f:
+            enum_list = json.load(f)
+    else:
+        enum_list = []
+
+    if os.path.exists(class_id_list_path):
+        with open(class_id_list_path, 'r', encoding='utf-8') as f:
+            class_id_list = json.load(f)
+    else:
+        class_id_list = []
+
     enum_values = {}
+
     for e in enum_list:
-        enum_data = json.load(open(os.path.join(DATA_DIR, ENUM, e['name'], f"{e['name']}.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM, e['name'], f"{e['name']}.json")) else []
-        enum_values[e['name']] = enum_data
+        enum_file_path = os.path.join(DATA_DIR, ENUM, e['name'], f"{e['name']}.json")
+        if os.path.exists(enum_file_path):
+            with open(enum_file_path, 'r', encoding='utf-8') as f:
+                enum_data = json.load(f)
+        else:
+            enum_data = []
+        enum_values[e['name']] = [r['property'] for r in enum_data]
+
     for c in class_id_list:
-        class_id_data = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, c['name'], f"{c['name']}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, c['name'], f"{c['name']}.json")) else {'rows': []}
+        class_file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, c['name'], f"{c['name']}.json")
+        if os.path.exists(class_file_path):
+            with open(class_file_path, 'r', encoding='utf-8') as f:
+                class_id_data = json.load(f)
+        else:
+            class_id_data = {'rows': []}
         enum_values[c['name']] = [r['enum_property'] for r in class_id_data['rows']]
+
     return enum_values
 
 # 型リスト取得
