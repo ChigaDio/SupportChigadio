@@ -558,14 +558,14 @@ def generate_enum_cs(name):
         logger.debug(f"Generating C# enum for {name}: {data}")
         valid_data = [item for item in data if not isnan(item['value']) and isfinite(item['value'])]
         cs_content = "namespace GameCore.Enums\n{\n"
-        cs_content += f"    public enum {name}\n    {{\n"
+        cs_content += f"    public enum {name}ID\n    {{\n"
         cs_content += "        None = 0, // デフォルト値\n"
         for item in valid_data:
             cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
         max_value = max([item['value'] for item in valid_data], default=-1) + 1
         cs_content += f"        Max = {max_value}\n"
         cs_content += "    }\n}"
-        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}.cs")
+        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}ID.cs")
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
         return jsonify({"message": f"C# enum {name}ID generated successfully"})
@@ -928,7 +928,7 @@ def generate_all_enums():
             
             valid_data = [item for item in data if not isnan(item['value']) and isfinite(item['value'])]
             cs_content = "namespace GameCore.Enums\n{\n"
-            cs_content += f"    public enum {name}\n    {{\n"
+            cs_content += f"    public enum {name}ID\n    {{\n"
             cs_content += "        None = 0, // デフォルト値\n"
             for item in valid_data:
                 cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
@@ -1965,9 +1965,9 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
 
     # 型変換
     if type_str in enum_list:
-        type_str = f"GameCore.Enums.{type_str}"
+        type_str = f"GameCore.Enums.{type_str}ID"
     elif type_str in class_list:
-        type_str = f"GameCore.Classes.{type_str}"
+        type_str = f"GameCore.Classes.{type_str}TableID"
     elif type_str.lower() in TYPE_MAP:
         type_str = type_str.capitalize() if type_str.lower() in ['vector2', 'vector3'] else type_str.lower()
     else:
