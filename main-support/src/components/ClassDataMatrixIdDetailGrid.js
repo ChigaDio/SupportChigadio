@@ -111,11 +111,16 @@ function ClassDataMatrixIdDetailGrid() {
     return rowKeys.map((rowKey, index) => {
       const rowData = { id: index, rowKey };
       colKeys.forEach(colKey => {
-        rowData[colKey] = data.data[rowKey]?.[colKey] ?? {};
+        const cellData = data.data[rowKey]?.[colKey] || {};
+        const initializedCell = {};
+        data.fields.forEach(field => {
+          initializedCell[field.name] = cellData[field.name] ?? getDefaultValue(field.type);
+        });
+        rowData[colKey] = initializedCell;
       });
       return rowData;
     });
-  }, [rowKeys, colKeys, data.data]);
+  }, [rowKeys, colKeys, data.data, data.fields]);
 
   useEffect(() => {
     if (!name || name.includes(':')) {
@@ -131,7 +136,40 @@ function ClassDataMatrixIdDetailGrid() {
         return response.json();
       })
       .then(fetchedData => {
-        setData(fetchedData);
+        console.log('fetchedData:', fetchedData);
+        const transformedData = {
+          ...fetchedData,
+          data: Object.keys(fetchedData.data).reduce((acc, rowKey) => {
+            if (typeof rowKey !== 'string') return acc;
+            acc[rowKey] = Object.keys(fetchedData.data[rowKey] || {}).reduce((colAcc, colKey) => {
+              if (typeof colKey !== 'string') return colAcc;
+              const cellData = fetchedData.data[rowKey][colKey] || {};
+              const transformedCell = {};
+              fetchedData.fields.forEach(field => {
+                transformedCell[field.name] = cellData[field.name] ?? cellData.value ?? getDefaultValue(field.type);
+              });
+              colAcc[colKey] = transformedCell;
+              return colAcc;
+            }, {});
+            return acc;
+          }, {}),
+        };
+        if (Object.keys(transformedData.data).length === 0 && transformedData.rowId && transformedData.colId) {
+          const initialData = {};
+          const defaultRowKeys = enumValues[transformedData.rowId]?.map(item => typeof item === 'string' ? item : item.property || '').filter(v => v) || ['defaultRow1', 'defaultRow2'];
+          const defaultColKeys = enumValues[transformedData.colId]?.map(item => typeof item === 'string' ? item : item.enum_property || '').filter(v => v) || ['defaultCol1', 'defaultCol2'];
+          defaultRowKeys.forEach(rk => {
+            initialData[rk] = {};
+            defaultColKeys.forEach(ck => {
+              initialData[rk][ck] = {};
+              transformedData.fields.forEach(field => {
+                initialData[rk][ck][field.name] = getDefaultValue(field.type);
+              });
+            });
+          });
+          transformedData.data = initialData;
+        }
+        setData(transformedData);
         setLoading(false);
       })
       .catch(error => {
@@ -154,15 +192,23 @@ function ClassDataMatrixIdDetailGrid() {
       const enumPromises = enumList.map(e =>
         fetch(`/api/enum/${encodeURIComponent(e.name)}`)
           .then(res => res.json())
-          .then(d => ({ [e.name]: d }))
+          .catch(() => [])
+          .then(d => ({
+            [e.name]: Array.isArray(d) ? d.map(item => typeof item === 'string' ? item : item.property || '').filter(v => v) : []
+          }))
       );
       const classIdPromises = classIdList.map(c =>
         fetch(`/api/class-data-id/${encodeURIComponent(c.name)}`)
           .then(res => res.json())
-          .then(d => ({ [c.name]: d.rows.map(r => r.enum_property) }))
+          .catch(() => ({ rows: [] }))
+          .then(d => ({
+            [c.name]: Array.isArray(d.rows) ? d.rows.map(r => r.enum_property || '').filter(v => v) : []
+          }))
       );
       Promise.all([...enumPromises, ...classIdPromises]).then(results => {
-        setEnumValues(Object.assign({}, ...results));
+        const newEnumValues = Object.assign({}, ...results);
+        console.log('enumValues:', newEnumValues);
+        setEnumValues(newEnumValues);
       });
     }).catch(error => {
       alert('型オプション取得エラー: ' + error.message);
@@ -171,10 +217,14 @@ function ClassDataMatrixIdDetailGrid() {
 
   useEffect(() => {
     if (data.rowId && data.colId && enumValues[data.rowId] && enumValues[data.colId]) {
-      const rowValues = enumValues[data.rowId] || [];
-      const colValues = enumValues[data.colId] || [];
-      setRowKeys(rowValues);
-      setColKeys(colValues);
+      const rowValues = Array.isArray(enumValues[data.rowId])
+        ? enumValues[data.rowId].map(item => typeof item === 'string' ? item : item.property || '').filter(v => v)
+        : [];
+      const colValues = Array.isArray(enumValues[data.colId])
+        ? enumValues[data.colId].map(item => typeof item === 'string' ? item : item.enum_property || '').filter(v => v)
+        : [];
+      setRowKeys(rowValues.length ? rowValues : ['defaultRow1', 'defaultRow2']);
+      setColKeys(colValues.length ? colValues : ['defaultCol1', 'defaultCol2']);
 
       const newData = { ...data.data };
       rowValues.forEach(rk => {
@@ -204,8 +254,7 @@ function ClassDataMatrixIdDetailGrid() {
       case 'string': return '';
       case 'vector2': return [0, 0];
       case 'vector3': return [0, 0, 0];
-      default:
-        return enumValues[type]?.[0] ? `${type}ID.${enumValues[type][0]}` : '';
+      default: return enumValues[type]?.[0] ? `${type}ID.${enumValues[type][0]}` : '';
     }
   };
 
@@ -378,7 +427,7 @@ function ClassDataMatrixIdDetailGrid() {
   };
 
   const Vector2Editor = ({ field, value, onChange }) => {
-    const [x, y] = Array.isArray(value) ? value : [0, 0];
+    const [x, y] = Array.isArray(value) && value.length === 2 ? value : [0, 0];
     return (
       <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
         <TextField
@@ -404,7 +453,7 @@ function ClassDataMatrixIdDetailGrid() {
   };
 
   const Vector3Editor = ({ field, value, onChange }) => {
-    const [x, y, z] = Array.isArray(value) ? value : [0, 0, 0];
+    const [x, y, z] = Array.isArray(value) && value.length === 3 ? value : [0, 0, 0];
     return (
       <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
         <TextField
@@ -441,25 +490,31 @@ function ClassDataMatrixIdDetailGrid() {
   const columns = useMemo(() => {
     return [
       { field: 'rowKey', headerName: 'Row Key', width: 150 },
-      ...colKeys.map(ck => {
-        return {
-          field: ck,
-          headerName: ck,
-          width: 200,
-          editable: !!data.fields.length,
-          renderCell: (params) => {
-            const value = params.value || {};
-            const display = data.fields.map(f => `${f.name}: ${Array.isArray(value[f.name]) ? JSON.stringify(value[f.name]) : value[f.name]}`).join(', ');
-            return (
-              <Tooltip title={display || '空'}>
-                <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {display || '空'}
-                </Box>
-              </Tooltip>
-            );
-          },
-        };
-      })
+      ...colKeys.map(ck => ({
+        field: ck,
+        headerName: ck,
+        width: 200,
+        editable: !!data.fields.length,
+        renderCell: (params) => {
+          const value = params.value || {};
+          const display = data.fields
+            .map(f => {
+              const fieldValue = value[f.name] ?? getDefaultValue(f.type);
+              if (fieldValue === undefined || fieldValue === null) {
+                return `${f.name}: -`;
+              }
+              return `${f.name}: ${typeof fieldValue === 'object' ? JSON.stringify(fieldValue) : fieldValue}`;
+            })
+            .join(', ') || '空';
+          return (
+            <Tooltip title={display}>
+              <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {display}
+              </Box>
+            </Tooltip>
+          );
+        },
+      }))
     ];
   }, [colKeys, data.fields]);
 
@@ -605,7 +660,7 @@ function ClassDataMatrixIdDetailGrid() {
                     <Vector3Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
                   ) : isEnum ? (
                     <Autocomplete
-                      options={enumValues[fieldType].map(v => `${fieldType}ID.${v}`)}
+                      options={enumValues[fieldType]?.map(v => `${fieldType}ID.${v}`) || []}
                       value={value}
                       onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue || getDefaultValue(fieldType) })}
                       renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
