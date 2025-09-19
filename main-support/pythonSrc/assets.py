@@ -634,13 +634,13 @@ namespace GameCore.Sound
             f.write('                this.sounds = sounds ?? new List<SoundData>();\n')
             f.write('            }\n')
             f.write('            public SoundGroup Group => group;\n')
-            f.write('            public IReadOnlyList<SoundData> Sounds => sounds.AsReadOnly();\n')
+            f.write('            public List<SoundData> Sounds => sounds;\n')
             f.write('        }\n')
             f.write('        private readonly List<GroupedSounds> groupedSounds;\n')
             f.write('        public SoundDatabase() {\n')
             f.write('            groupedSounds = new List<GroupedSounds>();\n')
             f.write('        }\n')
-            f.write('        public IReadOnlyList<GroupedSounds> GroupedSoundsList => groupedSounds.AsReadOnly();\n')
+            f.write('        public List<GroupedSounds> GroupedSoundsList => groupedSounds;\n')
             f.write('    }\n')
             f.write('}\n')
         
@@ -729,13 +729,13 @@ def delete_sound(group_name, index):
     save_sound_data()
 
 def generate_csharp():
-    with open('SoundEnums.cs', 'w') as f:
+    with open(os.path.join(SOUND_DATA,'SoundEnums.cs'), 'w') as f:
         f.write('namespace GameCore.Sound {\n')
         # SoundGroup enum
         f.write('public enum SoundGroup { None')
         for group in sound_data['groups']:
             f.write(f', {group}')
-        f.write(' Max\n  };\n')
+        f.write(' ,Max\n  };\n')
         # SoundType enum
         f.write('public enum SoundType { SE, BGM };\n')
         # Per-group enums
@@ -743,10 +743,10 @@ def generate_csharp():
         for group, sounds in sound_data['groups'].items():
             for sound in sounds:
                 f.write(f', {group}_{sound["name"]}')  # Prefix with group name
-        f.write(' Max\n  };\n')
+        f.write(' ,Max\n  };\n')
         f.write('}\n')
 
-    with open('SoundDatabase.cs', 'w') as f:
+    with open(os.path.join(SOUND_DATA,'SoundDatabase.cs'), 'w') as f:
         f.write('using System.Collections.Generic;\n\n')
         f.write('namespace GameCore.Sound {\n')
         f.write('    public class SoundDatabase {\n')
@@ -776,17 +776,17 @@ def generate_csharp():
         f.write('                this.sounds = sounds ?? new List<SoundData>();\n')
         f.write('            }\n')
         f.write('            public SoundGroup Group => group;\n')
-        f.write('            public IReadOnlyList<SoundData> Sounds => sounds.AsReadOnly();\n')
+        f.write('            public List<SoundData> Sounds => sounds;\n')
         f.write('        }\n')
         f.write('        private readonly List<GroupedSounds> groupedSounds;\n')
         f.write('        public SoundDatabase() {\n')
         f.write('            groupedSounds = new List<GroupedSounds>();\n')
         f.write('        }\n')
-        f.write('        public IReadOnlyList<GroupedSounds> GroupedSoundsList => groupedSounds.AsReadOnly();\n')
+        f.write('        public List<GroupedSounds> GroupedSoundsList => groupedSounds;\n')
         f.write('    }\n')
         f.write('}\n')
 def generate_bin():
-    with open('sound_data.bin', 'wb') as f:
+    with open(os.path.join(SOUND_DATA,'sound_data.bin'), 'wb') as f:
         groups = list(sound_data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
