@@ -497,7 +497,11 @@ namespace GameCore.Sound
 
         public async UniTask FadeOutAsync(float fadeTime)
         {
-            if (!bgmSource.isPlaying) return;
+            if (!bgmSource.isPlaying)
+            {
+                action?.Invoke();
+                return;
+            }
 
             float startVolume = bgmSource.volume;
             float timer = 0f;

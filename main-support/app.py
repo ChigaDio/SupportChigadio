@@ -1735,6 +1735,8 @@ def generate_state_branch(file_path, name, json_data):
 
             # {name}{label}{node_id:02d}DetailStateBranch.cs
             impl_id_path = os.path.join(branch_dir, f'{name}{label}{node_id:02d}DetailStateBranch.cs')
+            if os.path.exists(impl_id_path):
+                continue  # 既に生成されている場合はスキップ
             with open(impl_id_path, 'w', encoding='utf-8') as f:
                 f.write('using System;\n')
                 f.write('using UnityEngine;\n')
@@ -2132,7 +2134,8 @@ def generate_control_classes(file_path, name, json_data):
                 f.write(f'                    if(id == {name}StateID.None) id = state_manager_data.SaveStateID;\n')
                 f.write(f'                    if(id == {name}StateID.None)\n')
                 f.write('                    {\n')
-                f.write('                        is_finish = false;\n')
+                f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                f.write('                        is_finish = true;\n')
                 f.write('                        return;\n')
                 f.write('                    }\n')
                 f.write(f'                    else\n')
@@ -2143,7 +2146,9 @@ def generate_control_classes(file_path, name, json_data):
                 f.write('                    state = FactoryState(id);\n')
                 f.write('                    if (state == null)\n')
                 f.write('                    {\n')
-                f.write('                        is_finish = false;\n')
+                f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
+                f.write('                        is_finish = true;\n')
                 f.write('                        return;\n')
                 f.write('                    }\n')
                 f.write('                    state.Enter(state_manager_data);\n')
@@ -2168,10 +2173,12 @@ def generate_control_classes(file_path, name, json_data):
                         child_label = child["label"]
                         child_id = f"{name}StateID.{child_label}"
                         f.write(f'                    state_manager_data.PushStateID({child_id});\n')
-                    f.write(f'                   var next_id = state_manager_data.PopStateID();\n')
+                    f.write(f'                    var next_id = state_manager_data.PopStateID();\n')
                     f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
+                    f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                    f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
                     f.write('                        is_finish = true;\n')
                     f.write('                        return;\n')
                     f.write('                    }\n')
@@ -2201,6 +2208,8 @@ def generate_control_classes(file_path, name, json_data):
                     f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
+                    f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                    f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
                     f.write('                        is_finish = true;\n')
                     f.write('                        return;\n')
                     f.write('                    }\n')
@@ -2218,13 +2227,18 @@ def generate_control_classes(file_path, name, json_data):
                     f.write(f'                    next_id = state_manager_data.PopStateID();\n')
                 else:
                     f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
+                f.write(f'                    if (next_id == {name}StateID.None)\n')
                 f.write('                    {\n')
+                f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
                 f.write('                        is_finish = true;\n')
                 f.write('                        return;\n')
                 f.write('                    }\n')
                 f.write('                    state = FactoryState(next_id);\n')
                 f.write('                    if (state == null)\n')
                 f.write('                    {\n')
+                f.write(f'                        state_manager_data.ChangeStateNowID({name}StateID.None);\n')
+                f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
                 f.write('                        is_finish = true;\n')
                 f.write('                        return;\n')
                 f.write('                    }\n')
