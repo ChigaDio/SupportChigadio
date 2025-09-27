@@ -261,12 +261,21 @@ namespace GameCore.States.Control
         {
             if (stack_id_list.Count > 0)
             {
-                var state_id = stack_id_list[stack_id_list.Count - 1];
-                stack_id_list.RemoveAt(stack_id_list.Count - 1);
+                var state_id = stack_id_list[0];
                 return state_id;
             }
             return default;
         }
+        
+        public void PopUpStateID()
+        {
+            if (stack_id_list.Count > 0)
+            {
+                stack_id_list.RemoveAt(0);
+
+            }
+        }
+
 
         public void ChangeStateNowID(T new_state_id)
         {
@@ -2102,7 +2111,7 @@ def generate_control_classes(file_path, name, json_data):
         f.write('        {\n')
         f.write('            if (state.IsActive) return;\n\n')
         f.write('            var id = state_manager_data.PopStateID();\n')
-        f.write('            if(id == {name}StateID.None) id = state_manager_data.GetNowStateID();\n')
+        f.write(f'            if(id == {name}StateID.None) id = state_manager_data.GetNowStateID();\n')
         f.write('            switch (id)\n')
         f.write('            {\n')
         
@@ -2118,12 +2127,18 @@ def generate_control_classes(file_path, name, json_data):
                 f.write(f'                case {state_id}:\n')
                 f.write('                {\n')
                 f.write('                    state.Exit(state_manager_data);\n')
+                f.write('                    state_manager_data.PopUpStateID();\n')
                 f.write('                    id = state_manager_data.PopStateID();\n')
-                f.write('                    if(id == {name}StateID.None) id = state_manager_data.SaveStateID;\n')
-                f.write('                    if(id == {name}StateID.None)\n')
+                f.write(f'                    if(id == {name}StateID.None) id = state_manager_data.SaveStateID;\n')
+                f.write(f'                    if(id == {name}StateID.None)\n')
                 f.write('                    {\n')
                 f.write('                        is_finish = false;\n')
                 f.write('                        return;\n')
+                f.write('                    }\n')
+                f.write(f'                    else\n')
+                f.write('                    {\n')
+                f.write('                        state_manager_data.ChangeStateNowID(id);\n')
+                f.write(f'                        state_manager_data.SaveStateID = {name}StateID.None;\n')
                 f.write('                    }\n')
                 f.write('                    state = FactoryState(id);\n')
                 f.write('                    if (state == null)\n')
@@ -2153,7 +2168,7 @@ def generate_control_classes(file_path, name, json_data):
                         child_label = child["label"]
                         child_id = f"{name}StateID.{child_label}"
                         f.write(f'                    state_manager_data.PushStateID({child_id});\n')
-                    f.write(f'                    next_id = state_manager_data.PopStateID();\n')
+                    f.write(f'                   var next_id = state_manager_data.PopStateID();\n')
                     f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
