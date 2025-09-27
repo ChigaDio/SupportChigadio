@@ -172,20 +172,23 @@ files_content = {
 
 
     # BaseStateControl
-    os.path.join(STATE_BRANCH, "BaseStateControl.cs"): """namespace GameCore.States.Control
+    os.path.join(STATE_BRANCH, "BaseStateControl.cs"): """
+using System;
+using System.Collections.Generic;
+namespace GameCore.States.Control
 {
     public abstract class BaseStateControl<T, E, F>
         where T : Enum
-        where E : GameCore.States.Managers.BaseStateManagerData<T>
+        where E : GameCore.States.Managers.BaseStateManagerData<T>,new()
         where F : GameCore.States.BaseState<T,E>
     {
 
-        protected E state_manager_data;
+        protected E state_manager_data = new E();
         public E StateManagerData{get { return state_manager_data; }}
 
         protected F state;
 
-        protected bool is_finish = true;
+        protected bool is_finish = false;
         public bool IsFinish { get { return is_finish; } }
 
         public void StartState(Action<E> action)
@@ -232,6 +235,7 @@ files_content = {
 
     }
 }
+
 """,
 
     # BaseStateManagerData
@@ -243,6 +247,8 @@ files_content = {
         protected T now_state_id = default;
 
         protected T old_state_id = default;
+        
+        public T SaveStateID { get; set; }
 
         protected List<T> stack_id_list = new List<T>();
 
@@ -2096,7 +2102,7 @@ def generate_control_classes(file_path, name, json_data):
         f.write('        {\n')
         f.write('            if (state.IsActive) return;\n\n')
         f.write('            var id = state_manager_data.PopStateID();\n')
-        f.write('            if(id == default) id = state_manager_data.GetNowStateID();\n')
+        f.write('            if(id == {name}StateID.None) id = state_manager_data.GetNowStateID();\n')
         f.write('            switch (id)\n')
         f.write('            {\n')
         
@@ -2113,11 +2119,16 @@ def generate_control_classes(file_path, name, json_data):
                 f.write('                {\n')
                 f.write('                    state.Exit(state_manager_data);\n')
                 f.write('                    id = state_manager_data.PopStateID();\n')
-                f.write('                    if(id == default) id = state_manager_data.GetNowStateID();\n')
+                f.write('                    if(id == {name}StateID.None) id = state_manager_data.SaveStateID;\n')
+                f.write('                    if(id == {name}StateID.None)\n')
+                f.write('                    {\n')
+                f.write('                        is_finish = false;\n')
+                f.write('                        return;\n')
+                f.write('                    }\n')
                 f.write('                    state = FactoryState(id);\n')
                 f.write('                    if (state == null)\n')
                 f.write('                    {\n')
-                f.write('                        is_finish = true;\n')
+                f.write('                        is_finish = false;\n')
                 f.write('                        return;\n')
                 f.write('                    }\n')
                 f.write('                    state.Enter(state_manager_data);\n')
@@ -2136,8 +2147,24 @@ def generate_control_classes(file_path, name, json_data):
 
             # ターゲットがない → 終了
             if not targets:
-                f.write('                    is_finish = true;\n')
-                f.write('                    return;\n')
+                if len(node["data"].get("subNodes", [])) > 0:
+                    f.write(f'                    state_manager_data.SaveStateID = {name}StateID.None;\n')
+                    for child in node["data"].get("subNodes", []):
+                        child_label = child["label"]
+                        child_id = f"{name}StateID.{child_label}"
+                        f.write(f'                    state_manager_data.PushStateID({child_id});\n')
+                    f.write(f'                    next_id = state_manager_data.PopStateID();\n')
+                    f.write('                    state = FactoryState(next_id);\n')
+                    f.write('                    if (state == null)\n')
+                    f.write('                    {\n')
+                    f.write('                        is_finish = true;\n')
+                    f.write('                        return;\n')
+                    f.write('                    }\n')
+                    f.write('                    state.Enter(state_manager_data);\n')
+                    f.write('                    return;\n')
+                else:
+                    f.write('                    is_finish = true;\n')
+                    f.write('                    return;\n')
             # ターゲットが1つだけ → 直接遷移
             elif len(targets) == 1:
                 next_node = targets[0]
@@ -2146,13 +2173,16 @@ def generate_control_classes(file_path, name, json_data):
                     (n["data"]["label"] for n in nodes if n["id"] == next_node), None)
                 if target_label:
                     f.write(f'                    var next_id = {name}StateID.{target_label}{int(next_node):02d};\n')
-                    f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
+                    
                     if len(node["data"].get("subNodes", [])) > 0:
+                        f.write(f'                    state_manager_data.SaveStateID = next_id;\n')
                         for child in node["data"].get("subNodes", []):
                             child_label = child["label"]
                             child_id = f"{name}StateID.{child_label}"
                             f.write(f'                    state_manager_data.PushStateID({child_id});\n')
                         f.write(f'                    next_id = state_manager_data.PopStateID();\n')
+                    else:
+                        f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
                     f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
@@ -2164,14 +2194,15 @@ def generate_control_classes(file_path, name, json_data):
             # 複数ターゲット → BranchNextStateを呼び出し
             else:                
                 f.write(f'                   var next_id = state.BranchNextState(state_manager_data);\n')
-                f.write('                    state_manager_data.ChangeStateNowID(next_id);\n')
                 if len(node["data"].get("subNodes", [])) > 0:
+                    f.write(f'                    state_manager_data.SaveStateID = next_id;\n')
                     for child in node["data"].get("subNodes", []):
                         child_label = child["label"]
                         child_id = f"{name}StateID.{child_label}"
                         f.write(f'                    state_manager_data.PushStateID({child_id});\n')
                     f.write(f'                    next_id = state_manager_data.PopStateID();\n')
-                f.write(f'                    if (next_id == {name}StateID.None)\n')
+                else:
+                    f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
                 f.write('                    {\n')
                 f.write('                        is_finish = true;\n')
                 f.write('                        return;\n')

@@ -321,27 +321,30 @@ namespace GameCore.Sound
     if not os.path.exists(os.path.join(SOUND_DATA,"SoundCore.cs")):
         
         code_str = """
-        using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
-using UnityEngine.ResourceManagement.AsyncOperations;
 using Cysharp.Threading.Tasks;
+using AddressableSystem;
 
 namespace GameCore.Sound
 {
-    public class SoundCore : BaseGameSingleton<SoundCore>
+    public class SoundCore : BaseSingleton<SoundCore>
     {
         private SoundDatabase database;
-        private Dictionary<SoundGroup, Dictionary<SoundID, AudioClip>> loadedClips = new Dictionary<SoundGroup, Dictionary<SoundID, AudioClip>>();
+        private Dictionary<SoundGroup, Dictionary<SoundID, AddressableData<AudioClip>>> loadedClips =
+            new Dictionary<SoundGroup, Dictionary<SoundID, AddressableData<AudioClip>>>();
         private AudioSource bgmSource;
         private AudioSource crossFadeTempSource;
         private List<AudioSource> sePool = new List<AudioSource>();
         private const int PoolSize = 30;
+        private bool isLoadDatabase = false;
+        public bool IsLoadDatabase => isLoadDatabase;
 
-        public void Awake()
+        public override void AwakeSingleton()
         {
+            base.AwakeSingleton();
             instance = this;
             DontDestroyOnLoad(gameObject);
 
@@ -360,66 +363,69 @@ namespace GameCore.Sound
 
         private async UniTask LoadDatabaseAsync()
         {
-            database = SoundBinaryReader.LoadSoundDatabaseFromBinary(Application.dataPath + "/../sound_data.bin");
+            database = SoundBinaryReader.LoadSoundDatabaseFromBinary(SupportFiles.ALL_SOUND_BIN);
             if (database == null)
             {
                 Debug.LogError("Failed to load SoundDatabase from binary.");
             }
             await UniTask.CompletedTask;
+            isLoadDatabase = true;
         }
 
-        public void LoadGroup(SoundGroup group, Action action = null)
+        public void LoadGroup(SoundGroup group, GroupCategory groupCategory, Action action = null)
         {
-            LoadGroupAsync(group, action).Forget();
+            LoadGroupAsync(group, groupCategory, action).Forget();
         }
 
-        public async UniTask LoadGroupAsync(SoundGroup group, Action action = null)
+        public async UniTask LoadGroupAsync(SoundGroup group, GroupCategory groupCategory, Action action = null)
         {
             while (database == null)
             {
                 await UniTask.Yield();
             }
             if (loadedClips.ContainsKey(group)) return;
-            var sounds = database.GroupedSounds.Find(data => data.Group == group);
+            var sounds = database.GroupedSoundsList.FirstOrDefault(data => data.Group == group);
             if (sounds == null) return;
 
-            loadedClips[group] = new Dictionary<SoundID, AudioClip>();
+            loadedClips[group] = new Dictionary<SoundID, AddressableData<AudioClip>>();
+            var tasks = new List<UniTask>();
+
             foreach (var sound in sounds.Sounds)
             {
-                var handle = Addressables.LoadAssetAsync<AudioClip>(sound.AddressablePath);
-                await handle;
-                if (handle.Status == AsyncOperationStatus.Succeeded)
+                var addressable = new AddressableData<AudioClip>(groupCategory, AssetCategory.Audio);
+                AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Audio, addressable);
+                tasks.Add(addressable.LoadAsync(sound.AddressablePath, clip =>
                 {
-                    // Combine group and sound name to form SoundID
-                    string soundIdName = $"{group}_{sound.IdName}";
-                    if (Enum.TryParse<SoundID>(soundIdName, out SoundID id))
+                    if (addressable.IsLoadedAndSetup)
                     {
-                        loadedClips[group][id] = handle.Result;
+                        loadedClips[group][sound.SoundID] = addressable;
                     }
-                    else
-                    {
-                        Debug.LogWarning($"Invalid SoundID: {soundIdName}");
-                    }
-                }
+                }, ex =>
+                {
+                    Debug.LogError($"Failed to load audio clip for {sound.SoundID} at {sound.AddressablePath}: {ex.Message}");
+                }));
             }
 
+            await UniTask.WhenAll(tasks);
             action?.Invoke();
         }
 
-        public void UnloadGroup(SoundGroup group)
+        public void UnloadGroup(SoundGroup group, GroupCategory groupCategory, Action action = null)
         {
-            UnloadGroupAsync(group).Forget();
+            UnloadGroupAsync(group, groupCategory,action).Forget();
         }
 
-        public async UniTask UnloadGroupAsync(SoundGroup group)
+        public async UniTask UnloadGroupAsync(SoundGroup group, GroupCategory groupCategory, Action action = null)
         {
             if (!loadedClips.TryGetValue(group, out var clips)) return;
 
-            foreach (var clip in clips.Values)
+            foreach (var addressable in clips.Values)
             {
-                Addressables.Release(clip);
+                addressable.Release();
             }
             loadedClips.Remove(group);
+            AddressableDataCore.Instance.ReleaseCategory(groupCategory,AssetCategory.Audio);
+            action?.Invoke();
             await UniTask.CompletedTask;
         }
 
@@ -435,12 +441,12 @@ namespace GameCore.Sound
 
         private async UniTask PlaySEInternal(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance, bool async)
         {
-            if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.SE) return;
+            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.SE) return;
 
             var source = GetPooledSource();
             if (source == null) return;
 
-            source.clip = clip;
+            source.clip = addressable.GetAddressableObjectResult();
             source.volume = data.BaseVolume * volume;
             source.loop = false;
             source.spatialBlend = is3D ? 1f : 0f;
@@ -463,14 +469,14 @@ namespace GameCore.Sound
 
         public async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 0f)
         {
-            if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
+            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
 
             if (bgmSource.isPlaying && fadeTime > 0)
             {
                 await FadeOutAsync(fadeTime);
             }
 
-            bgmSource.clip = clip;
+            bgmSource.clip = addressable.GetAddressableObjectResult();
             bgmSource.volume = 0f;
             bgmSource.Play();
 
@@ -523,11 +529,11 @@ namespace GameCore.Sound
 
         public async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
         {
-            if (!TryGetClipAndData(group, id, out AudioClip clip, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
+            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
 
             crossFadeTempSource = gameObject.AddComponent<AudioSource>();
             crossFadeTempSource.loop = true;
-            crossFadeTempSource.clip = clip;
+            crossFadeTempSource.clip = addressable.GetAddressableObjectResult();
             crossFadeTempSource.volume = 0f;
             crossFadeTempSource.Play();
 
@@ -550,14 +556,13 @@ namespace GameCore.Sound
             crossFadeTempSource = null;
         }
 
-        private bool TryGetClipAndData(SoundGroup group, SoundID id, out AudioClip clip, out SoundDatabase.SoundData data)
+        private bool TryGetClipAndData(SoundGroup group, SoundID id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data)
         {
-            clip = null;
+            addressable = null;
             data = null;
-            if (!loadedClips.TryGetValue(group, out var groupClips) || !groupClips.TryGetValue(id, out clip)) return false;
-            string soundName = id.ToString().Replace($"{group}_", ""); // Remove group prefix
-            data = database.GroupedSounds.Find(g => g.Group == group)?.Sounds.FirstOrDefault(s => s.IdName == soundName);
-            return data != null;
+            if (!loadedClips.TryGetValue(group, out var groupClips) || !groupClips.TryGetValue(id, out addressable)) return false;
+            data = database.GroupedSoundsList.FirstOrDefault(g => g.Group == group)?.Sounds.FirstOrDefault(s => s.SoundID == id);
+            return data != null && addressable.IsLoadedAndSetup;
         }
 
         private AudioSource GetPooledSource()
@@ -581,9 +586,9 @@ namespace GameCore.Sound
 
         private void OnDestroy()
         {
-            foreach (var group in loadedClips.Keys.ToArray())
+            foreach (var group in loadedClips)
             {
-                UnloadGroup(group);
+                
             }
         }
     }
@@ -604,46 +609,53 @@ namespace GameCore.Sound
             
     # SoundDatabase.cs
     if not os.path.exists(os.path.join(SOUND_DATA,'SoundDatabase.cs')):
+        code_str =     code_str = '''
+using System.Collections.Generic;
+
+namespace GameCore.Sound {
+    public class SoundDatabase {
+        [System.Serializable]
+        public class SoundData {
+            private readonly string idName;
+            private readonly string addressablePath;
+            private readonly float baseVolume;
+            private readonly SoundType type;
+            private readonly SoundID soundID;
+            public SoundData(SoundID soundID,string idName, string addressablePath, float baseVolume, SoundType type) {
+                this.idName = idName;
+                this.addressablePath = addressablePath;
+                this.baseVolume = baseVolume;
+                this.type = type;
+                this.soundID = soundID;
+            }
+            public string IdName => idName;
+            public string AddressablePath => addressablePath;
+            public float BaseVolume => baseVolume;
+            public SoundID SoundID => soundID;
+            public SoundType Type => type;
+        }
+        [System.Serializable]
+        public class GroupedSounds {
+            private readonly SoundGroup group;
+            private readonly List<SoundData> sounds;
+            public GroupedSounds(SoundGroup group, List<SoundData> sounds) {
+                this.group = group;
+                this.sounds = sounds ?? new List<SoundData>();
+            }
+            public SoundGroup Group => group;
+            public List<SoundData> Sounds => sounds;
+        }
+        private readonly List<GroupedSounds> groupedSounds;
+        public SoundDatabase() {
+            groupedSounds = new List<GroupedSounds>();
+        }
+        public List<GroupedSounds> GroupedSoundsList => groupedSounds;
+    }
+}
+    '''
         with open(os.path.join(SOUND_DATA,'SoundDatabase.cs'), 'w', encoding='utf-8') as f:
-            f.write('using System.Collections.Generic;\n\n')
-            f.write('namespace GameCore.Sound {\n')
-            f.write('    public class SoundDatabase {\n')
-            f.write('        [System.Serializable]\n')
-            f.write('        public class SoundData {\n')
-            f.write('            private readonly string idName;\n')
-            f.write('            private readonly string addressablePath;\n')
-            f.write('            private readonly float baseVolume;\n')
-            f.write('            private readonly SoundType type;\n')
-            f.write('            public SoundData(string idName, string addressablePath, float baseVolume, SoundType type) {\n')
-            f.write('                this.idName = idName;\n')
-            f.write('                this.addressablePath = addressablePath;\n')
-            f.write('                this.baseVolume = baseVolume;\n')
-            f.write('                this.type = type;\n')
-            f.write('            }\n')
-            f.write('            public string IdName => idName;\n')
-            f.write('            public string AddressablePath => addressablePath;\n')
-            f.write('            public float BaseVolume => baseVolume;\n')
-            f.write('            public SoundType Type => type;\n')
-            f.write('        }\n')
-            f.write('        [System.Serializable]\n')
-            f.write('        public class GroupedSounds {\n')
-            f.write('            private readonly SoundGroup group;\n')
-            f.write('            private readonly List<SoundData> sounds;\n')
-            f.write('            public GroupedSounds(SoundGroup group, List<SoundData> sounds) {\n')
-            f.write('                this.group = group;\n')
-            f.write('                this.sounds = sounds ?? new List<SoundData>();\n')
-            f.write('            }\n')
-            f.write('            public SoundGroup Group => group;\n')
-            f.write('            public List<SoundData> Sounds => sounds;\n')
-            f.write('        }\n')
-            f.write('        private readonly List<GroupedSounds> groupedSounds;\n')
-            f.write('        public SoundDatabase() {\n')
-            f.write('            groupedSounds = new List<GroupedSounds>();\n')
-            f.write('        }\n')
-            f.write('        public List<GroupedSounds> GroupedSoundsList => groupedSounds;\n')
-            f.write('    }\n')
-            f.write('}\n')
-        
+            f.write(code_str)
+
     
 
 
@@ -745,46 +757,54 @@ def generate_csharp():
                 f.write(f', {group}_{sound["name"]}')  # Prefix with group name
         f.write(' ,Max\n  };\n')
         f.write('}\n')
+        
+    code_str = '''
+using System.Collections.Generic;
+
+namespace GameCore.Sound {
+    public class SoundDatabase {
+        [System.Serializable]
+        public class SoundData {
+            private readonly string idName;
+            private readonly string addressablePath;
+            private readonly float baseVolume;
+            private readonly SoundType type;
+            private readonly SoundID soundID;
+            public SoundData(SoundID soundID,string idName, string addressablePath, float baseVolume, SoundType type) {
+                this.idName = idName;
+                this.addressablePath = addressablePath;
+                this.baseVolume = baseVolume;
+                this.type = type;
+                this.soundID = soundID;
+            }
+            public string IdName => idName;
+            public string AddressablePath => addressablePath;
+            public float BaseVolume => baseVolume;
+            public SoundID SoundID => soundID;
+            public SoundType Type => type;
+        }
+        [System.Serializable]
+        public class GroupedSounds {
+            private readonly SoundGroup group;
+            private readonly List<SoundData> sounds;
+            public GroupedSounds(SoundGroup group, List<SoundData> sounds) {
+                this.group = group;
+                this.sounds = sounds ?? new List<SoundData>();
+            }
+            public SoundGroup Group => group;
+            public List<SoundData> Sounds => sounds;
+        }
+        private readonly List<GroupedSounds> groupedSounds;
+        public SoundDatabase() {
+            groupedSounds = new List<GroupedSounds>();
+        }
+        public List<GroupedSounds> GroupedSoundsList => groupedSounds;
+    }
+}
+    '''
 
     with open(os.path.join(SOUND_DATA,'SoundDatabase.cs'), 'w') as f:
-        f.write('using System.Collections.Generic;\n\n')
-        f.write('namespace GameCore.Sound {\n')
-        f.write('    public class SoundDatabase {\n')
-        f.write('        [System.Serializable]\n')
-        f.write('        public class SoundData {\n')
-        f.write('            private readonly string idName;\n')
-        f.write('            private readonly string addressablePath;\n')
-        f.write('            private readonly float baseVolume;\n')
-        f.write('            private readonly SoundType type;\n')
-        f.write('            public SoundData(string idName, string addressablePath, float baseVolume, SoundType type) {\n')
-        f.write('                this.idName = idName;\n')
-        f.write('                this.addressablePath = addressablePath;\n')
-        f.write('                this.baseVolume = baseVolume;\n')
-        f.write('                this.type = type;\n')
-        f.write('            }\n')
-        f.write('            public string IdName => idName;\n')
-        f.write('            public string AddressablePath => addressablePath;\n')
-        f.write('            public float BaseVolume => baseVolume;\n')
-        f.write('            public SoundType Type => type;\n')
-        f.write('        }\n')
-        f.write('        [System.Serializable]\n')
-        f.write('        public class GroupedSounds {\n')
-        f.write('            private readonly SoundGroup group;\n')
-        f.write('            private readonly List<SoundData> sounds;\n')
-        f.write('            public GroupedSounds(SoundGroup group, List<SoundData> sounds) {\n')
-        f.write('                this.group = group;\n')
-        f.write('                this.sounds = sounds ?? new List<SoundData>();\n')
-        f.write('            }\n')
-        f.write('            public SoundGroup Group => group;\n')
-        f.write('            public List<SoundData> Sounds => sounds;\n')
-        f.write('        }\n')
-        f.write('        private readonly List<GroupedSounds> groupedSounds;\n')
-        f.write('        public SoundDatabase() {\n')
-        f.write('            groupedSounds = new List<GroupedSounds>();\n')
-        f.write('        }\n')
-        f.write('        public List<GroupedSounds> GroupedSoundsList => groupedSounds;\n')
-        f.write('    }\n')
-        f.write('}\n')
+        f.write(code_str)
 def generate_bin():
     with open(os.path.join(SOUND_DATA,'sound_data.bin'), 'wb') as f:
         groups = list(sound_data['groups'].keys())
