@@ -2043,13 +2043,14 @@ def generate_state_classes(file_path, name, json_data):
         
 
     labels = []
+    
+    
     # --- ノードごとにBase派生クラスと通常クラスを作成 ---
     for node in json_data.get('nodes', []):
         label = node.get("data", {}).get("label", "")
         if label in labels:
             continue
         labels.append(label)
-        node_id = int(node.get("id"))
         targets = node.get("data", {}).get("targets", [])
         # Base{name}{label}State.cs
         base_label_state_path = os.path.join(state_dir, f'Base{name}{label}State.cs')
@@ -2091,6 +2092,39 @@ def generate_state_classes(file_path, name, json_data):
                     )
                 f.write('    }\n')
                 f.write('}\n')
+                
+    for node in json_data.get('transitions', []):
+        label = node.get("fromState", "")
+        if label in labels:
+            continue
+        base_label_state_path = os.path.join(state_dir, f'Base{name}{label}State.cs')
+        with open(base_label_state_path, 'w', encoding='utf-8') as f:
+            f.write('using UnityEngine;\n')
+            f.write('using GameCore.States.Branch;\n\n')
+            f.write('namespace GameCore.States\n{\n')
+            f.write(f'    public abstract class Base{name}{label}State : GameCore.States.Base{name}State\n')
+            f.write('    {\n')
+
+
+            f.write('    }\n')
+            f.write('}\n')
+
+        # {name}{label}{id:02d}State.cs
+        state_class_path = os.path.join(state_dir, f'{name}{label}State.cs')
+
+  
+        # 新規生成
+        with open(state_class_path, 'w', encoding='utf-8') as f:
+            f.write('using UnityEngine;\n\n')
+            f.write('using GameCore.States.Branch;\n')
+            f.write('namespace GameCore.States\n{\n')
+            f.write(f'    public class {name}{label}State : Base{name}{label}State\n')
+            f.write('    {\n')
+            f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+            f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+            f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
+            f.write('    }\n')
+            f.write('}\n')
             
 def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
     """既存ファイルに BranchNextState を追記・削除する"""
@@ -2465,8 +2499,8 @@ def generate_control_classes(file_path, name, json_data):
         f.write('            {\n')
         
         code_label = []
-        for node in nodes:
-            label = node["data"]["label"]
+        for node in json_data["transitions"]:
+            label = node["fromState"]
             state_id = f"{name}StateID.{label}"
             class_name = f"{name}{label}State"
             if label not in code_label:
