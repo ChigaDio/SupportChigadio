@@ -2098,6 +2098,8 @@ def generate_state_classes(file_path, name, json_data):
         if label in labels:
             continue
         base_label_state_path = os.path.join(state_dir, f'Base{name}{label}State.cs')
+        if os.path.exists(base_label_state_path):
+            continue
         with open(base_label_state_path, 'w', encoding='utf-8') as f:
             f.write('using UnityEngine;\n')
             f.write('using GameCore.States.Branch;\n\n')
