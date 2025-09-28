@@ -3,10 +3,13 @@ import logging
 import re
 import shutil
 import struct
+import subprocess
 import sys
 from flask import Flask, send_from_directory, jsonify, request
 import os
 import json
+
+import psutil
 import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
 
@@ -3306,6 +3309,47 @@ def generate_files():
     assets.generate_csharp()
     assets.generate_bin()
     return jsonify({'status': 'success'})
+
+@app.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
+def open_code(state_name, node_label):
+    cs_path = os.path.join(DATA_DIR, STATE_DATA, state_name, "States",f"{state_name}{node_label}State.cs")
+    if not os.path.exists(cs_path):
+        return jsonify({"error": "File not found"}), 404
+
+    # Possible Visual Studio 2022 Community paths
+    possible_vs_paths = [
+        r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
+    ]
+
+    vs_path = None
+    for path in possible_vs_paths:
+        if os.path.exists(path):
+            vs_path = path
+            break
+
+    if not vs_path:
+        return jsonify({"error": "Visual Studio 2022 not found on system"}), 404
+
+    # Check if Visual Studio is running
+    vs_running = False
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'].lower() == 'devenv.exe':
+            vs_running = True
+            break
+
+    if not vs_running:
+        return jsonify({"error": "Visual Studio 2022 is not currently running"}), 400
+
+    try:
+        subprocess.Popen([vs_path, "/edit", cs_path], shell=True)
+        return jsonify({"message": "Opened in Visual Studio"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})

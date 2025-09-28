@@ -234,96 +234,8 @@ public class EditorCommunication : EditorWindow
         code_str = """
 using System;
 using System.Collections.Generic;
-using System.IO;
-using UnityEngine;
-
-namespace GameCore.Sound
-{
-    public class SoundBinaryReader
-    {
-        public static SoundDatabase LoadSoundDatabaseFromBinary(string filePath)
-        {
-            if (!File.Exists(filePath))
-            {
-                Debug.LogError($"Binary file not found: {filePath}");
-                return null;
-            }
-
-            SoundDatabase database = new SoundDatabase();
-
-            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
-            {
-                int groupCount = reader.ReadInt32();
-                int[] offsets = new int[groupCount];
-
-                for (int i = 0; i < groupCount; i++)
-                {
-                    offsets[i] = reader.ReadInt32();
-                }
-
-                string[] groupNames = Enum.GetNames(typeof(SoundGroup));
-                if (groupCount > groupNames.Length - 1)
-                {
-                    Debug.LogError("Binary contains more groups than defined in SoundGroup enum.");
-                    return null;
-                }
-
-                for (int i = 0; i < groupCount; i++)
-                {
-                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                    int soundCount = reader.ReadInt32();
-                    List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
-
-                    for (int j = 0; j < soundCount; j++)
-                    {
-                        int id = reader.ReadInt32();
-                        string addressablePath = ReadNullTerminatedString(reader);
-                        float volume = reader.ReadSingle();
-                        byte typeByte = reader.ReadByte();
-                        SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
-
-                        string groupName = groupNames[i + 1];
-                        string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
-                        sounds.Add(new SoundDatabase.SoundData(
-                            idName: enumName, // Store only the sound name
-                            addressablePath: addressablePath,
-                            baseVolume: volume,
-                            type: type
-                        ));
-                    }
-
-                    database.GroupedSounds.Add(new SoundDatabase.GroupedSounds(
-                        group: (SoundGroup)(i + 1),
-                        sounds: sounds
-                    ));
-                }
-            }
-
-            return database;
-        }
-
-        private static string ReadNullTerminatedString(BinaryReader reader)
-        {
-            List<byte> bytes = new List<byte>();
-            byte b;
-            while ((b = reader.ReadByte()) != 0)
-            {
-                bytes.Add(b);
-            }
-            return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
-        }
-    }
-}
-        """
-        with open(os.path.join(SOUND_DATA,"SoundBinaryReader.cs"), 'w', encoding='utf-8') as f:
-            f.write(code_str)
-            
-    if not os.path.exists(os.path.join(SOUND_DATA,"SoundCore.cs")):
-        
-        code_str = """
-using System;
-using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
@@ -342,11 +254,16 @@ namespace GameCore.Sound
         private bool isLoadDatabase = false;
         public bool IsLoadDatabase => isLoadDatabase;
 
+        private CancellationToken destroyToken;
+
         public override void AwakeSingleton()
         {
             base.AwakeSingleton();
             instance = this;
             DontDestroyOnLoad(gameObject);
+
+            // OnDestroy に紐づくキャンセルトークン
+            destroyToken = this.GetCancellationTokenOnDestroy();
 
             bgmSource = gameObject.AddComponent<AudioSource>();
             bgmSource.loop = true;
@@ -368,7 +285,7 @@ namespace GameCore.Sound
             {
                 Debug.LogError("Failed to load SoundDatabase from binary.");
             }
-            await UniTask.CompletedTask;
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
             isLoadDatabase = true;
         }
 
@@ -381,7 +298,7 @@ namespace GameCore.Sound
         {
             while (database == null)
             {
-                await UniTask.Yield();
+                await UniTask.Yield(cancellationToken: destroyToken);
             }
             if (loadedClips.ContainsKey(group)) return;
             var sounds = database.GroupedSoundsList.FirstOrDefault(data => data.Group == group);
@@ -403,7 +320,7 @@ namespace GameCore.Sound
                 }, ex =>
                 {
                     Debug.LogError($"Failed to load audio clip for {sound.SoundID} at {sound.AddressablePath}: {ex.Message}");
-                }));
+                }).AttachExternalCancellation(destroyToken));
             }
 
             await UniTask.WhenAll(tasks);
@@ -412,7 +329,7 @@ namespace GameCore.Sound
 
         public void UnloadGroup(SoundGroup group, GroupCategory groupCategory, Action action = null)
         {
-            UnloadGroupAsync(group, groupCategory,action).Forget();
+            UnloadGroupAsync(group, groupCategory, action).Forget();
         }
 
         public async UniTask UnloadGroupAsync(SoundGroup group, GroupCategory groupCategory, Action action = null)
@@ -424,9 +341,9 @@ namespace GameCore.Sound
                 addressable.Release();
             }
             loadedClips.Remove(group);
-            AddressableDataCore.Instance.ReleaseCategory(groupCategory,AssetCategory.Audio);
+            AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Audio);
             action?.Invoke();
-            await UniTask.CompletedTask;
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
 
         public void PlaySE(SoundGroup group, SoundID id, float volume = 1.0f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
@@ -457,7 +374,7 @@ namespace GameCore.Sound
 
             if (async)
             {
-                await UniTask.WaitUntil(() => !source.isPlaying);
+                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: destroyToken);
                 ResetSource(source);
             }
         }
@@ -495,7 +412,7 @@ namespace GameCore.Sound
             FadeOutAsync(fadeTime).Forget();
         }
 
-        public async UniTask FadeOutAsync(float fadeTime)
+        public async UniTask FadeOutAsync(float fadeTime, Action action = null)
         {
             if (!bgmSource.isPlaying)
             {
@@ -509,21 +426,33 @@ namespace GameCore.Sound
             {
                 timer += Time.deltaTime;
                 bgmSource.volume = Mathf.Lerp(startVolume, 0f, timer / fadeTime);
-                await UniTask.Yield();
+                if (fadeTime >= timer)
+                {
+                    bgmSource.volume = 0.0f;
+                    break;
+                }
+                await UniTask.Yield(cancellationToken: destroyToken);
             }
             bgmSource.Stop();
             ResetSource(bgmSource);
+            action?.Invoke();
         }
 
-        private async UniTask FadeInAsync(float targetVolume, float fadeTime)
+        private async UniTask FadeInAsync(float targetVolume, float fadeTime, Action action = null)
         {
             float timer = 0f;
             while (timer < fadeTime)
             {
                 timer += Time.deltaTime;
                 bgmSource.volume = Mathf.Lerp(0f, targetVolume, timer / fadeTime);
-                await UniTask.Yield();
+                if (fadeTime >= timer)
+                {
+                    bgmSource.volume = targetVolume;
+                    break;
+                }
+                await UniTask.Yield(cancellationToken: destroyToken);
             }
+            action?.Invoke();
         }
 
         public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
@@ -550,7 +479,7 @@ namespace GameCore.Sound
                 float t = timer / fadeTime;
                 bgmSource.volume = Mathf.Lerp(startBGMVolume, 0f, t);
                 crossFadeTempSource.volume = Mathf.Lerp(0f, data.BaseVolume * volume, t);
-                await UniTask.Yield();
+                await UniTask.Yield(cancellationToken: destroyToken);
             }
 
             bgmSource.Stop();
@@ -590,13 +519,20 @@ namespace GameCore.Sound
 
         private void OnDestroy()
         {
-            foreach (var group in loadedClips)
+            // destroyToken 経由ですべての UniTask がキャンセルされるので
+            // ここでは loadedClips の解放などに専念できる
+            foreach (var group in loadedClips.Values)
             {
-                
+                foreach (var clip in group.Values)
+                {
+                    clip.Release();
+                }
             }
+            loadedClips.Clear();
         }
     }
 }
+
 """
         with open(os.path.join(SOUND_DATA,"SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)

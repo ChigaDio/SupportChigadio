@@ -16,7 +16,22 @@ const CustomNode = ({ data, id }) => {
   };
 
   const handleShowCode = () => {
-    console.log(`Opening code for node ${id}`);
+    fetch(`/api/open-code/${data.stateName}/${data.label}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(response => response.json())
+      .then(result => {
+        if (result.error) {
+          alert(`エラー: ${result.error}`);
+        } else {
+          alert(result.message);
+        }
+      })
+      .catch(error => {
+        console.error('コードを開く際のエラー:', error);
+        alert('コードを開く際にエラーが発生しました');
+      });
   };
 
   const handleAddSubNode = () => {
@@ -247,7 +262,8 @@ function StateDetailGrid() {
                 ...node.data, 
                 targets: node.data.targets || [], 
                 subNodes: node.data.subNodes || [],
-                description: validTransitions.find(t => t.fromState === node.data.label)?.description || ''
+                description: validTransitions.find(t => t.fromState === node.data.label)?.description || '',
+                stateName: name
               }
             }))
           : [];
@@ -644,7 +660,7 @@ function StateDetailGrid() {
       id: newNodeId,
       type: 'default',
       position,
-      data: { label, targets: [], subNodes: [], description: transitions.find(t => t.fromState === label)?.description || '' },
+      data: { label, targets: [], subNodes: [], description: transitions.find(t => t.fromState === label)?.description || '', stateName: name },
       draggable: true,
     };
 
@@ -652,7 +668,7 @@ function StateDetailGrid() {
       ...els,
       nodes: [...els.nodes, newNode],
     }));
-  }, [screenToFlowPosition, flowElements.nodes, transitions]);
+  }, [screenToFlowPosition, flowElements.nodes, transitions, name]);
 
   const onDragOver = useCallback((event) => {
     event.preventDefault();
