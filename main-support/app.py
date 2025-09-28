@@ -2363,11 +2363,10 @@ def generate_control_classes(file_path, name, json_data):
         
         
         code_label = []
-        for node in nodes:
-            label = node["data"]["label"]
+        for node in json_data.get('transitions', []):
+            label = node["fromState"]
             node_id = int(node["id"])
             state_id = f"{name}StateID.{label}"
-            targets = node["data"].get("targets", [])
             if label not in code_label:
                 code_label.append(label)
                 f.write(f'                case {state_id}:\n')
