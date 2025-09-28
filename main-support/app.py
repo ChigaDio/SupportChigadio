@@ -2419,7 +2419,6 @@ def generate_control_classes(file_path, name, json_data):
                         child_id = f"{name}StateID.{child_label}"
                         f.write(f'                    state_manager_data.PushStateID({child_id});\n')
                     f.write(f'                    var next_id = state_manager_data.PopStateID();\n')
-                    f.write('                    state_manager_data.PopUpStateID();\n')
                     f.write('                    state = FactoryState(next_id);\n')
                     f.write('                    if (state == null)\n')
                     f.write('                    {\n')
