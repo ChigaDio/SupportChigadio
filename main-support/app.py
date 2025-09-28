@@ -2447,6 +2447,7 @@ def generate_control_classes(file_path, name, json_data):
                             child_label = child["label"]
                             child_id = f"{name}StateID.{child_label}"
                             f.write(f'                    state_manager_data.PushStateID({child_id});\n')
+                        f.write(f'                    state_manager_data.PushStateID(next_id);\n')
                         f.write(f'                    next_id = state_manager_data.PopStateID();\n')
                     else:
                         f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
@@ -2469,6 +2470,7 @@ def generate_control_classes(file_path, name, json_data):
                         child_label = child["label"]
                         child_id = f"{name}StateID.{child_label}"
                         f.write(f'                    state_manager_data.PushStateID({child_id});\n')
+                    f.write(f'                    state_manager_data.PushStateID(next_id);\n')
                     f.write(f'                    next_id = state_manager_data.PopStateID();\n')
                 else:
                     f.write(f'                    state_manager_data.ChangeStateNowID(next_id);\n')
