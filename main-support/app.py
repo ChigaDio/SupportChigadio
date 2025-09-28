@@ -470,6 +470,213 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
     """
     with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixRow.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
+
+#ClassDataIDCore.cs 生成
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataIDCore.cs")):
+    code_str = """
+using Cysharp.Threading.Tasks;
+using GameCore;
+using GameCore.Tables;
+using System.IO;
+using System.Threading;
+using System;
+using UnityEngine;
+
+public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
+{
+    private ClassDataHeader m_classDataTables;
+    private CancellationToken cts;
+    private bool isLoaded;
+
+    public override void AwakeSingleton()
+    {
+        base.AwakeSingleton();
+        instance = this;
+        if (cts == null) cts = this.GetCancellationTokenOnDestroy();
+        isLoaded = false;
+        DontDestroyOnLoad(instance);
+    }
+
+
+    private void OnDestroy()
+    {
+
+    }
+
+    /// <summary>
+    /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
+    /// </summary>
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataHeader, UniTask> onLoaded)
+    {
+        if (cts == null) cts = this.GetCancellationTokenOnDestroy();
+        if (isLoaded) return;
+
+        string fileName = "all_class_data.bin";
+        string path = string.Empty;
+
+
+        string[] found = Directory.GetFiles(SupportFiles.ALL_ID_BIN);
+        if (found.Length > 0)
+        {
+            path = found[0];
+        }
+        else
+        {
+            Debug.LogError($"{fileName} が見つかりませんでした。");
+            return;
+        }
+
+        if (!File.Exists(path))
+        {
+            Debug.LogError($"指定ファイルが存在しません: {path}");
+            return;
+        }
+
+        try
+        {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+            using (BinaryReader reader = new BinaryReader(fs))
+            {
+                if (m_classDataTables == null) m_classDataTables = new ClassDataHeader(reader);
+                if (onLoaded != null)
+                {
+                    // スレッド切り替えを内部で処理
+                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                }
+                isLoaded = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.LogWarning("TableIDCoreの読み込みがキャンセルされました。");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"読み込み中にエラーが発生: {ex}");
+        }
+    }
+
+    private async UniTask ExecuteOnThreadPoolAndReturn(
+    Func<BinaryReader, ClassDataHeader, UniTask> action,
+    BinaryReader reader,
+    ClassDataHeader classDataHeader,
+    CancellationToken token)
+    {
+        await UniTask.SwitchToThreadPool();
+        await action(reader, classDataHeader).AttachExternalCancellation(token);
+        await UniTask.SwitchToMainThread();
+    }
+
+}
+
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataIDCore.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+        
+#ClassDataMatrixIDCore.cs 生成
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "ClassDataMatrixIDCore.cs")):
+    code_str = """
+using Cysharp.Threading.Tasks;
+using GameCore;
+using GameCore.Tables;
+using System.IO;
+using System.Threading;
+using System;
+using UnityEngine;
+
+public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
+{
+    private ClassDataMatrixHeader m_classDataTables;
+    private CancellationToken cts;
+    private bool isLoaded;
+
+    public override void AwakeSingleton()
+    {
+        base.AwakeSingleton();
+        instance = this;
+        if (cts == null) cts = this.GetCancellationTokenOnDestroy();
+        isLoaded = false;
+        DontDestroyOnLoad(instance);
+    }
+
+
+    private void OnDestroy()
+    {
+
+    }
+
+    /// <summary>
+    /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
+    /// </summary>
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded)
+    {
+        if (cts == null) cts = this.GetCancellationTokenOnDestroy();
+        if (isLoaded) return;
+
+        string fileName = "all_class_data_matrix.bin";
+        string path = string.Empty;
+
+
+        string[] found = Directory.GetFiles(SupportFiles.ALL_MATRIX_ID_BIN);
+        if (found.Length > 0)
+        {
+            path = found[0];
+        }
+        else
+        {
+            Debug.LogError($"{fileName} が見つかりませんでした。");
+            return;
+        }
+
+        if (!File.Exists(path))
+        {
+            Debug.LogError($"指定ファイルが存在しません: {path}");
+            return;
+        }
+
+        try
+        {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+            using (BinaryReader reader = new BinaryReader(fs))
+            {
+                if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                if (onLoaded != null)
+                {
+                    // スレッド切り替えを内部で処理
+                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                }
+                isLoaded = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.LogWarning("TableIDCoreの読み込みがキャンセルされました。");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"読み込み中にエラーが発生: {ex}");
+        }
+    }
+
+    private async UniTask ExecuteOnThreadPoolAndReturn(
+    Func<BinaryReader, ClassDataMatrixHeader, UniTask> action,
+    BinaryReader reader,
+    ClassDataMatrixHeader classDataHeader,
+    CancellationToken token)
+    {
+        await UniTask.SwitchToThreadPool();
+        await action(reader, classDataHeader).AttachExternalCancellation(token);
+        await UniTask.SwitchToMainThread();
+    }
+
+}
+
+
+    """
+    
+    with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "ClassDataMatrixIDCore.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+    
 # Enum-ID管理
 @app.route('/api/enum-id', methods=['GET', 'POST', 'PATCH'])
 def manage_enum_id():
@@ -2396,9 +2603,9 @@ def generate_cs_matrix(name):
 
         # {name}MatrixID.cs
         matrix_cs = f"using System.IO;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing System;\nusing System.Collections.Generic;\n\n"
-        matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixID : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
+        matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixTable : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
         matrix_cs += "        public override void Read(BinaryReader reader) {\n"
-        matrix_cs += f"            {name}MatrixID.Table.Clear();\n"
+        matrix_cs += f"            {name}MatrixTable.Table.Clear();\n"
         matrix_cs += f"            int rowCount = reader.ReadInt32();\n"
         matrix_cs += f"            List<{row_id}ID> rowKeys = new List<{row_id}ID>(); for(int i=0; i<rowCount; i++) rowKeys.Add(({row_id}ID)reader.ReadInt32());\n"
         matrix_cs += f"            int colCount = reader.ReadInt32();\n"
@@ -2406,7 +2613,7 @@ def generate_cs_matrix(name):
         matrix_cs += f"            foreach(var rk in rowKeys) {{ Table[rk] = new Dictionary<{col_id}ID, {name}MatrixRow>(); }}\n"
         matrix_cs += f"            foreach(var rk in rowKeys) {{ foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(reader); Table[rk][ck] = row; }} }}\n"
         matrix_cs += "        }\n    }\n}\n"
-        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixID.cs"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixTable.cs"), 'w', encoding='utf-8') as f:
             f.write(matrix_cs)
         return jsonify({"message": f"C# generated for {name}"})
     except Exception as e:
@@ -2563,6 +2770,7 @@ def generate_all_cs_matrix_header():
             matrix_list = json.load(f)
         
         cs_content = """
+
 using System;
 using System.IO;
 using System.Collections.Generic;
@@ -2572,7 +2780,7 @@ namespace GameCore.Tables
 {
     public class ClassDataMatrixHeader
     {
-        public Dictionary<TableID, (string Name, long Offset, int Size)> Entries = new Dictionary<TableID, (string, long, int)>();
+        public Dictionary<MatrixTableID, (string Name, long Offset, int Size)> Entries = new Dictionary<MatrixTableID, (string, long, int)>();
 
         public ClassDataMatrixHeader(BinaryReader reader)
         {
@@ -2580,7 +2788,7 @@ namespace GameCore.Tables
             for(int i = 0; i < count; i++)
             {
                 int id = reader.ReadInt32();
-                TableID tableId = (TableID)Enum.ToObject(typeof(TableID), id);
+                MatrixTableID tableId = (MatrixTableID)Enum.ToObject(typeof(MatrixTableID), id);
                 int nameLen = reader.ReadInt32();
                 string name = new string(reader.ReadChars(nameLen));
                 long offset = reader.ReadInt64();
@@ -2589,7 +2797,7 @@ namespace GameCore.Tables
             }
         }
 
-        public TTable GetData<TTable>(TableID id, BinaryReader reader) where TTable : BaseTableMatrix, new()
+        public TTable GetData<TTable>(MatrixTableID id, BinaryReader reader) where TTable : BaseTableMatrix, new()
         {
             if (!Entries.TryGetValue(id, out var entry)) return null;
             reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
@@ -2599,6 +2807,7 @@ namespace GameCore.Tables
         }
     }
 }
+
 """
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
