@@ -56,6 +56,7 @@ def generate_base():
         existing_names = [e['name'] for e in enum_list]
         # 既存のIDの最大値を取得（エントリがない場合は0）
         print(enum_list_path)
+        print(enum_list)
         max_id = max([e['id'] for e in enum_list], default=0)
         new_entries = [
             {'name': 'Sound', 'path': SOUND_JSON},
