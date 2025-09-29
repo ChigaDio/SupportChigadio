@@ -11,9 +11,12 @@ import uuid
 
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
+    # PyInstallerでビルドされた場合
     BASE_DIR = os.path.dirname(sys.executable)
 else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # デバッグ環境（VS Codeなど）
+    # main-support/ の1つ上のディレクトリ（project/）を基準にする
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ディレクトリパスをプロジェクトルート基準に設定
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
