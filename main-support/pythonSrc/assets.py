@@ -77,7 +77,7 @@ using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
 using UnityEditorInternal;
-
+using System.Collections.Generic;
 public class EditorCommunication : EditorWindow
 {
     private static TcpListener listener;
@@ -86,6 +86,12 @@ public class EditorCommunication : EditorWindow
     private static string pendingCommandName;
     private static CommData pendingCommandData;
     private static string commandResult;
+    
+    [System.Serializable]
+    private class Wrapper<T>
+    {
+        public List<T> items;
+    }
 
     [MenuItem("Tools/通信サーバー開始")]
     public static void StartServer()
@@ -246,12 +252,19 @@ public class EditorCommunication : EditorWindow
                 return "[]";
             }
 
+
+            var assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+
             var sprites = new List<string>();
-            foreach (var sprite in importer.spritesheet)
+            foreach (var obj in assets)
             {
-                sprites.Add(sprite.name);
+                if (obj is Sprite sprite)
+                {
+                    sprites.Add(sprite.name);
+                }
             }
-            return JsonUtility.ToJson(sprites);
+
+            return JsonUtility.ToJson(new Wrapper<string> { items = sprites });
         }
         return null;
     }
