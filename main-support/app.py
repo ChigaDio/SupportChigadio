@@ -678,6 +678,8 @@ namespace GameCore
         // data直下のフォルダ
         public const string ASSETS_FOLDER = "assets-data";
         public const string SOUND_FOLDER = "sound";
+        public const string TEXTURE_FOLDER = "texture";
+        public const string GAMEOBJECT_FOLDER = "gameobject";
 
         //dataID
         public const string ID_FOLDER = "class-data-id";
@@ -689,6 +691,8 @@ namespace GameCore
 
         // ファイル名（ここだけ定義すればOK）
         public const string ALL_SOUND_BIN_FILE = "sound_data.bin";
+        public const string ALL_TEXTURE_BIN_FILE = "texture_data.bin";
+        public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bin";
 
         // キャッシュ（最初に解決したパスを保持）
         public static string s_cachedSupportDataPath = null;
@@ -758,6 +762,8 @@ namespace GameCore
         /// これだけ参照すれば all_sound.bin のフルパスが得られる（呼び出し側はこれだけ見れば良い）
         /// </summary>
         public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_TEXTURE_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, TEXTURE_FOLDER, ALL_TEXTURE_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
 
@@ -826,6 +832,8 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
         var allFiles = new List<(string filePath, string targetSubFolder)>
         {
             (SupportFiles.ALL_SOUND_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.SOUND_FOLDER)),
+            (SupportFiles.ALL_TEXTURE_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.TEXTURE_FOLDER)),
+            (SupportFiles.ALL_GAMEOBJECT_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.GAMEOBJECT_FOLDER)),
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER)
         };
@@ -871,6 +879,8 @@ def manage_enum_id():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+                # 'view' キーを含む要素を除外
+                data = [item for item in data if 'view' not in item]
             logger.debug(f"Returning enum-id: {data}")
             return jsonify(data)
         except FileNotFoundError:
@@ -3826,8 +3836,8 @@ def delete_sound():
 
 @app.route('/api/sound/generate', methods=['POST'])
 def generate_files():
-    assets.generate_csharp()
-    assets.generate_bin()
+    assets.generate_sound_csharp()
+    assets.generate_sound_bin()
     return jsonify({'status': 'success'})
 
 @app.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
