@@ -3733,7 +3733,8 @@ def add_texture():
     assets.add_texture(
         data['group_name'],
         data['name'],
-        data['desc']
+        data['desc'],
+        data['isSpriteRender']
     )
     return jsonify({'status': 'success'})
 

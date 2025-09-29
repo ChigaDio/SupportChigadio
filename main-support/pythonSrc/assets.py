@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import socket
 import struct
@@ -8,6 +9,42 @@ from tkinter import filedialog
 from PIL import Image
 import shutil
 import uuid
+
+def generate_enum_csharp(json_path, name, enum_dir):
+    """
+    指定されたJSONファイルからC#のenumコードを生成する
+
+    Args:
+        json_path (str): JSONファイルのパス
+        name (str): 生成するenumの名前（{name}ID.csとして使用）
+        data_dir (str): データディレクトリのベースパス
+        enum_dir (str): ENUMディレクトリの相対パス
+    """
+    # JSONデータを読み込む
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+
+    # valueが数値で有効なアイテムをフィルタリング
+    valid_data = [item for item in data if not math.isnan(item['value']) and math.isfinite(item['value'])]
+
+    # C# enumコードを生成
+    cs_content = "namespace GameCore.Enums\n{\n"
+    cs_content += f"    public enum {name}ID\n    {{\n"
+    cs_content += "        None = 0, // デフォルト値\n"
+    for item in valid_data:
+        cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
+    max_value = max([item['value'] for item in valid_data], default=-1) + 1
+    cs_content += f"        Max = {max_value}\n"
+    cs_content += "    }\n}"
+
+    # 出力パスを構築
+    cs_path = os.path.join(enum_dir, name, f"{name}ID.cs")
+    os.makedirs(os.path.dirname(cs_path), exist_ok=True)
+
+    # C#ファイルを保存
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(cs_content)
 
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -68,8 +105,9 @@ def generate_base():
                 max_id += 1
                 enum_list.append({'id': max_id, 'name': entry['name'],'view' : False})
                 os.makedirs(os.path.dirname(entry['path']), exist_ok=True)
-                with open(entry['path'], 'w', encoding='utf-8') as ef:
-                    json.dump([], ef)
+                if not os.path.exists(entry['path']):
+                    with open(entry['path'], 'w', encoding='utf-8') as ef:
+                        json.dump({'groups': {}}, ef, ensure_ascii=False, indent=4)
         f.seek(0)
         json.dump(enum_list, f, ensure_ascii=False, indent=4)
         f.truncate()
@@ -339,62 +377,53 @@ public class EditorCommunication : EditorWindow
         with open(os.path.join(EDITOR_DATA, "EditorCommunication.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
-# Sound data management
-sound_data = {'groups': {}}
-texture_data = {'groups': {}}
-gameobject_data = {'groups': {}}
-
 def load_sound_data():
     """
     assets_sound.jsonを読み込む
     """
-    global sound_data
     if os.path.exists(SOUND_JSON):
         with open(SOUND_JSON, 'r', encoding='utf-8') as f:
-            sound_data = json.load(f)
+            return json.load(f)
+    return {'groups': {}}
 
-def save_sound_data():
+def save_sound_data(data):
     """
     assets_sound.jsonを保存
     """
     with open(SOUND_JSON, 'w', encoding='utf-8') as f:
-        json.dump(sound_data, f, ensure_ascii=False, indent=4)
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 def load_texture_data():
     """
     assets_texture.jsonを読み込む
     """
-    global texture_data
     if os.path.exists(TEXTURE_JSON):
         with open(TEXTURE_JSON, 'r', encoding='utf-8') as f:
-            texture_data = json.load(f)
+            return json.load(f)
+    return {'groups': {}}
 
-def save_texture_data():
+def save_texture_data(data):
     """
     assets_texture.jsonを保存
     """
     with open(TEXTURE_JSON, 'w', encoding='utf-8') as f:
-        json.dump(texture_data, f, ensure_ascii=False, indent=4)
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 def load_gameobject_data():
     """
     assets_gameobject.jsonを読み込む
     """
-    global gameobject_data
     if os.path.exists(GAMEOBJECT_JSON):
         with open(GAMEOBJECT_JSON, 'r', encoding='utf-8') as f:
-            gameobject_data = json.load(f)
+            return json.load(f)
+    return {'groups': {}}
 
-def save_gameobject_data():
+def save_gameobject_data(data):
     """
     assets_gameobject.jsonを保存
     """
     with open(GAMEOBJECT_JSON, 'w', encoding='utf-8') as f:
-        json.dump(gameobject_data, f, ensure_ascii=False, indent=4)
-
-load_sound_data()
-load_texture_data()
-load_gameobject_data()
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 # Unity communication functions
 def connect_to_unity():
@@ -452,27 +481,30 @@ def get_sound_data():
     """
     サウンドデータを取得
     """
-    return sound_data
+    return load_sound_data()
 
 def add_sound_group(group_name):
     """
     サウンドグループを追加
     """
-    if group_name and group_name not in sound_data['groups']:
-        sound_data['groups'][group_name] = []
-        save_sound_data()
+    data = load_sound_data()
+    if group_name and group_name not in data['groups']:
+        data['groups'][group_name] = []
+        save_sound_data(data)
 
 def delete_sound_group(group_name):
     """
     サウンドグループを削除
     """
-    sound_data['groups'].pop(group_name, None)
-    save_sound_data()
+    data = load_sound_data()
+    data['groups'].pop(group_name, None)
+    save_sound_data(data)
 
 def add_sound(group_name, name, desc, volume, sound_type):
     """
     サウンドをグループに追加
     """
+    data = load_sound_data()
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -482,7 +514,7 @@ def add_sound(group_name, name, desc, volume, sound_type):
     addr_path = get_addressable_path(file_path)
     if not addr_path:
         raise Exception("アドレス指定可能なパスを取得できませんでした。")
-    sound_data['groups'][group_name].append({
+    data['groups'][group_name].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
@@ -490,14 +522,15 @@ def add_sound(group_name, name, desc, volume, sound_type):
         'volume': volume, 
         'type': sound_type
     })
-    save_sound_data()
+    save_sound_data(data)
 
 def delete_sound(group_name, index):
     """
     サウンドをグループから削除
     """
-    del sound_data['groups'][group_name][index]
-    save_sound_data()
+    data = load_sound_data()
+    del data['groups'][group_name][index]
+    save_sound_data(data)
 
 def generate_sound_csharp():
     """
@@ -506,25 +539,24 @@ def generate_sound_csharp():
     - assets_sound.json を更新
     - ENUM_DIR/Sound/Sound.json を生成
     """
+    data = load_sound_data()
+
     # SoundEnums.cs
     with open(os.path.join(SOUND_DATA, 'SoundEnums.cs'), 'w', encoding='utf-8') as f:
         f.write('namespace GameCore.Sound {\n')
         f.write('    public enum SoundGroup { None')
-        for group in sound_data['groups']:
+        for group in data['groups']:
             f.write(f', {group}')
         f.write(' ,Max\n  };\n')
         f.write('    public enum SoundType { SE, BGM };\n')
-        f.write('    public enum SoundID { None')
         sound_id_counter = 1
         sound_id_map = {'None': 0}
-        for group, sounds in sound_data['groups'].items():
+        for group, sounds in data['groups'].items():
             for sound in sounds:
                 sound_id = f"{group}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
-                    f.write(f', {sound_id}')
                     sound_id_counter += 1
-        f.write(' ,Max\n  };\n')
         f.write('}\n')
 
     # SoundCore.cs
@@ -538,7 +570,7 @@ using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
 using GameCore.SaveSystem;
-
+using GameCore.Enums;
 namespace GameCore.Sound
 {
     public class SoundCore : BaseSingleton<SoundCore>
@@ -629,11 +661,11 @@ namespace GameCore.Sound
                 {
                     if (addressable.IsLoadedAndSetup)
                     {
-                        loadedClips[group][sound.SoundID] = addressable;
+                        loadedClips[group][SoundID] = addressable;
                     }
                 }, ex =>
                 {
-                    Debug.LogError($"Failed to load audio clip for {sound.SoundID} at {sound.AddressablePath}: {ex.Message}");
+                    Debug.LogError($"Failed to load audio clip for {SoundID} at {sound.AddressablePath}: {ex.Message}");
                 }).AttachExternalCancellation(destroyToken));
             }
 
@@ -907,6 +939,96 @@ namespace GameCore.Sound
 """
         with open(os.path.join(SOUND_DATA, 'SoundDatabase.cs'), 'w', encoding='utf-8') as f:
             f.write(code_str)
+            
+    if not os.path.exists(os.path.join(SOUND_DATA, 'SoundBinaryReader.cs')):
+        code_str = """
+        
+using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+namespace GameCore.Sound
+{
+    public class SoundBinaryReader
+    {
+        public static SoundDatabase LoadSoundDatabaseFromBinary(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                Debug.LogError($"Binary file not found: {filePath}");
+                return null;
+            }
+
+            SoundDatabase database = new SoundDatabase();
+
+            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+            {
+                int groupCount = reader.ReadInt32();
+                int[] offsets = new int[groupCount];
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    offsets[i] = reader.ReadInt32();
+                }
+
+                string[] groupNames = Enum.GetNames(typeof(SoundGroup));
+                if (groupCount > groupNames.Length - 1)
+                {
+                    Debug.LogError("Binary contains more groups than defined in SoundGroup enum.");
+                    return null;
+                }
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                    int soundCount = reader.ReadInt32();
+                    List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
+
+                    for (int j = 0; j < soundCount; j++)
+                    {
+                        int id = reader.ReadInt32();
+                        string addressablePath = ReadNullTerminatedString(reader);
+                        float volume = reader.ReadSingle();
+                        byte typeByte = reader.ReadByte();
+                        SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
+
+                        string groupName = groupNames[i + 1];
+                        string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
+                        sounds.Add(new SoundDatabase.SoundData(
+                            idName: enumName, // Store only the sound name
+                            addressablePath: addressablePath,
+                            baseVolume: volume,
+                            type: type,
+                            soundID: (SoundID)id
+                        ));
+                    }
+
+                    database.GroupedSoundsList.Add(new SoundDatabase.GroupedSounds(
+                        group: (SoundGroup)(i + 1),
+                        sounds: sounds
+                    ));
+                }
+            }
+
+            return database;
+        }
+
+        private static string ReadNullTerminatedString(BinaryReader reader)
+        {
+            List<byte> bytes = new List<byte>();
+            byte b;
+            while ((b = reader.ReadByte()) != 0)
+            {
+                bytes.Add(b);
+            }
+            return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
+        }
+    }
+}
+""" 
+        with open(os.path.join(SOUND_DATA, 'SoundBinaryReader.cs'), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 
 
         
@@ -917,7 +1039,7 @@ namespace GameCore.Sound
     # Sound.json を生成
     with open(os.path.join(ENUM_DIR, "Sound", "Sound.json"), 'w', encoding='utf-8') as f:
         sound_id_list = []
-        for group, sounds in sound_data['groups'].items():
+        for group, sounds in data['groups'].items():
             for sound in sounds:
                 sound_id = f"{group}_{sound['name']}"
                 sound_id_list.append({
@@ -928,12 +1050,15 @@ namespace GameCore.Sound
                 })
         json.dump(sound_id_list, f, ensure_ascii=False, indent=4)
 
+    generate_enum_csharp(os.path.join(ENUM_DIR, "Sound", "Sound.json"), "Sound", ENUM_DIR)
+
 def generate_sound_bin():
     """
     サウンドデータのバイナリファイルを生成
     """
+    data = load_sound_data()
     with open(os.path.join(SOUND_DATA, 'sound_data.bin'), 'wb') as f:
-        groups = list(sound_data['groups'].keys())
+        groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
         offsets = [0] * group_count
@@ -943,7 +1068,7 @@ def generate_sound_bin():
 
         sound_id_map = {'None': 0}
         sound_id_counter = 1
-        for group, sounds in sound_data['groups'].items():
+        for group, sounds in data['groups'].items():
             for sound in sounds:
                 sound_id = f"{group}_{sound['name']}"
                 if sound_id not in sound_id_map:
@@ -952,7 +1077,7 @@ def generate_sound_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            sounds = sound_data['groups'][group]
+            sounds = data['groups'][group]
             f.write(struct.pack('i', len(sounds)))
             for sound in sounds:
                 sound_id = sound_id_map.get(f"{group}_{sound['name']}", 0)
@@ -971,27 +1096,30 @@ def get_texture_data():
     """
     テクスチャデータを取得
     """
-    return texture_data
+    return load_texture_data()
 
 def add_texture_group(group_name):
     """
     テクスチャグループを追加
     """
-    if group_name and group_name not in texture_data['groups']:
-        texture_data['groups'][group_name] = []
-        save_texture_data()
+    data = load_texture_data()
+    if group_name and group_name not in data['groups']:
+        data['groups'][group_name] = []
+        save_texture_data(data)
 
 def delete_texture_group(group_name):
     """
     テクスチャグループを削除
     """
-    texture_data['groups'].pop(group_name, None)
-    save_texture_data()
+    data = load_texture_data()
+    data['groups'].pop(group_name, None)
+    save_texture_data(data)
 
-def add_texture(group_name, name, desc):
+def add_texture(group_name, name, desc,isSpriteRender):
     """
     テクスチャをグループに追加
     """
+    data = load_texture_data()
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -1009,21 +1137,23 @@ def add_texture(group_name, name, desc):
             sprite_info = sprite_data.get('items', []) if isinstance(sprite_data, dict) else []
         except json.JSONDecodeError:
             print(f"スプライト情報の解析に失敗しました: {sprite_info_raw}")
-    texture_data['groups'][group_name].append({
+    data['groups'][group_name].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
+        'isSpriteRender' : isSpriteRender,
         'absolute_path': os.path.abspath(file_path),
         'sprites': sprite_info
     })
-    save_texture_data()
+    save_texture_data(data)
 
 def delete_texture(group_name, index):
     """
     テクスチャをグループから削除
     """
-    del texture_data['groups'][group_name][index]
-    save_texture_data()
+    data = load_texture_data()
+    del data['groups'][group_name][index]
+    save_texture_data(data)
 
 def generate_texture_csharp():
     """
@@ -1032,30 +1162,27 @@ def generate_texture_csharp():
     - assets_texture.json を更新
     - ENUM_DIR/Texture/TextureSpriteID.json を生成
     """
+    data = load_texture_data()
     # TextureEnums.cs
     with open(os.path.join(TEXTURE_DATA, 'TextureEnums.cs'), 'w', encoding='utf-8') as f:
         f.write('namespace GameCore.Texture {\n')
         f.write('    public enum TextureGroup { None')
-        for group in texture_data['groups']:
+        for group in data['groups']:
             f.write(f', {group}')
         f.write(' ,Max\n  };\n')
-        f.write('    public enum TextureID { None')
         texture_id_counter = 1
         texture_id_map = {'None': 0}
-        for group, textures in texture_data['groups'].items():
+        for group, textures in data['groups'].items():
             for texture in textures:
                 texture_id = f"{group}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
-                    f.write(f', {texture_id}')
                     texture_id_counter += 1
-        f.write(' ,Max\n  };\n')
         
         # SpriteID の生成
-        f.write('    public enum SpriteID { None')
         sprite_id_counter = 1
         sprite_id_map = {'None': 0}
-        for group, textures in texture_data['groups'].items():
+        for group, textures in data['groups'].items():
             for texture in textures:
                 texture_id = f"{group}_{texture['name']}"
                 if len(texture.get('sprites', [])) <= 1:
@@ -1063,27 +1190,21 @@ def generate_texture_csharp():
                         sprite_id = f"{group}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
-                            f.write(f', {sprite_id}')
                             sprite_id_counter += 1
                 else:
                     sprite_id = texture_id
                     if sprite_id not in sprite_id_map:
                         sprite_id_map[sprite_id] = sprite_id_counter
-                        f.write(f', {sprite_id}')
                         sprite_id_counter += 1
-        f.write(' ,Max\n  };\n')
         
         # スプライトシート用の専用列挙型
-        for group, textures in texture_data['groups'].items():
+        for group, textures in data['groups'].items():
             for texture in textures:
                 if len(texture.get('sprites', [])) > 1:
                     sprite_enum_name = f"{group}_{texture['name']}"
-                    f.write(f'    public enum {sprite_enum_name} {{ None = -1')
                     sprite_id_counter = 0
                     for sprite in texture.get('sprites', []):
-                        f.write(f', {sprite}')
                         sprite_id_counter += 1
-                    f.write(' ,Max\n  };\n')
         
         f.write('}\n')
 
@@ -1097,16 +1218,15 @@ using System.Threading;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
+using GameCore.Enums;
 
 namespace GameCore.Texture
 {
     public class TextureCore : BaseSingleton<TextureCore>
     {
         private TextureDatabase database;
-        private Dictionary<TextureGroup, Dictionary<TextureID, AddressableData<Texture2D>>> loadedTextures =
-            new Dictionary<TextureGroup, Dictionary<TextureID, AddressableData<Texture2D>>>();
-        private Dictionary<TextureGroup, Dictionary<SpriteID, AddressableData<IList<Sprite>>>> loadedSpriteArrays =
-            new Dictionary<TextureGroup, Dictionary<SpriteID, AddressableData<IList<Sprite>>>>();
+        private Dictionary<TextureGroup, Dictionary<TextureID, TextureAddressableData>> loadedAssets =
+            new Dictionary<TextureGroup, Dictionary<TextureID, TextureAddressableData>>();
         private bool isLoadDatabase = false;
         public bool IsLoadDatabase => isLoadDatabase;
         private CancellationToken destroyToken;
@@ -1142,64 +1262,65 @@ namespace GameCore.Texture
             {
                 await UniTask.Yield(cancellationToken: destroyToken);
             }
-            if (loadedTextures.ContainsKey(group)) return;
+            if (loadedAssets.ContainsKey(group)) return;
             var textures = database.GroupedTexturesList.FirstOrDefault(data => data.Group == group);
             if (textures == null) return;
 
-            loadedTextures[group] = new Dictionary<TextureID, AddressableData<Texture2D>>();
-            loadedSpriteArrays[group] = new Dictionary<SpriteID, AddressableData<IList<Sprite>>>();
+            loadedAssets[group] = new Dictionary<TextureID, TextureAddressableData>();
             var tasks = new List<UniTask>();
 
             foreach (var texture in textures.Textures)
             {
-                var addressableTexture = new AddressableData<Texture2D>(groupCategory, AssetCategory.Texture);
-                AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Texture, addressableTexture);
-                tasks.Add(addressableTexture.LoadAsync(texture.AddressablePath, tex =>
+                if (texture.IsSpriteSheet)
                 {
-                    if (addressableTexture.IsLoadedAndSetup)
+                    // スプライトシート自体のロード
+                    var addressableSpriteSheet = new TextureAddressableData(groupCategory, AssetCategory.Sprite, true);
+                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, addressableSpriteSheet);
+                    tasks.Add(addressableSpriteSheet.LoadAsync(texture.AddressablePath, texture.Sprites.Count, obj =>
                     {
-                        loadedTextures[group][texture.TextureID] = addressableTexture;
-                    }
-                }, ex =>
-                {
-                    Debug.LogError($"Failed to load texture for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
-                }).AttachExternalCancellation(destroyToken));
-
-                if (texture.Sprites != null && texture.Sprites.Count > 1)
-                {
-                    var addressableSpriteArray = new AddressableData<IList<Sprite>>(groupCategory, AssetCategory.Sprite);
-                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, addressableSpriteArray);
-                    SpriteID spriteId = (SpriteID)Enum.Parse(typeof(SpriteID), $"{group}_{texture.IdName}");
-                    tasks.Add(addressableSpriteArray.LoadArrayAsync(texture.AddressablePath, sprites =>
-                    {
-                        if (addressableSpriteArray.IsLoadedAndSetup)
+                        if (addressableSpriteSheet.IsLoadedAndSetup)
                         {
-                            loadedSpriteArrays[group][spriteId] = addressableSpriteArray;
+                            loadedAssets[group][texture.TextureID] = addressableSpriteSheet;
                         }
                     }, ex =>
                     {
-                        Debug.LogError($"Failed to load sprite array for {spriteId} at {texture.AddressablePath}: {ex.Message}");
+                        Debug.LogError($"Failed to load sprite sheet for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
                     }).AttachExternalCancellation(destroyToken));
-                }
-                else if (texture.Sprites != null && texture.Sprites.Count == 1)
-                {
-                    var addressableSprite = new AddressableData<Sprite>(groupCategory, AssetCategory.Sprite);
-                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, addressableSprite);
-                    SpriteID spriteId = (SpriteID)Enum.Parse(typeof(SpriteID), $"{group}_{texture.IdName}_{texture.Sprites[0].IdName}");
-                    tasks.Add(addressableSprite.LoadAsync($"{texture.AddressablePath}#{texture.Sprites[0].IdName}", spr =>
+
+                    // 個々のスプライトのロード（スプライト数が1の場合は不要）
+                    if (texture.Sprites.Count <= 1) continue;
+
+                    foreach (var sprite in texture.Sprites)
                     {
-                        if (addressableSprite.IsLoadedAndSetup)
+                        var spriteAddressable = new TextureAddressableData(groupCategory, AssetCategory.Sprite, true);
+                        AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, spriteAddressable);
+                        string spritePath = $"{texture.AddressablePath}#{sprite.IdName}";
+                        tasks.Add(spriteAddressable.LoadAsync(spritePath, 1, obj =>
                         {
-                            loadedSpriteArrays[group][spriteId] = new AddressableData<IList<Sprite>>(groupCategory, AssetCategory.Sprite)
+                            if (spriteAddressable.IsLoadedAndSetup)
                             {
-                                typedAddressableArray = new List<Sprite> { spr },
-                                isLoaded = true,
-                                isSetup = true
-                            };
+                                loadedAssets[group][sprite.TextureID] = spriteAddressable;
+                            }
+                        }, ex =>
+                        {
+                            Debug.LogError($"Failed to load sprite for {sprite.TextureID} at {spritePath}: {ex.Message}");
+                        }).AttachExternalCancellation(destroyToken));
+                    }
+                }
+                else
+                {
+                    // テクスチャのロード
+                    var addressableTexture = new TextureAddressableData(groupCategory, AssetCategory.Texture, false);
+                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Texture, addressableTexture);
+                    tasks.Add(addressableTexture.LoadAsync(texture.AddressablePath, 0, obj =>
+                    {
+                        if (addressableTexture.IsLoadedAndSetup)
+                        {
+                            loadedAssets[group][texture.TextureID] = addressableTexture;
                         }
                     }, ex =>
                     {
-                        Debug.LogError($"Failed to load sprite for {spriteId} at {texture.AddressablePath}: {ex.Message}");
+                        Debug.LogError($"Failed to load texture for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
                     }).AttachExternalCancellation(destroyToken));
                 }
             }
@@ -1215,18 +1336,13 @@ namespace GameCore.Texture
 
         public async UniTask UnloadGroupAsync(TextureGroup group, GroupCategory groupCategory, Action action = null)
         {
-            if (!loadedTextures.TryGetValue(group, out var textures)) return;
+            if (!loadedAssets.TryGetValue(group, out var assets)) return;
 
-            foreach (var addressable in textures.Values)
+            foreach (var addressable in assets.Values)
             {
                 addressable.Release();
             }
-            foreach (var addressable in loadedSpriteArrays[group].Values)
-            {
-                addressable.Release();
-            }
-            loadedTextures.Remove(group);
-            loadedSpriteArrays.Remove(group);
+            loadedAssets.Remove(group);
             AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Texture);
             AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Sprite);
             action?.Invoke();
@@ -1235,50 +1351,171 @@ namespace GameCore.Texture
 
         public Texture2D GetTexture(TextureGroup group, TextureID id)
         {
-            if (loadedTextures.TryGetValue(group, out var groupTextures) && groupTextures.TryGetValue(id, out var addressable))
+            if (loadedAssets.TryGetValue(group, out var groupAssets) && groupAssets.TryGetValue(id, out var addressable))
             {
-                return addressable.GetAddressableObjectResult();
+                var result = addressable.GetAddressableObjectResult();
+                if (result is Texture2D texture)
+                {
+                    return texture;
+                }
+                Debug.LogWarning($"Asset with ID {id} in group {group} is not a Texture2D.");
             }
             return null;
         }
 
-        public Sprite GetSprite<TEnum>(TextureGroup group, TEnum spriteId, int spriteIndex = -1) where TEnum : Enum
+        public Sprite GetSprite(TextureGroup group, TextureID id)
         {
-            if (loadedSpriteArrays.TryGetValue(group, out var groupSprites) && 
-                groupSprites.TryGetValue((SpriteID)Enum.Parse(typeof(SpriteID), spriteId.ToString()), out var addressable))
+            if (loadedAssets.TryGetValue(group, out var groupAssets) && groupAssets.TryGetValue(id, out var addressable))
             {
-                if (spriteIndex >= 0 && spriteIndex < addressable.GetAddressableObjectResult().Count)
+                var result = addressable.GetAddressableObjectResult();
+                if (result is Sprite sprite)
                 {
-                    return addressable.GetAddressableObjectResult()[spriteIndex];
+                    return sprite;
                 }
-                return addressable.GetAddressableObjectResult().Count > 0 ? addressable.GetAddressableObjectResult()[0] : null;
+                if (result is IList<Sprite> sprites && sprites.Count > 0)
+                {
+                    return sprites[0];
+                }
+                Debug.LogWarning($"Asset with ID {id} in group {group} is not a Sprite or Sprite array.");
             }
+            return null;
+        }
+
+        public Sprite GetSprite<TEnum>(TextureGroup group, TextureID textureId, TEnum spriteIndex, int fallbackIndex = -1) where TEnum : Enum
+        {
+            if (loadedAssets.TryGetValue(group, out var groupAssets) &&
+                groupAssets.TryGetValue(textureId, out var addressable))
+            {
+                // TEnum を数値（インデックス）として変換
+                int index = Convert.ToInt32(spriteIndex);
+
+                // fallbackIndex が指定されている場合はそちらを優先
+                int targetIndex = fallbackIndex >= 0 ? fallbackIndex : index;
+
+                var result = addressable.GetAddressableObjectResult();
+                if (result is Sprite sprite && targetIndex == 0)
+                {
+                    return sprite; // 単一スプライトの場合
+                }
+                if (result is IList<Sprite> sprites && sprites.Count > 0)
+                {
+                    if (targetIndex >= 0 && targetIndex < sprites.Count)
+                    {
+                        return sprites[targetIndex];
+                    }
+                    return sprites[0];
+                }
+                Debug.LogWarning($"Asset with ID {textureId} in group {group} is not a Sprite or Sprite array.");
+            }
+            Debug.LogWarning($"No asset found for TextureID {textureId} in group {group}.");
             return null;
         }
 
         private void OnDestroy()
         {
-            foreach (var group in loadedTextures.Values)
+            foreach (var group in loadedAssets.Values)
             {
-                foreach (var texture in group.Values)
+                foreach (var asset in group.Values)
                 {
-                    texture.Release();
+                    asset.Release();
                 }
             }
-            foreach (var group in loadedSpriteArrays.Values)
-            {
-                foreach (var spriteArray in group.Values)
-                {
-                    spriteArray.Release();
-                }
-            }
-            loadedTextures.Clear();
-            loadedSpriteArrays.Clear();
+            loadedAssets.Clear();
         }
     }
 }
 """
         with open(os.path.join(TEXTURE_DATA, "TextureCore.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
+            
+    if not os.path.exists(os.path.join(ENUM_DIR, "TextureAddressableData.cs")):
+        code_str = """
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using AddressableSystem;
+using Cysharp.Threading.Tasks;
+
+namespace GameCore.Texture
+{
+    public class TextureAddressableData
+    {
+        private readonly AddressableData<Sprite> spriteData;
+        private readonly AddressableData<Texture2D> textureData;
+        private readonly bool isSprite;
+
+        public TextureAddressableData(GroupCategory groupCategory, AssetCategory assetCategory, bool isSprite)
+        {
+            this.isSprite = isSprite;
+            if (isSprite)
+            {
+                spriteData = new AddressableData<Sprite>(groupCategory, assetCategory);
+                textureData = null;
+            }
+            else
+            {
+                textureData = new AddressableData<Texture2D>(groupCategory, assetCategory);
+                spriteData = null;
+            }
+        }
+
+        public bool IsLoadedAndSetup => isSprite ? spriteData.IsLoadedAndSetup : textureData.IsLoadedAndSetup;
+
+        public async UniTask LoadAsync(string path, int spriteCount, Action<object> onSuccess, Action<Exception> onError)
+        {
+            if (isSprite)
+            {
+                if (spriteCount > 1)
+                {
+                    await spriteData.LoadArrayAsync(path, sprites =>
+                    {
+                        onSuccess?.Invoke(sprites);
+                    }, onError);
+                }
+                else
+                {
+                    await spriteData.LoadAsync(path, spr =>
+                    {
+                        onSuccess?.Invoke(spr);
+                    }, onError);
+                }
+            }
+            else
+            {
+                await textureData.LoadAsync(path, tex => onSuccess?.Invoke(tex), onError);
+            }
+        }
+
+        public void Release()
+        {
+            if (isSprite)
+            {
+                spriteData?.Release();
+            }
+            else
+            {
+                textureData?.Release();
+            }
+        }
+
+        public object GetAddressableObjectResult()
+        {
+            return isSprite ? spriteData.GetAddressableObjectResult() : textureData.GetAddressableObjectResult();
+        }
+
+        public Sprite[] GetAddressableArrayResult()
+        {
+            if (isSprite)
+            {
+                return spriteData.GetAddressableObjectResult() is Sprite sprite ? new[] { sprite } : spriteData.typedAddressableArray;
+            }
+            return null;
+        }
+    }
+}
+        """
+        
+        with open(os.path.join(ENUM_DIR, "TextureAddressableData.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
     # TextureDatabase.cs
@@ -1295,16 +1532,16 @@ namespace GameCore.Texture
         {
             private readonly string idName;
             private readonly string addressablePath;
-            private readonly SpriteID spriteID;
-            public SpriteData(SpriteID spriteID, string idName, string addressablePath)
+            private readonly TextureID textureID;
+            public SpriteData(TextureID textureID, string idName, string addressablePath)
             {
                 this.idName = idName;
                 this.addressablePath = addressablePath;
-                this.spriteID = spriteID;
+                this.textureID = textureID;
             }
             public string IdName => idName;
             public string AddressablePath => addressablePath;
-            public SpriteID SpriteID => spriteID;
+            public TextureID TextureID => textureID;
         }
 
         [System.Serializable]
@@ -1314,17 +1551,20 @@ namespace GameCore.Texture
             private readonly string addressablePath;
             private readonly TextureID textureID;
             private readonly List<SpriteData> sprites;
-            public TextureData(TextureID textureID, string idName, string addressablePath, List<SpriteData> sprites)
+            private readonly bool isSpriteSheet;
+            public TextureData(TextureID textureID, string idName, string addressablePath, List<SpriteData> sprites, bool isSpriteSheet)
             {
                 this.idName = idName;
                 this.addressablePath = addressablePath;
                 this.textureID = textureID;
                 this.sprites = sprites ?? new List<SpriteData>();
+                this.isSpriteSheet = isSpriteSheet;
             }
             public string IdName => idName;
             public string AddressablePath => addressablePath;
             public TextureID TextureID => textureID;
             public List<SpriteData> Sprites => sprites;
+            public bool IsSpriteSheet => isSpriteSheet;
         }
 
         [System.Serializable]
@@ -1352,44 +1592,173 @@ namespace GameCore.Texture
 """
         with open(os.path.join(TEXTURE_DATA, 'TextureDatabase.cs'), 'w', encoding='utf-8') as f:
             f.write(code_str)
+            
+    if not os.path.exists(os.path.join(TEXTURE_DATA, 'TextureBinaryReader.cs')):
+        code_str = """
+uusing System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+namespace GameCore.Texture
+{
+    public class TextureBinaryReader
+    {
+        public static TextureDatabase LoadTextureDatabaseFromBinary(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                Debug.LogError($"Binary file not found: {filePath}");
+                return null;
+            }
+
+            TextureDatabase database = new TextureDatabase();
+
+            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+            {
+                int groupCount = reader.ReadInt32();
+                int[] offsets = new int[groupCount];
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    offsets[i] = reader.ReadInt32();
+                }
+
+                string[] groupNames = Enum.GetNames(typeof(TextureGroup));
+                if (groupCount > groupNames.Length - 1)
+                {
+                    Debug.LogError("Binary contains more groups than defined in TextureGroup enum.");
+                    return null;
+                }
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                    int textureCount = reader.ReadInt32();
+                    List<TextureDatabase.TextureData> textures = new List<TextureDatabase.TextureData>();
+
+                    for (int j = 0; j < textureCount; j++)
+                    {
+                        int textureId = reader.ReadInt32();
+                        string textureIdName = ReadNullTerminatedString(reader);
+                        string addressablePath = ReadNullTerminatedString(reader);
+                        bool isSpriteSheet = reader.ReadBoolean();
+                        int spriteCount = reader.ReadInt32();
+                        List<TextureDatabase.SpriteData> sprites = new List<TextureDatabase.SpriteData>();
+
+                        for (int k = 0; k < spriteCount; k++)
+                        {
+                            int spriteTextureId = reader.ReadInt32();
+                            string spriteIdName = ReadNullTerminatedString(reader);
+                            string spriteAddressablePath = ReadNullTerminatedString(reader);
+
+                            sprites.Add(new TextureDatabase.SpriteData(
+                                textureID: (TextureID)spriteTextureId,
+                                idName: spriteIdName,
+                                addressablePath: spriteAddressablePath
+                            ));
+                        }
+
+                        textures.Add(new TextureDatabase.TextureData(
+                            textureID: (TextureID)textureId,
+                            idName: textureIdName,
+                            addressablePath: addressablePath,
+                            sprites: sprites,
+                            isSpriteSheet: isSpriteSheet
+                        ));
+                    }
+
+                    database.GroupedTexturesList.Add(new TextureDatabase.GroupedTextures(
+                        group: (TextureGroup)(i + 1),
+                        textures: textures
+                    ));
+                }
+            }
+
+            return database;
+        }
+
+        private static string ReadNullTerminatedString(BinaryReader reader)
+        {
+            List<byte> bytes = new List<byte>();
+            byte b;
+            while ((b = reader.ReadByte()) != 0)
+            {
+                bytes.Add(b);
+            }
+            return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
+        }
+    }
+}
+        """
 
     # ENUM_DIR/Texture ディレクトリを作成
     if not os.path.exists(os.path.join(ENUM_DIR, "Texture")):
         os.makedirs(os.path.join(ENUM_DIR, "Texture"))
     
     # TextureSprite.json を生成（TextureとSpriteを統合）
-    with open(os.path.join(ENUM_DIR, "Texture", "TextureSprite.json"), 'w', encoding='utf-8') as f:
-        texture_sprite_id_list = []
-        # TextureおよびSpriteのエントリ
-        for group, textures in texture_data['groups'].items():
-            for texture in textures:
-                texture_id = f"{group}_{texture['name']}"
-                if len(texture.get('sprites', [])) <= 1:
-                    # spritesが1つ以下の場合、Textureのエントリのみ追加
-                    texture_sprite_id_list.append({
+    with open(os.path.join(ENUM_DIR, "Texture", "Texture.json"), 'w', encoding='utf-8') as f:
+            texture_id_list = []
+            for group, textures in data['groups'].items():
+                for texture in textures:
+                    texture_id = f"{group}_{texture['name']}"
+                    texture_id_list.append({
                         'description': texture['desc'],
                         'id': texture_id_map[texture_id],
                         'property': texture_id,
                         'value': texture_id_map[texture_id]
                     })
-                else:
-                    # spritesが2つ以上の場合、各スプライトごとにエントリを追加
+            json.dump(texture_id_list, f, ensure_ascii=False, indent=4)
+    generate_enum_csharp(os.path.join(ENUM_DIR, "Texture", "Texture.json"), "Texture", ENUM_DIR)
+            
+    # TextureSprite.json を生成（Spriteのエントリ、複数スプライトの場合）
+    added_names = []
+    for group, textures in data['groups'].items():
+        for texture in textures:
+            if len(texture.get('sprites', [])) > 1:
+                name = f"{group}_{texture['name']}"
+                if not os.path.exists(os.path.join(ENUM_DIR, f"{name}")):
+                    os.makedirs(os.path.join(ENUM_DIR, f"{name}"))
+                with open(os.path.join(ENUM_DIR, f"{name}", f"{name}.json"), 'w', encoding='utf-8') as f:
+                    texture_sprite_id_list = []
+                    count = 0
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['name']}_{sprite}"
+                        sprite_id = f"{texture['name']}_{sprite}"
                         texture_sprite_id_list.append({
                             'description': f"{texture['desc']}(Sprite:{sprite})",
-                            'id': sprite_id_map[sprite_id],
+                            'id': count,
                             'property': sprite_id,
-                            'value': sprite_id_map[sprite_id]
+                            'isSpriteRender':True,
+                            'value': count
                         })
-        json.dump(texture_sprite_id_list, f, ensure_ascii=False, indent=4)
+                        count += 1
+                    json.dump(texture_sprite_id_list, f, ensure_ascii=False, indent=4)
+                if name not in added_names:
+                    added_names.append(name)
+                generate_enum_csharp(os.path.join(ENUM_DIR, f"{name}", f"{name}.json"), name, ENUM_DIR)
+
+    # enum_list.json に追加した名前を一括で追加
+    enum_list_path = os.path.join(ENUM_DIR, 'enum_list.json')
+    if os.path.exists(enum_list_path) and added_names:
+        with open(enum_list_path, 'r+', encoding='utf-8') as f:
+            enum_list = json.load(f)
+            existing_names = [e['name'] for e in enum_list]
+            max_id = max([e['id'] for e in enum_list if 'id' in e], default=0)
+            for name in added_names:
+                if name not in existing_names:
+                    max_id += 1
+                    enum_list.append({'id': max_id, 'name': name, 'view': False})
+            f.seek(0)
+            json.dump(enum_list, f, ensure_ascii=False, indent=4)
+            f.truncate()
 
 def generate_texture_bin():
     """
     テクスチャデータのバイナリファイルを生成
     """
+    data = load_texture_data()
     with open(os.path.join(TEXTURE_DATA, 'texture_data.bin'), 'wb') as f:
-        groups = list(texture_data['groups'].keys())
+        groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
         offsets = [0] * group_count
@@ -1401,7 +1770,7 @@ def generate_texture_bin():
         sprite_id_map = {'None': 0}
         texture_id_counter = 1
         sprite_id_counter = 1
-        for group, textures in texture_data['groups'].items():
+        for group, textures in data['groups'].items():
             for texture in textures:
                 texture_id = f"{group}_{texture['name']}"
                 if texture_id not in texture_id_map:
@@ -1421,7 +1790,7 @@ def generate_texture_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            textures = texture_data['groups'][group]
+            textures = data['groups'][group]
             f.write(struct.pack('i', len(textures)))
             for texture in textures:
                 texture_id = texture_id_map.get(f"{group}_{texture['name']}", 0)
@@ -1430,6 +1799,8 @@ def generate_texture_bin():
                 f.write(path_bytes)
                 sprites = texture.get('sprites', [])
                 f.write(struct.pack('i', len(sprites)))
+                isSpriteRender = texture.get('isSpriteRender', False)
+                f.write(struct.pack('B', 1 if isSpriteRender else 0))
                 for sprite in sprites:
                     sprite_id = sprite_id_map.get(f"{group}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['name']}", 0))
                     f.write(struct.pack('i', sprite_id))
@@ -1444,27 +1815,30 @@ def get_gameobject_data():
     """
     ゲームオブジェクトデータを取得
     """
-    return gameobject_data
+    return load_gameobject_data()
 
 def add_gameobject_group(group_name):
     """
     ゲームオブジェクトグループを追加
     """
-    if group_name and group_name not in gameobject_data['groups']:
-        gameobject_data['groups'][group_name] = []
-        save_gameobject_data()
+    data = load_gameobject_data()
+    if group_name and group_name not in data['groups']:
+        data['groups'][group_name] = []
+        save_gameobject_data(data)
 
 def delete_gameobject_group(group_name):
     """
     ゲームオブジェクトグループを削除
     """
-    gameobject_data['groups'].pop(group_name, None)
-    save_gameobject_data()
+    data = load_gameobject_data()
+    data['groups'].pop(group_name, None)
+    save_gameobject_data(data)
 
 def add_gameobject(group_name, name, desc):
     """
     ゲームオブジェクトをグループに追加
     """
+    data = load_gameobject_data()
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -1474,20 +1848,21 @@ def add_gameobject(group_name, name, desc):
     addr_path = get_addressable_path(file_path)
     if not addr_path:
         raise Exception("アドレス指定可能なパスを取得できませんでした。")
-    gameobject_data['groups'][group_name].append({
+    data['groups'][group_name].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
         'absolute_path': os.path.abspath(file_path)
     })
-    save_gameobject_data()
+    save_gameobject_data(data)
 
 def delete_gameobject(group_name, index):
     """
     ゲームオブジェクトをグループから削除
     """
-    del gameobject_data['groups'][group_name][index]
-    save_gameobject_data()
+    data = load_gameobject_data()
+    del data['groups'][group_name][index]
+    save_gameobject_data(data)
 
 def generate_gameobject_csharp():
     """
@@ -1496,24 +1871,22 @@ def generate_gameobject_csharp():
     - assets_gameobject.json を更新
     - ENUM_DIR/GameObject/GameObject.json を生成
     """
+    data = load_gameobject_data()
     # GameObjectEnums.cs
     with open(os.path.join(GAMEOBJECT_DATA, 'GameObjectEnums.cs'), 'w', encoding='utf-8') as f:
         f.write('namespace GameCore.GameObject {\n')
         f.write('    public enum GameObjectGroup { None')
-        for group in gameobject_data['groups']:
+        for group in data['groups']:
             f.write(f', {group}')
         f.write(' ,Max\n  };\n')
-        f.write('    public enum GameObjectID { None')
         gameobject_id_counter = 1
         gameobject_id_map = {'None': 0}
-        for group, gameobjects in gameobject_data['groups'].items():
+        for group, gameobjects in data['groups'].items():
             for go in gameobjects:
                 go_id = f"{group}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
-                    f.write(f', {go_id}')
                     gameobject_id_counter += 1
-        f.write(' ,Max\n  };\n')
         f.write('}\n')
 
     # GameObjectCore.cs
@@ -1526,7 +1899,7 @@ using System.Threading;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
-
+using GameCore.Enums;
 namespace GameCore.GameObject
 {
     public class GameObjectCore : BaseSingleton<GameObjectCore>
@@ -1692,7 +2065,91 @@ namespace GameCore.GameObject
 """
         with open(os.path.join(GAMEOBJECT_DATA, 'GameObjectDatabase.cs'), 'w', encoding='utf-8') as f:
             f.write(code_str)
+            
+    if not os.path.exists(os.path.join(GAMEOBJECT_DATA, 'GameObjectBinaryReader.cs')):
+        code_str = """
+        using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+using GameCore.Enums;
 
+namespace GameCore.GameObject
+{
+    public class GameObjectBinaryReader
+    {
+        public static GameObjectDatabase LoadGameObjectDatabaseFromBinary(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                Debug.LogError($"Binary file not found: {filePath}");
+                return null;
+            }
+
+            GameObjectDatabase database = new GameObjectDatabase();
+
+            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+            {
+                int groupCount = reader.ReadInt32();
+                int[] offsets = new int[groupCount];
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    offsets[i] = reader.ReadInt32();
+                }
+
+                string[] groupNames = Enum.GetNames(typeof(GameObjectGroup));
+                if (groupCount > groupNames.Length - 1)
+                {
+                    Debug.LogError("Binary contains more groups than defined in GameObjectGroup enum.");
+                    return null;
+                }
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                    int gameObjectCount = reader.ReadInt32();
+                    List<GameObjectDatabase.GameObjectData> gameObjects = new List<GameObjectDatabase.GameObjectData>();
+
+                    for (int j = 0; j < gameObjectCount; j++)
+                    {
+                        int gameObjectId = reader.ReadInt32();
+                        string idName = ReadNullTerminatedString(reader);
+                        string addressablePath = ReadNullTerminatedString(reader);
+
+                        gameObjects.Add(new GameObjectDatabase.GameObjectData(
+                            gameObjectID: (GameObjectID)gameObjectId,
+                            idName: idName,
+                            addressablePath: addressablePath
+                        ));
+                    }
+
+                    database.GroupedGameObjectsList.Add(new GameObjectDatabase.GroupedGameObjects(
+                        group: (GameObjectGroup)(i + 1),
+                        gameObjects: gameObjects
+                    ));
+                }
+            }
+
+            return database;
+        }
+
+        private static string ReadNullTerminatedString(BinaryReader reader)
+        {
+            List<byte> bytes = new List<byte>();
+            byte b;
+            while ((b = reader.ReadByte()) != 0)
+            {
+                bytes.Add(b);
+            }
+            return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
+        }
+    }
+}
+        """
+
+        with open(os.path.join(GAMEOBJECT_DATA, 'GameObjectBinaryReader.cs'), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 
     # ENUM_DIR/GameObject ディレクトリを作成
     if not os.path.exists(os.path.join(ENUM_DIR, "GameObject")):
@@ -1701,7 +2158,7 @@ namespace GameCore.GameObject
     # GameObject.json を生成
     with open(os.path.join(ENUM_DIR, "GameObject", "GameObject.json"), 'w', encoding='utf-8') as f:
         gameobject_id_list = []
-        for group, gameobjects in gameobject_data['groups'].items():
+        for group, gameobjects in data['groups'].items():
             for go in gameobjects:
                 go_id = f"{group}_{go['name']}"
                 gameobject_id_list.append({
@@ -1711,13 +2168,15 @@ namespace GameCore.GameObject
                     'value': gameobject_id_map[go_id]
                 })
         json.dump(gameobject_id_list, f, ensure_ascii=False, indent=4)
+    generate_enum_csharp(os.path.join(ENUM_DIR, "GameObject", "GameObject.json"), "GameObject", ENUM_DIR)
 
 def generate_gameobject_bin():
     """
     ゲームオブジェクトデータのバイナリファイルを生成
     """
+    data = load_gameobject_data()
     with open(os.path.join(GAMEOBJECT_DATA, 'gameobject_data.bin'), 'wb') as f:
-        groups = list(gameobject_data['groups'].keys())
+        groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
         offsets = [0] * group_count
@@ -1727,7 +2186,7 @@ def generate_gameobject_bin():
 
         gameobject_id_map = {'None': 0}
         gameobject_id_counter = 1
-        for group, gameobjects in gameobject_data['groups'].items():
+        for group, gameobjects in data['groups'].items():
             for go in gameobjects:
                 go_id = f"{group}_{go['name']}"
                 if go_id not in gameobject_id_map:
@@ -1736,7 +2195,7 @@ def generate_gameobject_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            gameobjects = gameobject_data['groups'][group]
+            gameobjects = data['groups'][group]
             f.write(struct.pack('i', len(gameobjects)))
             for go in gameobjects:
                 go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
@@ -1751,14 +2210,16 @@ def get_texture_file_path(group_name, index):
     """
     テクスチャの絶対パスを取得
     """
-    if group_name in texture_data['groups'] and index < len(texture_data['groups'][group_name]):
-        return texture_data['groups'][group_name][index]['absolute_path']
+    data = load_texture_data()
+    if group_name in data['groups'] and index < len(data['groups'][group_name]):
+        return data['groups'][group_name][index]['absolute_path']
     return None
 
 def get_sound_file_path(group_name, index):
     """
     サウンドの絶対パスを取得
     """
-    if group_name in sound_data['groups'] and index < len(sound_data['groups'][group_name]):
-        return sound_data['groups'][group_name][index]['absolute_path']
+    data = load_sound_data()
+    if group_name in data['groups'] and index < len(data['groups'][group_name]):
+        return data['groups'][group_name][index]['absolute_path']
     return None

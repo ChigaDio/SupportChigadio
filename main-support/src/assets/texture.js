@@ -2,10 +2,11 @@ import React,{ useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box, Typography, TextField, Button, Accordion, AccordionSummary, AccordionDetails,
-  List, ListItem, ListItemText, IconButton, ListItemSecondaryAction
+  List, ListItem, ListItemText, IconButton, FormControlLabel
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
+import Checkbox from '@mui/material/Checkbox';
 
 function Texture() {
   const [groups, setGroups] = useState({});
@@ -100,9 +101,11 @@ function Texture() {
                   </IconButton>
                 }>
                   <ListItemText
-                    primary={`${texture.name} - ${texture.desc}`}
+                    primary={`${texture.name} - ${texture.desc} - isSpriteSheet:${texture.isSpriteRender ? "True" : "False"}`}
                     secondary={`Path: ${texture.path}`}
+                    
                   />
+                  
                   <img src={`/api/texture/serve/${groupName}/${index}`} alt={texture.name} style={{ maxWidth: '100px', marginLeft: '10px' }} />
                   {texture.sprites && texture.sprites.length > 0 && (
                     <List dense>
@@ -130,12 +133,14 @@ function Texture() {
 function TextureForm({ groupName, onAddTexture }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [isSpriteRender, setIsSpriteRender] = useState(false);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onAddTexture(groupName, { name, desc });
+    onAddTexture(groupName, { name, desc, isSpriteRender });
     setName('');
     setDesc('');
+    setIsSpriteRender(false);
   };
 
   return (
@@ -153,6 +158,17 @@ function TextureForm({ groupName, onAddTexture }) {
         onChange={(e) => setDesc(e.target.value)}
         sx={{ mr: 2, mt: 1 }}
       />
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={isSpriteRender}
+            onChange={(e) => setIsSpriteRender(e.target.checked)}
+          />
+        }
+        label="Is Sprite"
+        sx={{ mt: 2 }}
+      />
+
       <Button type="submit" variant="contained" sx={{ mt: 1, ml: 2 }}>
         Add Texture (Select File)
       </Button>
