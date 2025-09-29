@@ -20,6 +20,8 @@ import ScenarioEventTransition from './components/ScenarioEventTransition';
 import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 
 import Sound from './assets/sound';
+import Texture from './assets/texture';
+import GameObject from './assets/gameobject';
 
 function AppContent() {
   const navigate = useNavigate();
@@ -68,6 +70,12 @@ function AppContent() {
         case 'sound':
           navigate('sound');
           break;
+        case 'texture':
+          navigate('texture');
+          break;
+        case 'gameobject':
+          navigate('gameobject');
+          break;
         default:
           navigate('sound'); // Assets default
       }
@@ -99,6 +107,8 @@ function AppContent() {
           <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
           <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
           <Route path="/sound" element={<Sound />} />
+          <Route path="/texture" element={<Texture />} />
+          <Route path="/gameobject" element={<GameObject />} />
         </Routes>
       </Box>
     </Box>

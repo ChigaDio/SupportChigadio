@@ -24,6 +24,8 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
       name: 'Assets',
       subItems: [
         { name: 'Sound', key: 'sound' },
+        { name: 'Texture', key: 'texture' },
+        { name: 'GameObject', key: 'gameobject' },
       ],
     },
     {

@@ -5,7 +5,7 @@ import shutil
 import struct
 import subprocess
 import sys
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, send_file, send_from_directory, jsonify, request
 import os
 import json
 
@@ -36,6 +36,9 @@ app = Flask(__name__, static_folder=STATIC_FOLDER)
 ENUM = 'enum'
 CLASS_DATA = 'class-data'
 STATE_DATA = 'state-data'
+
+SCRIPT = 'Script'
+EDITOR = "Editor"
 
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
@@ -511,26 +514,10 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-        string fileName = "all_class_data.bin";
-        string path = string.Empty;
+
+        string path = SupportFiles.ALL_ID_BIN;
 
 
-        string[] found = Directory.GetFiles(SupportFiles.ALL_ID_BIN);
-        if (found.Length > 0)
-        {
-            path = found[0];
-        }
-        else
-        {
-            Debug.LogError($"{fileName} が見つかりませんでした。");
-            return;
-        }
-
-        if (!File.Exists(path))
-        {
-            Debug.LogError($"指定ファイルが存在しません: {path}");
-            return;
-        }
 
         try
         {
@@ -613,26 +600,10 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-        string fileName = "all_class_data_matrix.bin";
-        string path = string.Empty;
+
+        string path = SupportFiles.ALL_MATRIX_ID_BIN;
 
 
-        string[] found = Directory.GetFiles(SupportFiles.ALL_MATRIX_ID_BIN);
-        if (found.Length > 0)
-        {
-            path = found[0];
-        }
-        else
-        {
-            Debug.LogError($"{fileName} が見つかりませんでした。");
-            return;
-        }
-
-        if (!File.Exists(path))
-        {
-            Debug.LogError($"指定ファイルが存在しません: {path}");
-            return;
-        }
 
         try
         {
@@ -672,9 +643,224 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
 }
 
 
+
     """
     
     with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "ClassDataMatrixIDCore.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+        
+if not os.path.exists(os.path.join(DATA_DIR, SCRIPT)):
+    os.makedirs(os.path.join(DATA_DIR, SCRIPT))
+    
+if not os.path.exists(os.path.join(DATA_DIR, SCRIPT,EDITOR)):
+    os.makedirs(os.path.join(DATA_DIR, SCRIPT,EDITOR))
+    
+if not os.path.exists(os.path.join(DATA_DIR, SCRIPT,"SupportFiles.cs")):
+    code_str = """
+    using UnityEngine;
+using System;
+using System.IO;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+namespace GameCore
+{
+    /// <summary>
+    /// サポートデータ内の代表的なファイルを一箇所で定義して取得できるヘルパー。
+    /// ALL_SOUND_BIN など、呼び出し側はその名前だけ参照すればフルパスが返る。
+    /// </summary>
+    public static class SupportFiles
+    {
+        public const string SUPPORT_ROOT_NAME = "SupportChigadio";
+        public const string SUPPORT_DATA_NAME = "data";
+
+        // data直下のフォルダ
+        public const string ASSETS_FOLDER = "assets-data";
+        public const string SOUND_FOLDER = "sound";
+
+        //dataID
+        public const string ID_FOLDER = "class-data-id";
+        public const string ID_BIN_FILE = "all_class_data.bin";
+
+        //matrixID
+        public const string MATRIX_DATA_ID_FOLDER = "class-data-matrix-id";
+        public const string MATRIX_ID_BIN_FILE = "all_class_data_matrix.bin";
+
+        // ファイル名（ここだけ定義すればOK）
+        public const string ALL_SOUND_BIN_FILE = "sound_data.bin";
+
+        // キャッシュ（最初に解決したパスを保持）
+        public static string s_cachedSupportDataPath = null;
+
+        /// <summary>
+        /// SupportChigadio/data のフルパスを取得（キャッシュあり／EditorではAssetDatabaseを試行）
+        /// </summary>
+        private static string SupportDataPath
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(s_cachedSupportDataPath)) return s_cachedSupportDataPath;
+
+#if UNITY_EDITOR
+                // EditorならAssetDatabaseでまず探す（ただしメインスレッドでないと例外になる可能性があるので try/catch）
+                try
+                {
+                    string assetsRelative = FindFolderPathByAssetDatabase(SUPPORT_ROOT_NAME); // "Assets/..."
+                    if (!string.IsNullOrEmpty(assetsRelative))
+                    {
+                        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                        string absoluteSupportRoot = Path.GetFullPath(Path.Combine(projectRoot, assetsRelative)); // -> .../Project/Assets/.../SupportChigadio
+                        string dataPath = Path.Combine(absoluteSupportRoot, "..",SUPPORT_DATA_NAME);
+                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\", "/");
+                        return s_cachedSupportDataPath;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"AssetDatabase lookup failed (maybe called from background thread): {e.Message}. Falling back to filesystem.");
+                }
+#endif
+                // ファイルシステム上での候補（projectRoot/SupportChigadio/data）
+                string projectRootFs = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                string candidate = Path.Combine(projectRootFs, SUPPORT_ROOT_NAME, SUPPORT_DATA_NAME);
+                if (Directory.Exists(candidate))
+                {
+                    s_cachedSupportDataPath = Path.GetFullPath(candidate).Replace("\\", "/");
+                    return s_cachedSupportDataPath;
+                }
+
+                // それでも見つからなければプロジェクト内を検索（重い可能性あり）
+                try
+                {
+                    var dirs = Directory.GetDirectories(projectRootFs, SUPPORT_ROOT_NAME, SearchOption.AllDirectories);
+                    if (dirs != null && dirs.Length > 0)
+                    {
+                        string found = dirs[0];
+                        string dataPath = Path.Combine(found, SUPPORT_DATA_NAME);
+                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\", "/");
+                        return s_cachedSupportDataPath;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"Fallback search failed: {ex.Message}");
+                }
+
+                // 最後の最終手段：Project直下の GameData を使う
+                string fallback = Path.Combine(projectRootFs, "GameData");
+                s_cachedSupportDataPath = Path.GetFullPath(fallback).Replace("\\", "/");
+                return s_cachedSupportDataPath;
+            }
+        }
+
+        /// <summary>
+        /// これだけ参照すれば all_sound.bin のフルパスが得られる（呼び出し側はこれだけ見れば良い）
+        /// </summary>
+        public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
+
+#if UNITY_EDITOR
+        // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
+        private static string FindFolderPathByAssetDatabase(string folderName)
+        {
+            string[] guids = AssetDatabase.FindAssets("t:folder " + folderName, new[] { "Assets" });
+            foreach (var guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid); // "Assets/...."
+                if (AssetDatabase.IsValidFolder(path) && Path.GetFileName(path) == folderName)
+                    return path;
+            }
+            return null;
+        }
+#endif
+
+        /// <summary>
+        /// 補助：絶対パスがプロジェクト内（Projectルート）に含まれるなら "Assets/..." 相対パスを返す。AssetDatabase系APIに渡したいときに使える。
+        /// </summary>
+        public static string GetAssetRelativePath(string absolutePath)
+        {
+            if (string.IsNullOrEmpty(absolutePath)) return null;
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/");
+            absolutePath = Path.GetFullPath(absolutePath).Replace("\\", "/");
+            if (absolutePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                string rel = absolutePath.Substring(projectRoot.Length).TrimStart('/', '\\');
+                return rel;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 存在確認のショートカット
+        /// </summary>
+        public static bool ALL_SOUND_BIN_Exists => File.Exists(ALL_SOUND_BIN);
+    }
+}
+
+"""
+    with open(os.path.join(DATA_DIR, SCRIPT,"SupportFiles.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+
+if not os.path.exists(os.path.join(DATA_DIR, SCRIPT,EDITOR,"SupportFilesPostprocessor.cs")):
+    code_str = """
+    #if UNITY_EDITOR
+using UnityEditor.Build;
+using UnityEditor.Build.Reporting;
+using UnityEngine;
+using System.IO;
+using System.Collections.Generic;
+using GameCore;
+
+public class SupportFilesPostprocessor : IPostprocessBuildWithReport
+{
+    public int callbackOrder => 100;
+
+    public void OnPostprocessBuild(BuildReport report)
+    {
+        string buildDir = Path.GetDirectoryName(report.summary.outputPath);
+        if (string.IsNullOrEmpty(buildDir)) return;
+
+        // コピー対象のファイルと、それぞれの SupportChigadio/data 以下の相対フォルダ
+        var allFiles = new List<(string filePath, string targetSubFolder)>
+        {
+            (SupportFiles.ALL_SOUND_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.SOUND_FOLDER)),
+            (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
+            (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER)
+        };
+
+        foreach (var (filePath, targetFolder) in allFiles)
+        {
+            CopySupportFileToTargetFolder(filePath, buildDir, targetFolder);
+        }
+    }
+
+    private void CopySupportFileToTargetFolder(string sourceFilePath, string buildRoot, string targetSubFolder)
+    {
+        if (!File.Exists(sourceFilePath))
+        {
+            Debug.LogWarning($"[SupportFilesPostprocessor] Source file not found: {sourceFilePath}");
+            return;
+        }
+
+        string destPath = Path.Combine(buildRoot, SupportFiles.SUPPORT_ROOT_NAME, SupportFiles.SUPPORT_DATA_NAME, targetSubFolder, Path.GetFileName(sourceFilePath));
+
+        // コピー先フォルダを作成
+        string destDir = Path.GetDirectoryName(destPath);
+        if (!Directory.Exists(destDir))
+            Directory.CreateDirectory(destDir);
+
+        // 上書きコピー
+        File.Copy(sourceFilePath, destPath, true);
+        Debug.Log($"[SupportFilesPostprocessor] Copied {sourceFilePath} -> {destPath}");
+    }
+}
+#endif
+
+    """
+    
+    with open(os.path.join(DATA_DIR, SCRIPT,EDITOR,"SupportFilesPostprocessor.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
     
 # Enum-ID管理
@@ -3514,6 +3700,93 @@ def generate_all_event_bin_endpoint():
 #===============================================================================
 #Assets
 
+# Texture
+@app.route('/api/texture', methods=['GET'])
+def get_texture():
+    return jsonify(assets.get_texture_data())
+
+@app.route('/api/texture/add_group', methods=['POST'])
+def add_texture_group():
+    data = request.json
+    assets.add_texture_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/texture/delete_group', methods=['POST'])
+def delete_texture_group():
+    data = request.json
+    assets.delete_texture_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/texture/add_texture', methods=['POST'])
+def add_texture():
+    data = request.json
+    assets.add_texture(
+        data['group_name'],
+        data['name'],
+        data['desc']
+    )
+    return jsonify({'status': 'success'})
+
+@app.route('/api/texture/delete_texture', methods=['POST'])
+def delete_texture():
+    data = request.json
+    assets.delete_texture(data['group_name'], data['index'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/texture/generate', methods=['POST'])
+def generate_texture_files():
+    assets.generate_texture_csharp()
+    assets.generate_texture_bin()
+    return jsonify({'status': 'success'})
+
+@app.route('/api/texture/serve/<group_name>/<int:index>')
+def serve_texture(group_name, index):
+    file_path = assets.get_texture_file_path(group_name, index)
+    if file_path and os.path.exists(file_path):
+        return send_file(file_path, mimetype='image/png')
+    return jsonify({'error': 'File not found'}), 404
+
+# GameObject
+@app.route('/api/gameobject', methods=['GET'])
+def get_gameobject():
+    return jsonify(assets.get_gameobject_data())
+
+@app.route('/api/gameobject/add_group', methods=['POST'])
+def add_gameobject_group():
+    data = request.json
+    assets.add_gameobject_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/gameobject/delete_group', methods=['POST'])
+def delete_gameobject_group():
+    data = request.json
+    assets.delete_gameobject_group(data['group_name'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/gameobject/add_gameobject', methods=['POST'])
+def add_gameobject():
+    data = request.json
+    assets.add_gameobject(
+        data['group_name'],
+        data['name'],
+        data['desc']
+    )
+    return jsonify({'status': 'success'})
+
+@app.route('/api/gameobject/delete_gameobject', methods=['POST'])
+def delete_gameobject():
+    data = request.json
+    assets.delete_gameobject(data['group_name'], data['index'])
+    return jsonify({'status': 'success'})
+
+@app.route('/api/gameobject/generate', methods=['POST'])
+def generate_gameobject_files():
+    assets.generate_gameobject_csharp()
+    assets.generate_gameobject_bin()
+    return jsonify({'status': 'success'})
+
+
+
 #=================================================-----
 # Sound
 
@@ -3597,6 +3870,14 @@ def open_code(state_name, node_label):
         return jsonify({"message": "Opened in Visual Studio"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+# Sound serve endpoint for playback
+@app.route('/api/sound/serve/<group_name>/<int:index>')
+def serve_sound(group_name, index):
+    file_path = assets.get_sound_file_path(group_name, index)
+    if file_path and os.path.exists(file_path):
+        return send_file(file_path, mimetype='audio/mpeg')
+    return jsonify({'error': 'File not found'}), 404
 
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})

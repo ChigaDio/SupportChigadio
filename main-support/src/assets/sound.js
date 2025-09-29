@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box, Typography, TextField, Button, Accordion, AccordionSummary, AccordionDetails,
@@ -6,10 +6,13 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
 
 function Sound() {
   const [groups, setGroups] = useState({});
   const [newGroupName, setNewGroupName] = useState('');
+  const [playing, setPlaying] = useState({});
 
   useEffect(() => {
     fetchGroups();
@@ -71,6 +74,19 @@ function Sound() {
     }
   };
 
+  const togglePlay = (groupName, index, audioRef) => {
+    setPlaying(prev => {
+      const key = `${groupName}-${index}`;
+      const isPlaying = prev[key];
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        audioRef.current.play().catch(error => console.error('Playback failed:', error));
+      }
+      return { ...prev, [key]: !isPlaying };
+    });
+  };
+
   return (
     <Box>
       <Typography variant="h4">Sound Management</Typography>
@@ -93,18 +109,28 @@ function Sound() {
           </AccordionSummary>
           <AccordionDetails>
             <List>
-              {sounds.map((sound, index) => (
-                <ListItem key={index} secondaryAction={
-                  <IconButton onClick={() => deleteSound(groupName, index)}>
-                    <DeleteIcon />
-                  </IconButton>
-                }>
-                  <ListItemText
-                    primary={`${sound.name} - ${sound.desc}`}
-                    secondary={`Path: ${sound.path}, Volume: ${sound.volume}, Type: ${sound.type}`}
-                  />
-                </ListItem>
-              ))}
+              {sounds.map((sound, index) => {
+                const audioRef = React.createRef();
+                const key = `${groupName}-${index}`;
+                return (
+                  <ListItem key={index} secondaryAction={
+                    <>
+                      <IconButton onClick={() => togglePlay(groupName, index, audioRef)}>
+                        {playing[key] ? <StopIcon /> : <PlayArrowIcon />}
+                      </IconButton>
+                      <IconButton onClick={() => deleteSound(groupName, index)}>
+                        <DeleteIcon />
+                      </IconButton>
+                    </>
+                  }>
+                    <ListItemText
+                      primary={`${sound.name} - ${sound.desc}`}
+                      secondary={`Path: ${sound.path}, Volume: ${sound.volume}, Type: ${sound.type}`}
+                    />
+                    <audio ref={audioRef} src={`/api/sound/serve/${groupName}/${index}`} />
+                  </ListItem>
+                );
+              })}
             </List>
             <SoundForm groupName={groupName} onAddSound={addSound} />
           </AccordionDetails>
