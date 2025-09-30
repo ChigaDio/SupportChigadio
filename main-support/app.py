@@ -879,8 +879,6 @@ def manage_enum_id():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # 'view' キーを含む要素を除外
-                data = [item for item in data if 'view' not in item]
             logger.debug(f"Returning enum-id: {data}")
             return jsonify(data)
         except FileNotFoundError:

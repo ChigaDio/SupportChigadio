@@ -656,7 +656,7 @@ namespace GameCore.Sound
             foreach (var sound in sounds.Sounds)
             {
                 var addressable = new AddressableData<AudioClip>(groupCategory, AssetCategory.Audio);
-                AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Audio, addressable);
+                
                 tasks.Add(addressable.LoadAsync(sound.AddressablePath, clip =>
                 {
                     if (addressable.IsLoadedAndSetup)
@@ -888,7 +888,7 @@ namespace GameCore.Sound
     if not os.path.exists(os.path.join(SOUND_DATA, 'SoundDatabase.cs')):
         code_str = """
 using System.Collections.Generic;
-
+using GameCore.Enums;
 namespace GameCore.Sound
 {
     public class SoundDatabase
@@ -947,7 +947,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
-
+using GameCore.Enums;
 namespace GameCore.Sound
 {
     public class SoundBinaryReader
@@ -1275,7 +1275,6 @@ namespace GameCore.Texture
                 {
                     // スプライトシート自体のロード
                     var addressableSpriteSheet = new TextureAddressableData(groupCategory, AssetCategory.Sprite, true);
-                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, addressableSpriteSheet);
                     tasks.Add(addressableSpriteSheet.LoadAsync(texture.AddressablePath, texture.Sprites.Count, obj =>
                     {
                         if (addressableSpriteSheet.IsLoadedAndSetup)
@@ -1287,31 +1286,11 @@ namespace GameCore.Texture
                         Debug.LogError($"Failed to load sprite sheet for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
                     }).AttachExternalCancellation(destroyToken));
 
-                    // 個々のスプライトのロード（スプライト数が1の場合は不要）
-                    if (texture.Sprites.Count <= 1) continue;
-
-                    foreach (var sprite in texture.Sprites)
-                    {
-                        var spriteAddressable = new TextureAddressableData(groupCategory, AssetCategory.Sprite, true);
-                        AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Sprite, spriteAddressable);
-                        string spritePath = $"{texture.AddressablePath}#{sprite.IdName}";
-                        tasks.Add(spriteAddressable.LoadAsync(spritePath, 1, obj =>
-                        {
-                            if (spriteAddressable.IsLoadedAndSetup)
-                            {
-                                loadedAssets[group][sprite.TextureID] = spriteAddressable;
-                            }
-                        }, ex =>
-                        {
-                            Debug.LogError($"Failed to load sprite for {sprite.TextureID} at {spritePath}: {ex.Message}");
-                        }).AttachExternalCancellation(destroyToken));
-                    }
                 }
                 else
                 {
                     // テクスチャのロード
                     var addressableTexture = new TextureAddressableData(groupCategory, AssetCategory.Texture, false);
-                    AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.Texture, addressableTexture);
                     tasks.Add(addressableTexture.LoadAsync(texture.AddressablePath, 0, obj =>
                     {
                         if (addressableTexture.IsLoadedAndSetup)
@@ -1522,7 +1501,7 @@ namespace GameCore.Texture
     if not os.path.exists(os.path.join(TEXTURE_DATA, 'TextureDatabase.cs')):
         code_str = """
 using System.Collections.Generic;
-
+using GameCore.Enums;
 namespace GameCore.Texture
 {
     public class TextureDatabase
@@ -1595,11 +1574,11 @@ namespace GameCore.Texture
             
     if not os.path.exists(os.path.join(TEXTURE_DATA, 'TextureBinaryReader.cs')):
         code_str = """
-uusing System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
-
+using GameCore.Enums;
 namespace GameCore.Texture
 {
     public class TextureBinaryReader
@@ -1691,6 +1670,9 @@ namespace GameCore.Texture
     }
 }
         """
+        with open(os.path.exists(os.path.join(TEXTURE_DATA, 'TextureBinaryReader.cs')),"w",encoding='utf-8') as f:
+            f.write(code_str)
+            
 
     # ENUM_DIR/Texture ディレクトリを作成
     if not os.path.exists(os.path.join(ENUM_DIR, "Texture")):
@@ -1952,7 +1934,6 @@ namespace GameCore.GameObject
             foreach (var go in gameObjects.GameObjects)
             {
                 var addressable = new AddressableData<GameObject>(groupCategory, AssetCategory.GameObject);
-                AddressableDataCore.Instance.AddAddressableData(groupCategory, AssetCategory.GameObject, addressable);
                 tasks.Add(addressable.LoadAsync(go.AddressablePath, obj =>
                 {
                     if (addressable.IsLoadedAndSetup)
@@ -2018,7 +1999,7 @@ namespace GameCore.GameObject
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, 'GameObjectDatabase.cs')):
         code_str = """
 using System.Collections.Generic;
-
+using GameCore.Enums;
 namespace GameCore.GameObject
 {
     public class GameObjectDatabase
