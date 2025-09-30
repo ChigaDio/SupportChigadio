@@ -1670,7 +1670,7 @@ def generate_class_data_id_cs(name):
             for col in columns:
                 type_str = col['type']
                 if type_str in enum_list:
-                    type_str = f"GameCore.Enums.{type_str}"
+                    type_str = f"GameCore.Enums.{type_str}ID"
                 elif type_str in class_list:
                     type_str = f"GameCore.Classes.{type_str}"
                 elif type_str in class_data_id_list:
@@ -1696,7 +1696,7 @@ def generate_class_data_id_cs(name):
                     else:
                         lf.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
                 elif col['type'] in enum_list:
-                    lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']})Enum.ToObject(typeof(GameCore.Enums.{col['type']}), reader.ReadInt32());\n")
+                    lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']}ID)Enum.ToObject(typeof(GameCore.Enums.{col['type']}ID), reader.ReadInt32());\n")
                 elif col['type'] in class_list:
                     lf.write(f"                {col['name']} = new GameCore.Classes.{col['type']}(reader);\n")
                 elif col['type'] in class_data_id_list:
