@@ -6,7 +6,6 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import Papa from 'papaparse';
 import { useMemo } from 'react';
-
 function ClassDataIdDetailGrid() {
   const { name } = useParams();
   const navigate = useNavigate();
@@ -24,21 +23,20 @@ function ClassDataIdDetailGrid() {
   const [columnToDelete, setColumnToDelete] = useState('');
   const apiRef = useGridApiRef();
 
-  const gridRows = useMemo(() => {
-    return data.rows.map((row) => {
-      const rowData = {
-        id: row.id,
-        enum_property: row.enum_property,
-        description: row.description,
-      };
-      data.columns.forEach((col) => {
-        const value = row.data?.[col.name]?.value ?? getDefaultValue(col.type);
-        console.log(`gridRows: col=${col.name}, value=${value}`); // デバッグログ
-        rowData[col.name] = value;
-      });
-      return rowData;
+const gridRows = useMemo(() => {
+  return data.rows.map((row) => {
+    const rowData = {
+      id: row.id,
+      enum_property: row.enum_property,
+      description: row.description,
+    };
+    data.columns.forEach((col) => {
+      rowData[col.name] = row.data?.[col.name]?.value ?? getDefaultValue(col.type);
     });
-  }, [data.rows, data.columns]);
+    return rowData;
+  });
+}, [data.rows, data.columns]);
+
 
   useEffect(() => {
     if (!name || name.includes(':')) {
@@ -133,10 +131,6 @@ function ClassDataIdDetailGrid() {
             return res.json();
           })
           .then(data => ({ [enumItem.name]: data || [] }))
-          .catch(err => {
-            console.warn(`enum ${enumItem.name} の取得エラー: ${err.message}`);
-            return { [enumItem.name]: [] };
-          })
       );
 
       const classIdPromises = classIdList.map(classIdItem =>
@@ -153,10 +147,6 @@ function ClassDataIdDetailGrid() {
             return res.json();
           })
           .then(data => ({ [classIdItem.name]: data.rows.map(row => row.enum_property) || [] }))
-          .catch(err => {
-            console.warn(`classId ${classIdItem.name} の取得エラー: ${err.message}`);
-            return { [classIdItem.name]: [] };
-          })
       );
 
       return Promise.all([...enumPromises, ...classIdPromises]);
@@ -178,10 +168,7 @@ function ClassDataIdDetailGrid() {
       case 'vector2': return [0, 0];
       case 'vector3': return [0, 0, 0];
       default:
-        if (type in enumValues && enumValues[type].length > 0) {
-          const firstValue = enumValues[type][0];
-          return typeof firstValue === 'object' ? `${type}ID.${firstValue.property || ''}` : `${type}ID.${firstValue}`;
-        }
+        if (type in enumValues && enumValues[type].length > 0) return `${type}ID.${enumValues[type][0]['property']}`;
         return '';
     }
   };
@@ -197,7 +184,6 @@ function ClassDataIdDetailGrid() {
     }
     const newColumn = { type: newColType, name: newColName };
     const defaultValue = getDefaultValue(newColType);
-    console.log(`Adding column: ${newColName}, defaultValue: ${defaultValue}`); // デバッグログ
     const updatedColumns = [...data.columns, newColumn];
     const updatedRows = data.rows.map(row => ({
       ...row,
@@ -257,8 +243,7 @@ function ClassDataIdDetailGrid() {
     const newRows = Array.from({ length: recordCount }, (_, index) => {
       const rowData = {};
       data.columns.forEach(col => {
-        const defaultValue = getDefaultValue(col.type);
-        rowData[col.name] = { value: defaultValue, type: col.type };
+        rowData[col.name] = { value: getDefaultValue(col.type), type: col.type };
       });
       return {
         id: maxId + index + 1,
@@ -272,55 +257,53 @@ function ClassDataIdDetailGrid() {
     setRecordCount(1);
   };
 
-  const processRowUpdate = (newRow, oldRow) => {
-    if (!newRow?.id) {
-      console.error('processRowUpdate: newRowにidがありません', newRow);
-      return oldRow;
-    }
-    const updatedRow = {
-      id: newRow.id,
-      enum_property: newRow.enum_property,
-      description: newRow.description,
-      data: {},
+const processRowUpdate = (newRow, oldRow) => {
+  if (!newRow?.id) {
+    console.error('processRowUpdate: newRowにidがありません', newRow);
+    return oldRow;
+  }
+  const updatedRow = {
+    id: newRow.id,
+    enum_property: newRow.enum_property,
+    description: newRow.description,
+    data: {},
+  };
+  data.columns.forEach(col => {
+    updatedRow.data[col.name] = {
+      value: newRow[col.name] ?? getDefaultValue(col.type),
+      type: col.type,
     };
-    data.columns.forEach(col => {
-      const value = newRow[col.name] ?? getDefaultValue(col.type);
-      console.log(`processRowUpdate: col=${col.name}, value=${value}`); // デバッグログ
-      updatedRow.data[col.name] = {
-        value: value,
-        type: col.type,
-      };
-    });
-    const updatedRows = data.rows.map(row =>
-      row.id === newRow.id ? updatedRow : row
-    );
-    setData({ ...data, rows: updatedRows });
-    return newRow;
+  });
+  const updatedRows = data.rows.map(row =>
+    row.id === newRow.id ? updatedRow : row
+  );
+  setData({ ...data, rows: updatedRows });
+  return newRow;
+};
+
+const handleSave = () => {
+  const saveData = {
+    columns: data.columns,
+    rows: data.rows.map(row => ({
+      id: row.id,
+      enum_property: row.enum_property,
+      description: row.description,
+      data: { ...row.data }
+    }))
   };
 
-  const handleSave = () => {
-    const saveData = {
-      columns: data.columns,
-      rows: data.rows.map(row => ({
-        id: row.id,
-        enum_property: row.enum_property,
-        description: row.description,
-        data: { ...row.data }
-      }))
-    };
-
-    fetch(`/api/class-data-id/${encodeURIComponent(name)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(saveData),
+  fetch(`/api/class-data-id/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(saveData),
+  })
+    .then(response => {
+      if (!response.ok) throw new Error(`データ保存に失敗: ${name} (${response.status})`);
+      return response.json();
     })
-      .then(response => {
-        if (!response.ok) throw new Error(`データ保存に失敗: ${name} (${response.status})`);
-        return response.json();
-      })
-      .then(result => alert(result.message))
-      .catch(error => alert('保存エラー: ' + error.message));
-  };
+    .then(result => alert(result.message))
+    .catch(error => alert('保存エラー: ' + error.message));
+};
 
   const handleDelete = () => {
     if (window.confirm(`${name} を削除しますか？`)) {
@@ -450,109 +433,107 @@ function ClassDataIdDetailGrid() {
     }
   };
 
-  const columns = [
-    { field: 'enum_property', headerName: 'Enum Property', width: 150, editable: true },
-    { field: 'description', headerName: '説明', width: 200, editable: true },
-    {
-      field: 'actions',
-      headerName: '操作',
-      width: 100,
-      renderCell: (params) => (
-        <IconButton
-          color="error"
-          size="small"
-          onClick={() => handleDeleteRow(params.row.id)}
-        >
-          <DeleteIcon />
-        </IconButton>
+const columns = [
+  { field: 'enum_property', headerName: 'Enum Property', width: 150, editable: true },
+  { field: 'description', headerName: '説明', width: 200, editable: true },
+  {
+    field: 'actions',
+    headerName: '操作',
+    width: 100,
+    renderCell: (params) => (
+      <IconButton
+        color="error"
+        size="small"
+        onClick={() => handleDeleteRow(params.row.id)}
+      >
+        <DeleteIcon />
+      </IconButton>
+    ),
+  },
+  ...data.columns.map(col => {
+    const isBool = col.type.toLowerCase() === 'bool';
+    const isEnum = col.type in enumValues;
+    const isNumber = col.type.toLowerCase() === 'int' || col.type.toLowerCase() === 'float';
+    const isVector = col.type.toLowerCase() === 'vector2' || col.type.toLowerCase() === 'vector3';
+    const isString = col.type.toLowerCase() === 'string'; // string 型を明示的にチェック
+    return {
+      field: col.name,
+      headerName: col.name,
+      width: 150,
+      editable: true,
+      headerAlign: 'right',
+      renderHeader: () => (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+          <span>{col.name}</span>
+          <IconButton
+            color="error"
+            size="small"
+            onClick={() => {
+              setColumnToDelete(col.name);
+              setOpenDeleteColumn(true);
+            }}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </Box>
       ),
-    },
-    ...data.columns.map(col => {
-      const isBool = col.type.toLowerCase() === 'bool';
-      const isEnum = col.type in enumValues;
-      const isNumber = col.type.toLowerCase() === 'int' || col.type.toLowerCase() === 'float';
-      const isVector = col.type.toLowerCase() === 'vector2' || col.type.toLowerCase() === 'vector3';
-      const isString = col.type.toLowerCase() === 'string';
-      return {
-        field: col.name,
-        headerName: col.name,
-        width: 150,
-        editable: true,
-        headerAlign: 'right',
-        renderHeader: () => (
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-            <span>{col.name}</span>
-            <IconButton
-              color="error"
-              size="small"
-              onClick={() => {
-                setColumnToDelete(col.name);
-                setOpenDeleteColumn(true);
-              }}
-            >
-              <DeleteIcon />
-            </IconButton>
-          </Box>
-        ),
-        type: isNumber ? 'number' : isBool ? 'boolean' : isString ? 'string' : isVector ? 'string' : 'singleSelect',
-        valueOptions: isBool ? [
-          { value: true, label: 'true' },
-          { value: false, label: 'false' }
-        ] : (isEnum ? enumValues[col.type].map(v => ({
-          value: typeof v === 'object' ? (v.id || v.value || '') : v,
-          label: typeof v === 'object' ? `${col.type}ID.${v.property || ''}` : `${col.type}ID.${v}`
-        })) : undefined),
-        valueFormatter: ({ value }) => {
-          console.log(`valueFormatter: col=${col.name}, value=${value}`); // デバッグログ
-          if (value === undefined || value === null) return getDefaultValue(col.type);
-          if (Array.isArray(value)) return JSON.stringify(value);
-          if (typeof value === 'string') return value;
-          if (typeof value === 'object' && value.property) return `${col.type}ID.${value.property}`;
-          return String(value);
-        },
-        valueParser: (value) => {
-          console.log(`valueParser: col=${col.name}, input=${value}`); // デバッグログ
-          let parsedValue = value;
-          try {
-            switch (col.type.toLowerCase()) {
-              case 'int':
-                parsedValue = isNaN(parseInt(value)) ? getDefaultValue(col.type) : parseInt(value);
-                break;
-              case 'float':
-                parsedValue = isNaN(parseFloat(value)) ? getDefaultValue(col.type) : parseFloat(value);
-                break;
-              case 'bool':
-                parsedValue = value === 'true' || value === true || value === '1';
-                break;
-              case 'string':
-                parsedValue = value != null ? String(value) : getDefaultValue(col.type);
-                break;
-              case 'vector2':
-                parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
-                if (!Array.isArray(parsedValue) || parsedValue.length !== 2) throw new Error('不正なVector2形式');
-                break;
-              case 'vector3':
-                parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
-                if (!Array.isArray(parsedValue) || parsedValue.length !== 3) throw new Error('不正なVector3形式');
-                break;
-              default:
-                if (isEnum) {
-                  const enumOpts = enumValues[col.type].map(v => typeof v === 'object' ? `${col.type}ID.${v.property || ''}` : `${col.type}ID.${v}`);
-                  parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : getDefaultValue(col.type));
-                  console.log(`valueParser: enum options=${enumOpts}, selected=${parsedValue}`);
-                } else {
-                  parsedValue = value ?? getDefaultValue(col.type);
-                }
-            }
-          } catch (e) {
-            console.error(`valueParser error for ${col.name}:`, e);
-            parsedValue = getDefaultValue(col.type);
-          }
-          return parsedValue;
-        },
-      };
-    }),
-  ];
+      type: isNumber ? 'number' : isBool ? 'boolean' : isString ? 'string' : isVector ? 'string' : 'singleSelect',
+      valueOptions: isBool ? [
+        { value: true, label: 'true' },
+        { value: false, label: 'false' }
+      ] : (isEnum ? enumValues[col.type].map(v => ({
+        value: `${col.type}ID.${v['property']}`,
+        label: `${v['property']}`
+      })) : undefined),
+
+      valueFormatter: ({ value }) => {
+        if (Array.isArray(value)) {
+          return JSON.stringify(value);
+        }
+        return value;
+      },
+valueParser: (value) => {
+  let parsedValue = value;
+  try {
+    switch (col.type.toLowerCase()) {
+      case 'int':
+        parsedValue = isNaN(parseInt(value)) ? getDefaultValue(col.type) : parseInt(value);
+        break;
+      case 'float':
+        parsedValue = isNaN(parseFloat(value)) ? getDefaultValue(col.type) : parseFloat(value);
+        break;
+      case 'bool':
+        parsedValue = value === 'true' || value === true || value === '1';
+        break;
+      case 'string':
+        parsedValue = value != null ? String(value) : getDefaultValue(col.type);
+        break;
+      case 'vector2':
+        parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
+        if (!Array.isArray(parsedValue) || parsedValue.length !== 2) throw new Error('不正なVector2形式');
+        break;
+      case 'vector3':
+        parsedValue = value ? JSON.parse(value) : getDefaultValue(col.type);
+        if (!Array.isArray(parsedValue) || parsedValue.length !== 3) throw new Error('不正なVector3形式');
+        break;
+      default:
+        if (isEnum) {
+          const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v['property']}`);
+          parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : '');
+        } else {
+          parsedValue = value ?? '';
+        }
+    }
+  } catch (e) {
+    console.error(`valueParser error for ${col.name}:`, e);
+    parsedValue = getDefaultValue(col.type);
+  }
+  return parsedValue;
+},
+
+    };
+  }),
+];
 
   return (
     <Box sx={{ p: 3 }}>
@@ -589,8 +570,8 @@ function ClassDataIdDetailGrid() {
         <Typography>読み込み中...</Typography>
       ) : (
         <div style={{ height: 400, width: '100%' }}>
-          <DataGrid
-            rows={gridRows}
+<DataGrid
+            rows={gridRows} // フラットな gridRows を使用
             columns={columns}
             pageSizeOptions={[5]}
             getRowId={(row) => row.id}
@@ -617,17 +598,13 @@ function ClassDataIdDetailGrid() {
             }}
             onCellEditStop={(params, event) => {
               console.log(`セル編集終了: row=${params.id}, field=${params.field}, reason=${params.reason}`);
-              if (['cellFocusOut', 'enterKeyDown', 'tabKeyDown', 'shiftTabKeyDown'].includes(params.reason)) {
+              if (params.reason === 'cellFocusOut' || params.reason === 'enterKeyDown') {
                 try {
                   apiRef.current.stopCellEditMode({
                     id: params.id,
                     field: params.field,
                     ignoreModifications: false,
                   });
-                  // セルの値を強制更新
-                  const newValue = apiRef.current.getCellValue(params.id, params.field);
-                  console.log(`Updating row: id=${params.id}, field=${params.field}, value=${newValue}`);
-                  apiRef.current.updateRows([{ id: params.id, [params.field]: newValue }]);
                 } catch (error) {
                   console.error('セル編集終了エラー:', error);
                 }
