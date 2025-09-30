@@ -98,6 +98,36 @@ def get_enum_values():
 
     return enum_values
 
+# JSONファイルを読み込む汎用関数
+def load_json_files(item_list, base_dir):
+    data_dict = {}
+    for item in item_list:
+        name = item.get('name')
+        if not name or not isinstance(name, str):
+            print(f"警告: 不正なnameが見つかりました: {item}")
+            continue
+        
+        # JSONファイルのパスを構築
+        json_path = os.path.join(DATA_DIR, base_dir, name, f"{name}.json")
+        
+        try:
+            name += "ID"
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    data_dict[name] = json.load(f)
+                    print(f"成功: {json_path} を読み込みました")
+            else:
+                print(f"警告: {json_path} は存在しません")
+                data_dict[name] = []  # ファイルが存在しない場合は空リストを設定
+        except json.JSONDecodeError as e:
+            print(f"エラー: {json_path} のJSONパースに失敗しました: {e}")
+            data_dict[name] = []
+        except Exception as e:
+            print(f"エラー: {json_path} の読み込み中に予期しないエラーが発生しました: {e}")
+            data_dict[name] = []
+    
+    return data_dict
+
 # 型リスト取得
 def get_type_lists():
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
@@ -105,12 +135,17 @@ def get_type_lists():
     enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')) else []
     class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
+    # enum_listとclass_listからJSONファイルを読み込む
+    enum_data = load_json_files(enum_list, ENUM)
+    class_data_id = load_json_files(class_data_id_list, CLASS_DATA)
     return (
     basic_types,
     unity_types,
     [e.get('name') for e in enum_list] if enum_list else [],
     [c.get('name') for c in class_list] if class_list else [],
-    [c.get('name') for c in class_data_id_list] if class_data_id_list else []
+    [c.get('name') for c in class_data_id_list] if class_data_id_list else [],
+    enum_data if enum_data else [],
+    class_data_id if class_data_id else []
 )
     
 def get_json_enum(name):
@@ -1102,7 +1137,7 @@ def manage_class_detail(name):
 def generate_class_cs(name):
     try:
         data = request.get_json()
-        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name)):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA, name), exist_ok=True)
         cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
@@ -1179,19 +1214,11 @@ def generate_binary_data(name, json_data):
     binary_data = bytearray()
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
-    basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
+    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+    
     binary_data.extend(struct.pack('i', len(rows)))
     binary_data.extend(struct.pack('i', len(columns)))
     
-    enum_map = []
-    class_data_id_map = []
-    
-    for col in columns:
-        type_name = col['type']
-        if type_name in enum_list:
-            enum_map.append((type_name, get_json_enum(type_name)))
-        elif type_name in class_data_id_list:
-            class_data_id_map.append((type_name, get_json_data_id(type_name)))
     for col in columns:
         name_encoded = col['name'].encode('utf-8')
         type_encoded = col['type'].encode('utf-8')
@@ -1201,48 +1228,37 @@ def generate_binary_data(name, json_data):
         binary_data.extend(type_encoded)
     
     for row in rows:
-        enum_val = row.get('enum_property', '')
-        try:
-            enum_id = int(row['id'])
-            binary_data.extend(struct.pack('i', enum_id))
-        except (ValueError, IndexError):
-            binary_data.extend(struct.pack('i', 0))
+        binary_data.extend(struct.pack('i', row.get('id', 0)))
         for col in columns:
-            cell = row['data'][col['name']]
-            value = cell['value']
-            type_ = col['type']
+            cell = row['data'].get(col['name'], {})
+            value = cell.get('value') if isinstance(cell, dict) else cell
+            type_ = col['type'].lower()
+            type_id = col['type'] + 'ID'
+            
             if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
+                binary_data.extend(struct.pack('i', 0))
                 continue
-            if type_.lower() in TYPE_MAP:
-                if TYPE_MAP[type_.lower()]['pack'] is not None:
-                    binary_data.extend(struct.pack(TYPE_MAP[type_.lower()]['pack'], value))
-                elif type_.lower() == 'string':
-                    encoded = value.encode('utf-8')
+            if type_ in TYPE_MAP:
+                if type_ == 'string':
+                    encoded = value.encode('utf-8') if isinstance(value, str) else b''
                     binary_data.extend(struct.pack('i', len(encoded)) + encoded)
-                elif type_.lower() == 'vector2':
-                    binary_data.extend(struct.pack('ff', *value))
-                elif type_.lower() == 'vector3':
-                    binary_data.extend(struct.pack('fff', *value))
-            elif type_ in [t for t, _ in enum_map]:
-                # Handle enum types
-                enum_data = next((m for t, m in enum_map if t == type_), None)
-                if enum_data:
-                    property_name = value.split('.')[-1] if '.' in value else value
-                    matching_entry = next((entry for entry in enum_data if entry['property'] == property_name), None)
-                    num_value = matching_entry['value'] if matching_entry else 0
-                    binary_data.extend(struct.pack('i', num_value))
+                elif type_ == 'vector2':
+                    binary_data.extend(struct.pack('ff', *value if isinstance(value, (list, tuple)) and len(value) >= 2 else [0.0, 0.0]))
+                elif type_ == 'vector3':
+                    binary_data.extend(struct.pack('fff', *value if isinstance(value, (list, tuple)) and len(value) >= 3 else [0.0, 0.0, 0.0]))
                 else:
-                    binary_data.extend(struct.pack('i', 0))
-            elif type_ in [t for t, _ in class_data_id_map]:
-                # Handle class_data_id types
-                class_data = next((m for t, m in class_data_id_map if t == type_), None)
-                if class_data:
-                    property_name = value.split('.')[-1] if '.' in value else value
-                    matching_entry = next((entry for entry in class_data['rows'] if entry['enum_property'] == property_name), None)
-                    num_value = matching_entry['id'] if matching_entry else 0
-                    binary_data.extend(struct.pack('i', num_value))
-                else:
-                    binary_data.extend(struct.pack('i', 0))
+                    binary_data.extend(struct.pack(TYPE_MAP[type_]['pack'], value if value is not None else TYPE_MAP[type_].get('default', 0)))
+            elif type_id in enum_data:
+                property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)
+                binary_data.extend(struct.pack('i', actual_id))
+            elif type_id in class_data_id:
+                property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
+                binary_data.extend(struct.pack('i', actual_id))
+            else:
+                binary_data.extend(struct.pack('i', 0))
+    
     return binary_data
 
 @app.route('/api/generate-all-binary', methods=['POST'])
@@ -1638,7 +1654,7 @@ def generate_class_data_id_cs(name):
         data = request.get_json()
         columns = data['columns']
         rows = data['rows']
-        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list ,enum_data,class_data_id= get_type_lists()
         enum_name = f"{name}TableID"  # Enum名をTableIDに変更
 
         # 出力ディレクトリ作成
@@ -1827,27 +1843,32 @@ def generate_binary(name):
         data = request.get_json()
         columns = data['columns']
         rows = data['rows']
-        if  not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, f"{name}",f"{name}Table.bin")):
-            os.makedirs(os.path.join(DATA_DIR, CLASS_DATA_ID, f"{name}"), exist_ok=True)
         bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bin")
-        basic_types, unity_types, enum_list, class_list, class_data_id_list = get_type_lists()
+        os.makedirs(os.path.dirname(bin_path), exist_ok=True)
+        
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+        
         with open(bin_path, 'wb') as f:
             # ヘッダ: 行数, カラム数
             f.write(struct.pack('ii', len(rows), len(columns)))
+            
             # カラムメタ: 名前長, 名前, 型名長, 型名
-            #for col in columns:
-            #    name_bytes = col['name'].encode('utf-8')
-            #    type_bytes = col['type'].encode('utf-8')
-            #    f.write(struct.pack('i', len(name_bytes)))
-            #    f.write(name_bytes)
-            #    f.write(struct.pack('i', len(type_bytes)))
-            #    f.write(type_bytes)
+            for col in columns:
+                name_bytes = col['name'].encode('utf-8')
+                type_bytes = col['type'].encode('utf-8')
+                f.write(struct.pack('i', len(name_bytes)))
+                f.write(name_bytes)
+                f.write(struct.pack('i', len(type_bytes)))
+                f.write(type_bytes)
+            
             # データ: 行ごとにEnumValue, 各カラム値
             for row in rows:
-                f.write(struct.pack('i', row['id']))
+                f.write(struct.pack('i', row.get('id', 0)))
                 for col in columns:
                     col_type = col['type'].lower()
                     col_value = row['data'].get(col['name'])
+                    type_id = col['type'] + 'ID'
+                    
                     if col_type in TYPE_MAP:
                         actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
                         if col_type == 'string':
@@ -1867,10 +1888,19 @@ def generate_binary(name):
                         else:
                             default_value = 0 if col_type in ['int', 'float'] else False
                             f.write(struct.pack(TYPE_MAP[col_type]['pack'], actual_value if actual_value is not None else default_value))
-
-                    elif col['type'] in enum_list:
-                        actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
-                        f.write(struct.pack('i', int(actual_value) if actual_value is not None else 0))
+                    
+                    elif type_id in enum_data:
+                        # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
+                        property_name = col_value['value'].split('.')[-1]
+                        actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)
+                        f.write(struct.pack('i', actual_id))
+                    
+                    elif type_id in class_data_id:
+                        # 文字列ならPersonalityID.以降を取得、辞書ならvalueを使用
+                        property_name = col_value['value'].split('.')[-1]
+                        actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
+                        f.write(struct.pack('i', actual_id))
+                    
                     elif col['type'] in class_list:
                         class_data = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, f"{col['type']}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, f"{col['type']}.json")) else []
                         for item in class_data:
@@ -1887,8 +1917,10 @@ def generate_binary(name):
                                     write_binary_field(f, v, item['type'], enum_list, class_list)
                             else:
                                 write_binary_field(f, item_value, item['type'], enum_list, class_list)
+                    
                     else:
                         f.write(struct.pack('i', 0))  # 未サポート型
+        
         return jsonify({"message": f"Binary generated: {bin_path}"})
     except Exception as e:
         logger.error(f"Error generating binary for {name}: {str(e)}")
@@ -1995,7 +2027,7 @@ def generate_state_manager_data(file_path, name, json_data):
     base_code_str = []
 
 
-    base_list,unity_types,enum_list, class_list,class_data_id_list = get_type_lists()
+    base_list,unity_types,enum_list, class_list,class_data_id_list,enum_data,class_data_id = get_type_lists()
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
     unity_types = [
     'GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 
@@ -2204,7 +2236,7 @@ def generate_state_classes(file_path, name, json_data):
 
 
     # 型情報の取得（ダミー関数、外で定義する想定）
-    basic_types, unity_types, enum_list, class_list,class_data_id_list = get_type_lists()  
+    basic_types, unity_types, enum_list, class_list,class_data_id_list,enum_data,class_data_id = get_type_lists()  
 
     basic_types = [
         'int', 'float', 'bool', 'string', 'double',
@@ -2861,33 +2893,43 @@ def generate_binary_matrix(name):
         row_keys = list(json_data['data'].keys())
         col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
         fields = json_data['fields']
-        enum_values = get_enum_values()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
 
-        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}.bin"), 'wb') as f:
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bin"), 'wb') as f:
             f.write(struct.pack('i', len(row_keys)))
             for rk in row_keys:
-                f.write(struct.pack('i', enum_values[json_data['rowId']].index(rk)))
+                f.write(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
             f.write(struct.pack('i', len(col_keys)))
             for ck in col_keys:
-                f.write(struct.pack('i', enum_values[json_data['colId']].index(ck)))
+                f.write(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
             for rk in row_keys:
                 for ck in col_keys:
                     cell = json_data['data'][rk][ck]
                     for field in fields:
                         value = cell[field['name']]
                         t = field['type'].lower()
+                        type_id = field['type'] + 'ID'
                         if t in TYPE_MAP:
                             if t == 'vector2':
                                 f.write(struct.pack('ff', *value))
                             elif t == 'vector3':
                                 f.write(struct.pack('fff', *value))
+                            elif t == 'string':
+                                encoded = value.encode('utf-8')
+                                f.write(struct.pack('i', len(encoded)) + encoded)
                             else:
                                 f.write(struct.pack(TYPE_MAP[t]['pack'], value))
-                        elif t in enum_values:
-                            f.write(struct.pack('i', enum_values[t].index(value.split('.')[-1])))
+                        elif type_id in enum_data:
+                            property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                            f.write(struct.pack('i', next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)))
+                        elif type_id in class_data_id:
+                            property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                            f.write(struct.pack('i', next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)))
+        
+        return jsonify({"message": f"Binary generated for {name}"})
     except Exception as e:
+        logger.error(f"Error generating binary matrix for {name}: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    return jsonify({"message": f"Binary generated for {name}"})
 
 
 
@@ -2897,20 +2939,21 @@ def generate_binary_matrix_data(name, json_data):
     row_keys = list(json_data['data'].keys())
     col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
     fields = json_data['fields']
-    enum_values = get_enum_values()
+    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
 
     binary_data.extend(struct.pack('i', len(row_keys)))
     for rk in row_keys:
-        binary_data.extend(struct.pack('i', enum_values[json_data['rowId']].index(rk)))
+        binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
     binary_data.extend(struct.pack('i', len(col_keys)))
     for ck in col_keys:
-        binary_data.extend(struct.pack('i', enum_values[json_data['colId']].index(ck)))
+        binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
     for rk in row_keys:
         for ck in col_keys:
             cell = json_data['data'][rk][ck]
             for field in fields:
                 value = cell[field['name']]
                 t = field['type'].lower()
+                type_id = field['type'] + 'ID'
                 if t in TYPE_MAP:
                     if t == 'vector2':
                         binary_data.extend(struct.pack('ff', *value))
@@ -2921,8 +2964,13 @@ def generate_binary_matrix_data(name, json_data):
                         binary_data.extend(struct.pack('i', len(encoded)) + encoded)
                     else:
                         binary_data.extend(struct.pack(TYPE_MAP[t]['pack'], value))
-                elif t in enum_values:
-                    binary_data.extend(struct.pack('i', enum_values[t].index(value.split('.')[-1])))
+                elif type_id in enum_data:
+                    property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                    binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)))
+                elif type_id in class_data_id:
+                    property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+                    binary_data.extend(struct.pack('i', next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)))
+    
     return binary_data
 #Matrixを一つのバイナリファイルにまとめる
 @app.route('/api/generate-all-binary-matrix', methods=['POST'])
