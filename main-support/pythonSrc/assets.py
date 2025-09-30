@@ -344,17 +344,27 @@ public class EditorCommunication : EditorWindow
             }
 
             var assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
-
-            var sprites = new List<string>();
+            var sprites = new List<Sprite>();  // Sprite型でリストにする
             foreach (var obj in assets)
             {
                 if (obj is Sprite sprite)
                 {
-                    sprites.Add(sprite.name);
+                    sprites.Add(sprite);
                 }
             }
 
-            return JsonUtility.ToJson(new Wrapper<string> { items = sprites });
+            // 名前から数値部分を抽出してソート（例: "sprite_10" の "10" をintに変換）
+            sprites.Sort((a, b) =>
+            {
+                int numA = int.Parse(a.name.Split('_').Last());  // 名前が "sprite_数字" 形式の場合
+                int numB = int.Parse(b.name.Split('_').Last());
+                return numA.CompareTo(numB);
+            });
+
+            // 名前リストにする場合
+            var spriteNames = sprites.Select(s => s.name).ToList();
+
+            return JsonUtility.ToJson(new Wrapper<string> { items = spriteNames });
         }
         return null;
     }
