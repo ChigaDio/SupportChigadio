@@ -3218,7 +3218,7 @@ def generate_binary_matrix_data(name, json_data):
         if colId in enum_data:
             binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
         elif rowId in class_data_id:
-            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[rowId]['rows'] if item['enum_property'] == rk), 0)))
+            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[rowId]['rows'] if item['enum_property'] == ck), 0)))
     for rk in row_keys:
         for ck in col_keys:
             cell = json_data['data'][rk][ck]
