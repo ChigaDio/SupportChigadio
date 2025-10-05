@@ -182,7 +182,7 @@ def load_json_files(item_list, base_dir):
         try:
             name += "ID"
             if os.path.exists(json_path):
-                with open(json_path, 'r') as f:
+                with open(json_path, 'r',encoding='utf-8') as f:
                     data_dict[name] = json.load(f)
                     print(f"成功: {json_path} を読み込みました")
             else:
@@ -206,7 +206,7 @@ def get_type_lists():
     class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
     # enum_listとclass_listからJSONファイルを読み込む
     enum_data = load_json_files(enum_list, ENUM)
-    class_data_id = load_json_files(class_data_id_list, CLASS_DATA)
+    class_data_id = load_json_files(class_data_id_list, CLASS_DATA_ID)
     return (
     basic_types,
     unity_types,
