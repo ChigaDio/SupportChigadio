@@ -23,6 +23,8 @@ import Sound from './assets/sound';
 import Texture from './assets/texture';
 import GameObject from './assets/gameobject';
 
+import DbgLog from './components/DebugLog'
+
 function AppContent() {
   const navigate = useNavigate();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
@@ -80,6 +82,14 @@ function AppContent() {
           navigate('sound'); // Assets default
       }
     }
+    else if (menu === 'Debug' && subMenu) {
+      switch (subMenu) {
+        case 'log':
+          navigate('log');
+          break;
+      }
+    }
+    
      else {
       navigate('/');
     }
@@ -109,6 +119,8 @@ function AppContent() {
           <Route path="/sound" element={<Sound />} />
           <Route path="/texture" element={<Texture />} />
           <Route path="/gameobject" element={<GameObject />} />
+          <Route path="/log" element={<DbgLog />} />
+
         </Routes>
       </Box>
     </Box>

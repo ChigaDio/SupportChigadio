@@ -36,6 +36,12 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'ScenarioConditions', key: 'scenario-conditions' },
       ],
     },
+        {
+      name: 'Debug',
+      subItems: [
+        { name: 'Log', key: 'log' },
+      ],
+    },
   ];
 
   return (

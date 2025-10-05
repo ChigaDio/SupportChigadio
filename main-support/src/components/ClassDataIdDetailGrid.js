@@ -168,7 +168,7 @@ const gridRows = useMemo(() => {
       case 'vector2': return [0, 0];
       case 'vector3': return [0, 0, 0];
       default:
-        if (type in enumValues && enumValues[type].length > 0) return `${type}ID.${enumValues[type][0]['property']}`;
+        if (type in enumValues && enumValues[type].length > 0) return `${type}ID.${enumValues[type][0]['property'] || enumValues[type][0]}`;
         return '';
     }
   };
@@ -482,8 +482,8 @@ const columns = [
         { value: true, label: 'true' },
         { value: false, label: 'false' }
       ] : (isEnum ? enumValues[col.type].map(v => ({
-        value: `${col.type}ID.${v['property']}`,
-        label: `${v['property']}`
+        value: `${col.type}ID.${v['property'] || v['enum_property'] || v}`,
+        label: `${v['property'] || v['enum_property'] || v}`
       })) : undefined),
 
       valueFormatter: ({ value }) => {
@@ -518,7 +518,7 @@ valueParser: (value) => {
         break;
       default:
         if (isEnum) {
-          const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v['property']}`);
+          const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v['property'] || v['enum_property'] || v}`);
           parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : '');
         } else {
           parsedValue = value ?? '';

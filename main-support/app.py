@@ -12,12 +12,16 @@ import json
 import psutil
 import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
+import pythonSrc.dbgServer as dbgServer
+import threading
+from pathlib import Path
 
-
+isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     # PyInstallerでビルドされた場合
     BASE_DIR = os.path.dirname(sys.executable)
+    isDbg = False
 else:
     # デバッグ環境（VS Codeなど）
     # main-support/ の1つ上のディレクトリ（project/）を基準にする
@@ -39,6 +43,71 @@ STATE_DATA = 'state-data'
 
 SCRIPT = 'Script'
 EDITOR = "Editor"
+DEBUG = "Debug"
+LOG = "Log"
+
+SUBMODULE = "submodule"
+PLUGIN = "Plugin"
+
+def find_highest_assets_folder(base_folder = BASE_DIR):
+    """
+    BASE_FOLDERから親ディレクトリを遡って、最も上位のAssetsフォルダを検索する。
+    見つからない場合はNoneを返す。
+    """
+    current_path = Path(base_folder).resolve()
+    
+    # ディスクのルートに達するまで親ディレクトリを遡る
+    while current_path != current_path.parent:
+        # 現在のディレクトリ内にAssetsフォルダがあるかチェック
+        assets_path = current_path / "Assets"
+        if assets_path.exists() and assets_path.is_dir():
+            return assets_path
+        # 親ディレクトリに移動
+        current_path = current_path.parent
+    
+    # ルートディレクトリにもAssetsフォルダがあるかチェック
+    assets_path = current_path / "Assets"
+    if assets_path.exists() and assets_path.is_dir():
+        return assets_path
+    
+    return None
+
+def move_dll_files(base_folder = BASE_DIR, plugin_folder_name=os.path.join(SUBMODULE,PLUGIN)):
+    """
+    Pluginフォルダ内のDLLファイルを、最も上位のAssetsフォルダに移動する。
+    """
+    
+    if isDbg:
+        return
+    # Assetsフォルダを検索
+    assets_folder = find_highest_assets_folder(base_folder)
+    if not assets_folder:
+        print("Assetsフォルダが見つかりませんでした。")
+        return
+    
+    print(f"Assetsフォルダが見つかりました: {assets_folder}")
+
+    # Pluginフォルダのパスを構築
+    plugin_folder = Path(base_folder) / plugin_folder_name
+    if not plugin_folder.exists() or not plugin_folder.is_dir():
+        print(f"Pluginフォルダが見つかりません: {plugin_folder}")
+        return
+    
+    # DLLファイルを検索して移動
+    dll_files = list(plugin_folder.glob("*.dll"))
+    if not dll_files:
+        print(f"Pluginフォルダ内にDLLファイルが見つかりません: {plugin_folder}")
+        return
+    
+    for dll_file in dll_files:
+        destination = assets_folder / dll_file.name
+        try:
+            shutil.move(str(dll_file), str(destination))
+            print(f"移動成功: {dll_file} -> {destination}")
+        except Exception as e:
+            print(f"移動失敗: {dll_file} -> {destination}, エラー: {e}")
+            
+move_dll_files()
 
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
@@ -905,6 +974,201 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
     
     with open(os.path.join(DATA_DIR, SCRIPT,EDITOR,"SupportFilesPostprocessor.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
+        
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,DEBUG)):
+    os.mkdir(os.path.join(DATA_DIR,SCRIPT,DEBUG))
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG)):
+    os.makedirs(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG))
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridgeRuntime.cs")):
+    code_str = '''
+    using System;
+using System.Net.WebSockets;
+using UnityEngine;
+using WebSocketSharp;
+using WebSocket = WebSocketSharp.WebSocket;
+
+public class DebugLogBridgeRuntime : MonoBehaviour
+{
+    private WebSocket ws;
+    private const string WebSocketUrl = "ws://localhost:8765"; // Python WebSocketサーバーのURL
+    private float reconnectTimer;
+    private bool isConnecting;
+
+    void Awake()
+    {
+        TryConnect();
+        DontDestroyOnLoad(this);
+    }
+
+    void Update()
+    {
+        // 再接続監視
+        reconnectTimer += Time.deltaTime;
+        if (reconnectTimer > 5f)
+        {
+            reconnectTimer = 0f;
+            if (ws == null || ws.ReadyState != WebSocketSharp.WebSocketState.Open)
+            {
+                TryConnect();
+            }
+        }
+    }
+
+    private void TryConnect()
+    {
+        if (isConnecting) return; // 接続試行中の重複防止
+        isConnecting = true;
+
+        try
+        {
+            // 既存の接続を閉じる
+            ws?.Close();
+
+            // 新しいWebSocketを作成
+            ws = new WebSocket(WebSocketUrl);
+
+            // イベントハンドラを設定（メインスレッドで実行）
+            ws.OnOpen += (sender, e) =>
+            {
+                UnityEngine.Debug.Log("WebSocket connected successfully!");
+            };
+
+            ws.OnError += (sender, e) =>
+            {
+                UnityEngine.Debug.LogWarning($"WebSocket error: {e.Message}");
+                ws = null; // 再接続をトリガー
+            };
+
+            ws.OnClose += (sender, e) =>
+            {
+                UnityEngine.Debug.Log($"WebSocket disconnected. Reason: {e.Reason}");
+                ws = null; // 再接続をトリガー
+            };
+
+            // オプション: サーバーからのメッセージ受信（必要に応じて有効化）
+            // ws.OnMessage += (sender, e) =>
+            // {
+            //     UnityEngine.Debug.Log($"Received message: {e.Data}");
+            // };
+
+            // 非同期接続を試行
+            ws.ConnectAsync();
+        }
+        catch (Exception e)
+        {
+            UnityEngine.Debug.LogWarning($"DebugBridge WebSocket connection failed: {e.Message}");
+            ws = null;
+        }
+        finally
+        {
+            isConnecting = false;
+        }
+    }
+
+    public void SendLog(string message, string type)
+    {
+        if (ws == null || ws.ReadyState != WebSocketSharp.WebSocketState.Open)
+        {
+            UnityEngine.Debug.LogWarning("WebSocket not connected. Skipping send.");
+            return;
+        }
+
+        var json = JsonUtility.ToJson(new LogData
+        {
+            message = message,
+            type = type,
+            time = DateTime.Now.ToString("HH:mm:ss")
+        });
+
+        try
+        {
+            ws.Send(json);
+            UnityEngine.Debug.Log($"Sent log: [{type}] {message}");
+        }
+        catch (Exception e)
+        {
+            UnityEngine.Debug.LogWarning($"Failed to send log: {e.Message}");
+            ws = null; // 再接続をトリガー
+        }
+    }
+
+    [Serializable]
+    private class LogData
+    {
+        public string message;
+        public string type;
+        public string time;
+    }
+
+    void OnDestroy()
+    {
+        if (ws != null)
+        {
+            ws.Close();
+            ws = null;
+        }
+    }
+}
+    '''
+    with open(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridgeRuntime.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+    
+    
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridge.cs")):
+    code_str = '''
+using System.Diagnostics;
+using UnityEngine;
+
+/// <summary>
+/// デバッグ汎用関数
+/// </summary>
+public static class DebugLogBridge
+{
+    private static DebugLogBridgeRuntime runtime;
+
+    [Conditional("UNITY_EDITOR")]
+    [Conditional("DEVELOPMENT_BUILD")]
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void Init()
+    {
+        if (UnityEngine.Debug.isDebugBuild || Application.isEditor)
+        {
+            var go = new GameObject("DebugBridge");
+            Object.DontDestroyOnLoad(go);
+            runtime = go.AddComponent<DebugLogBridgeRuntime>();
+        }
+    }
+
+    [Conditional("UNITY_EDITOR")]
+    [Conditional("DEVELOPMENT_BUILD")]
+    public static void Log(string message)
+    {
+        UnityEngine.Debug.Log(message);
+        runtime?.SendLog(message, "Log");
+    }
+
+    [Conditional("UNITY_EDITOR")]
+    [Conditional("DEVELOPMENT_BUILD")]
+    public static void LogWarning(string message)
+    {
+        UnityEngine.Debug.LogWarning(message);
+        runtime?.SendLog(message, "Warning");
+    }
+
+    [Conditional("UNITY_EDITOR")]
+    [Conditional("DEVELOPMENT_BUILD")]
+    public static void LogError(string message)
+    {
+        UnityEngine.Debug.LogError(message);
+        runtime?.SendLog(message, "Error");
+    }
+}
+
+    '''
+    with open(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridge.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+    
+    
     
 # Enum-ID管理
 @app.route('/api/enum-id', methods=['GET', 'POST', 'PATCH'])
@@ -3945,5 +4209,20 @@ def serve_static(path):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, 'index.html')
 
+def flask_main():
+    app.run(debug=True, port=8000,use_reloader=False)
+
 if __name__ == '__main__':
-    app.run(debug=True, port=8000)
+    websocket_thread = threading.Thread(target=dbgServer.mainServer, daemon=True)
+    flask_thread = threading.Thread(target=flask_main, daemon=True)
+    
+    # Start both threads
+    flask_thread.start()
+    websocket_thread.start()
+
+    # Keep the main thread alive
+    try:
+        websocket_thread.join()
+        flask_thread.join()
+    except KeyboardInterrupt:
+        print("Shutting down servers...")
