@@ -3202,15 +3202,23 @@ def generate_binary_matrix_data(name, json_data):
     binary_data = bytearray()
     row_keys = list(json_data['data'].keys())
     col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
+    rowId = json_data['rowId'] + "ID"
+    colId = json_data['colId'] + "ID"
     fields = json_data['fields']
     basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
 
     binary_data.extend(struct.pack('i', len(row_keys)))
     for rk in row_keys:
-        binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
+        if rowId in enum_data:
+            binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
+        elif rowId in class_data_id:
+            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[rowId]['rows'] if item['enum_property'] == rk), 0)))
     binary_data.extend(struct.pack('i', len(col_keys)))
     for ck in col_keys:
-        binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
+        if colId in enum_data:
+            binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
+        elif rowId in class_data_id:
+            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[rowId]['rows'] if item['enum_property'] == rk), 0)))
     for rk in row_keys:
         for ck in col_keys:
             cell = json_data['data'][rk][ck]
