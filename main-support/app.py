@@ -3562,14 +3562,13 @@ namespace GameCore.Scenario {{
         else:
             cs_data_content += f"        public {type_} {name_} {{ get; set; }}\n"
             
-    cs_data_content += f"""       public {name}RoleData()
-                                  {{
+    cs_data_content += f"""        public {name}RoleData()
+        {{
                                       RoleID = ScenarioRoleID.{name};
-                                  }}
+        }}
     """
             
     cs_data_content += f"""       public override void ReadBinary(BinaryReader reader) {{
-            base.ReadBinary(reader);
 """
     for item in data:
         type_ = item['type']
