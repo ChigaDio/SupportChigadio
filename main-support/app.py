@@ -3518,6 +3518,7 @@ def handle_scenario_role_detail(name):
         data = request.json
         with open(data_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
+        generate_scenario_role_factory()
         return jsonify({"message": "Data saved"})
     elif request.method == 'DELETE':
         list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
