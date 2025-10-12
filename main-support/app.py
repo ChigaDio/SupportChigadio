@@ -875,7 +875,7 @@ namespace GameCore
         public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER,SCENARIO_EVEMT_FOLDER, ALL_EVENTS_BIN)).Replace("\\", "/");
+        public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER,SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\", "/");
 
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
@@ -946,7 +946,7 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_GAMEOBJECT_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.GAMEOBJECT_FOLDER)),
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
-            (SupportFiles.ALL_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER))
+            (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER))
         };
 
         foreach (var (filePath, targetFolder) in allFiles)
@@ -3561,6 +3561,12 @@ namespace GameCore.Scenario {{
         else:
             cs_data_content += f"        public {type_} {name_} {{ get; set; }}\n"
             
+    cs_data_content += f"""       public {name}RoleData()
+                                  {{
+                                      RoleID = ScenarioRoleID.{name};
+                                  }}
+    """
+            
     cs_data_content += f"""       public override void ReadBinary(BinaryReader reader) {{
             base.ReadBinary(reader);
 """
@@ -3629,8 +3635,9 @@ namespace GameCore.Scenario {{
     cs_action_path = os.path.join(role_dir, f"{name}RoleAction.cs")
     with open(cs_data_path, 'w', encoding='utf-8') as f:
         f.write(cs_data_content)
-    with open(cs_action_path, 'w', encoding='utf-8') as f:
-        f.write(cs_action_content)
+    if not os.path.exists(cs_action_content):
+        with open(cs_action_path, 'w', encoding='utf-8') as f:
+            f.write(cs_action_content)
     
     return jsonify({"message": "C# data and action classes generated"})
 

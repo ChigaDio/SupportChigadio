@@ -1,4 +1,5 @@
 from cmath import isfinite, isnan
+import io
 import struct
 import sys
 import os
@@ -41,27 +42,22 @@ def generate_scenario_folder(parent_path : str):
 def generate_base_script_file(parent_path : str):
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenearioRoleData.cs")):
         code_str = """
+
 using System;
 using System.Collections;
+using System.IO;
 using UnityEngine;
 
 namespace GameCore.Scenario
 {
-    public class BaseScenarioRoleData
+    public abstract class BaseScenarioRoleData
     {
-        public ScenarioRoleID RoleID { get; private set; }
-        public int ScenarioGroupID { get; private set; }
-        public int ScenarioSubGroupID { get; private set; }
-        public int ScenarioSeekPos { get; set; } = -1;
+        public ScenarioRoleID RoleID { get; protected set; }
 
-        public virtual void ReadBinary(BinaryReader reader)
-        {
-            RoleID = (ScenarioRoleID)reader.ReadInt32();
-            ScenarioGroupID = reader.ReadInt32();
-            ScenarioSubGroupID = reader.ReadInt32();
-        }
+        public abstract void ReadBinary(BinaryReader reader);
     }
 }
+
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenearioRoleData.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -232,6 +228,10 @@ namespace GameCore.Scenario {
         with open(os.path.join(parent_path, SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
             
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script")):
+        os.makedirs(os.path.join(parent_path,SCENARIO_DATA,"script"))
+      
+            
             
 # 1. ScenarioMasterExecuteAction.cs
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioMasterExecuteAction.cs")):
@@ -246,8 +246,8 @@ using UnityEngine;
 public class ScenarioMasterExecuteAction
 {
     private List<ScenarioGroupExecuteAction> scenarioActionList = new List<ScenarioGroupExecuteAction>();
-    public int executeGroupID { get; private set; } = 0;
-    public int executeSubGroupID { get; private set; } = 0;
+    public int executeGroupID { get; private set; } = 1;
+    public int executeSubGroupID { get; private set; } = 1;
     public bool IsExecuteFinish {  get; private set; }
 
     private List<ScenarioGroupExecuteAction> FindGroupActionList(int groupID)
@@ -926,6 +926,19 @@ def fix_roles(roles, role_schemas):
         role['data'] = new_data
     return updated
 
+def write_7bit_encoded_int(value: int) -> bytes:
+    """7ビットの可変長整数をバイト列として返す"""
+    result = []
+    while True:
+        byte = value & 0x7F  # 下位7ビットを抽出
+        value >>= 7
+        if value > 0:  # まだデータが続く場合は最上位ビットを1に設定
+            byte |= 0x80
+        result.append(byte)
+        if value == 0:
+            break
+    return bytes(result)
+
 # Event bin 生成ヘルパー
 def pack_value(value, type_):
     type_lower = type_.lower()
@@ -941,7 +954,7 @@ def pack_value(value, type_):
         return struct.pack('?', bool(value))
     elif type_lower == 'string':
         encoded = value.encode('utf-8')
-        return struct.pack('i', len(encoded)) + encoded
+        return write_7bit_encoded_int(len(encoded)) + encoded
     elif type_lower == 'vector2':
         return struct.pack('ff', *map(float, value))
     elif type_lower == 'vector3':
@@ -956,136 +969,176 @@ def generate_all_event_bin():
     header = bytearray()
     data_sections = bytearray()
     
-    # 全 event リスト
+# 1. 全イベントJSONの読み込み
     event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
     event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))
     events = []
     for event_file in event_files:
-        with open(event_file, 'r', encoding='utf-8') as f:
-            event_data = json.load(f)
-            events.append(event_data)
+        try:
+            with open(event_file, 'r', encoding='utf-8') as f:
+                event_data = json.load(f)
+                events.append(event_data)
+        except Exception as e:
+            logger.error(f"Failed to load event file {event_file}: {e}")
     
+    # ヘッダーにイベント数
     header.extend(struct.pack('i', len(events)))
     
-    offsets = {}
-    current_offset = len(header)
+    # イベントごとのオフセット管理
+    offsets = {}  # event_id -> ファイル内絶対オフセット
+    event_offset_positions = []  # ヘッダー内のオフセットプレースホルダー位置
     
-    # Placeholder for each event's offset
+    # 2. イベントヘッダー（ID, 名前, オフセットプレースホルダー）
     for event in events:
-        id_encoded = event.get('id', '').encode('utf-8')
+        event_id = event.get('id', '')
+        id_encoded = event_id.encode('utf-8')
         name_encoded = event.get('name', '').encode('utf-8')
         header.extend(struct.pack('i', len(id_encoded)))
         header.extend(id_encoded)
         header.extend(struct.pack('i', len(name_encoded)))
         header.extend(name_encoded)
-        header.extend(struct.pack('q', 0))
+        offset_pos = len(header)  # オフセット書き込み位置
+        header.extend(struct.pack('q', 0))  # プレースホルダー
+        event_offset_positions.append((event_id, offset_pos))
     
-    # Role schemas for types（変更なし）
+    # 3. ロールスキーマの読み込み
     role_schemas = {}
     role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
     for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
         role_name = os.path.basename(os.path.dirname(role_file))
-        with open(role_file, 'r', encoding='utf-8') as f:
-            schema_data = json.load(f)
-            fields = schema_data.get('data', [])
-            role_schemas[role_name] = [(field['name'], field['type']) for field in fields]
+        try:
+            with open(role_file, 'r', encoding='utf-8') as f:
+                schema_data = json.load(f)
+                fields = schema_data.get('data', [])
+                role_schemas[role_name] = [(field['name'], field['type']) for field in fields]
+        except Exception as e:
+            logger.error(f"Failed to load role file {role_file}: {e}")
     
-    # Generate data sections
-    for event in events:
+    # 4. データセクション生成
+    for idx, event in enumerate(events):
+        event_id = event.get('id', '')
         event_offset = len(header) + len(data_sections)
-        offsets[event.get('id', '')] = event_offset
-        
+        offsets[event_id] = event_offset
+
         section = bytearray()
-        subEvents = event.get('subEvents', {})
-        logger.debug(f"Generating bin for event {event.get('id', 'unknown')}: {len(subEvents)} subEvents")
+        subEvents = event.get('subEvents', [])  # リストとして取得
+        logger.debug(f"Generating bin for event {event_id}: {len(subEvents)} subEvents")
         section.extend(struct.pack('i', len(subEvents)))
-        
-        sub_offsets = {}
-        sub_current_offset = len(section)
-        
-        # Placeholder for sub offsets
-        for sub_id in subEvents:
-            name_encoded = sub_id.get('name', '').encode('utf-8')
-            section.extend(struct.pack('i', int(sub_id["subId"])))
-            section.extend(struct.pack('i', len(name_encoded)))
-            section.extend(name_encoded)
-            section.extend(struct.pack('q', 0))
 
-            # Sub sections
-            for sub_id, sub_group in event["subgroups"].items():
-                if not isinstance(sub_group, dict) or 'nodes' not in sub_group:
-                    logger.error(f"Invalid sub_group for event {event.get('id', 'unknown')}, sub_id {sub_id}: {sub_group}")
-                    continue
-                sub_offset = len(section) + sub_current_offset
-                sub_offsets[sub_id] = len(header) + len(data_sections) + sub_current_offset + sub_offset
+        sub_offsets = {}  # sub_id -> ファイル内絶対オフセット
+        sub_offset_positions = []  # section内のオフセットプレースホルダー位置
 
-                sub_section = bytearray()
-                nodes = sub_group.get('nodes', [])
-                sub_section.extend(struct.pack('i', len(nodes)))
+        # 4.1 サブイベントのプレースホルダー
+        for sub_data in subEvents:
+            try:
+                sub_id = str(sub_data.get('subId', 0))  # subIdを文字列として扱う
+                name_encoded = sub_data.get('name', '').encode('utf-8')
+                section.extend(struct.pack('i', int(sub_id)))
+                section.extend(struct.pack('i', len(name_encoded)))
+                section.extend(name_encoded)
+                pos_in_section = len(section)
+                section.extend(struct.pack('q', 0))  # プレースホルダー
+                sub_offset_positions.append((sub_id, pos_in_section))
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid subEvent data for event {event_id}, sub_data {sub_data}: {e}")
+                continue
+            
+        # 4.2 サブイベントのデータセクション
+        for sub_data in subEvents:
+            sub_id = str(sub_data.get('subId', 0))  # subIdを文字列として
+            sub_offset = len(header) + len(data_sections) + len(section)
+            sub_offsets[sub_id] = sub_offset
 
-                for node in nodes:
-                    node_id = int(node.get('id', '0')) if node.get('id', '0').isdigit() else 0
-                    sub_section.extend(struct.pack('i', node_id))
+            sub_section = bytearray()
+            # サブイベントに対応するsubgroupsを取得
+            subgroups = event.get('subgroups', {}).get(sub_id, {})
+            if not isinstance(subgroups, dict) or 'nodes' not in subgroups:
+                logger.error(f"Invalid subgroup for event {event_id}, sub_id {sub_id}: {subgroups}")
+                continue
+            
+            nodes = subgroups.get('nodes', [])
+            sub_section.extend(struct.pack('i', len(nodes)))  # num_groups
 
-                    roles = node.get('data', {}).get('roles', [])
-                    sub_section.extend(struct.pack('i', len(roles)))
+            for node in nodes:
+                node_id = int(node.get('id', '0')) if node.get('id', '0').isdigit() else 0
+                sub_section.extend(struct.pack('i', node_id))  # GroupID
 
+                roles = node.get('data', {}).get('roles', [])
+                inner_subgroups = node.get('data', {}).get('subgroups', {})
+
+                # num_subgroups = (1 if roles else 0) + len(inner_subgroups)
+                num_subgroups = 0
+                if len(roles) > 0:
+                    num_subgroups += 1
+                num_subgroups += len(inner_subgroups)
+                sub_section.extend(struct.pack('i', num_subgroups))  # num_subgroups
+
+                # top rolesをSubGroupID=0のsubgroupとして扱う
+                if len(roles) > 0:
+                    sub_section.extend(struct.pack('i', 0))  # SubGroupID = 0 (メイン)
+                    sub_section.extend(struct.pack('i', len(roles)))  # num_actions
                     for role in roles:
                         role_id = int(role.get('id', '0')) if isinstance(role.get('id', '0'), (int, str)) and str(role.get('id', '0')).isdigit() else 0
-                        sub_section.extend(struct.pack('i', role_id))
-
-                        fields = role.get('data', [])
-                        sub_section.extend(struct.pack('i', len(fields)))
-
+                        sub_section.extend(struct.pack('i', role_id))  # RoleID (typeとして仮定)
                         schema_fields = role_schemas.get(role.get('name', ''), [])
-                        for idx, field in enumerate(fields):
-                            if idx < len(schema_fields):
-                                _, field_type = schema_fields[idx]
+                        fields = role.get('data', [])
+                        for field_idx in range(min(len(fields), len(schema_fields))):
+                            field = fields[field_idx]
+                            _, field_type = schema_fields[field_idx]
+                            sub_section.extend(pack_value(field.get('value', ''), field_type))
+
+                # inner_subgroupsを追加のsubgroupとして扱い、inner_nodesのinner_rolesをflattenしてactionとして
+                for inner_sub_id, inner_sub in inner_subgroups.items():
+                    inner_nodes = inner_sub.get('nodes', [])
+                    sub_section.extend(struct.pack('i', int(inner_sub_id) if inner_sub_id.isdigit() else 0))  # SubGroupID
+
+                    # num_actions = 合計inner_roles数 (flatten)
+                    num_actions = 0
+                    for inner_node in inner_nodes:
+                        inner_roles = inner_node.get('data', {}).get('roles', [])
+                        num_actions += len(inner_roles)
+                    sub_section.extend(struct.pack('i', num_actions))  # num_actions
+
+                    for inner_node in inner_nodes:
+                        inner_roles = inner_node.get('data', {}).get('roles', [])
+                        for inner_role in inner_roles:
+                            inner_role_id = int(inner_role.get('id', '0')) if isinstance(inner_role.get('id', '0'), (int, str)) and str(inner_role.get('id', '0')).isdigit() else 0
+                            sub_section.extend(struct.pack('i', inner_role_id))  # RoleID (typeとして仮定)
+                            inner_schema_fields = role_schemas.get(inner_role.get('name', ''), [])
+                            inner_fields = inner_role.get('data', [])
+                            for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
+                                field = inner_fields[field_idx]
+                                _, field_type = inner_schema_fields[field_idx]
                                 sub_section.extend(pack_value(field.get('value', ''), field_type))
 
-                # Nested subgroups
-                for node in nodes:
-                    inner_subgroups = node.get('data', {}).get('subgroups', {})
-                    if not isinstance(inner_subgroups, dict):
-                        logger.error(f"Invalid inner subgroups in event {event.get('id', 'unknown')}, node {node.get('id', 'unknown')}: {inner_subgroups}")
-                        continue
-                    logger.debug(f"Inner subgroups for node {node.get('id', 'unknown')}: {inner_subgroups.keys()}")
-                    for inner_sub_id, inner_sub in inner_subgroups.items():
-                        inner_nodes = inner_sub.get('nodes', [])
-                        sub_section.extend(struct.pack('i', len(inner_nodes)))
-                        for inner_node in inner_nodes:
-                            inner_node_id = int(inner_node.get('id', '0')) if inner_node.get('id', '0').isdigit() else 0
-                            sub_section.extend(struct.pack('i', inner_node_id))
-                            inner_roles = inner_node.get('data', {}).get('roles', [])
-                            sub_section.extend(struct.pack('i', len(inner_roles)))
-                            for inner_role in inner_roles:
-                                inner_role_id = int(inner_role.get('id', '0')) if isinstance(inner_role.get('id', '0'), (int, str)) and str(inner_role.get('id', '0')).isdigit() else 0
-                                sub_section.extend(struct.pack('i', inner_role_id))
-                                inner_fields = inner_role.get('data', [])
-                                sub_section.extend(struct.pack('i', len(inner_fields)))
-                                inner_schema_fields = role_schemas.get(inner_role.get('name', ''), [])
-                                for idx, field in enumerate(inner_fields):
-                                    if idx < len(inner_schema_fields):
-                                        _, field_type = inner_schema_fields[idx]
-                                        sub_section.extend(pack_value(field.get('value', ''), field_type))
+            section.extend(sub_section)
 
-                section.extend(sub_section)
+        # 4.4 サブイベントのオフセットをパッチ
+        for sub_id, pos_in_section in sub_offset_positions:
+            section[pos_in_section:pos_in_section+8] = struct.pack('q', sub_offsets[sub_id])
 
-            data_sections.extend(section)
+        data_sections.extend(section)
     
-    # Update offsets in header
-    pos = 4
-    for event in events:
-        id_len = len(event.get('id', '').encode('utf-8'))
-        name_len = len(event.get('name', '').encode('utf-8'))
-        pos += 4 + id_len + 4 + name_len
-        header[pos:pos+8] = struct.pack('q', offsets[event.get('id', '')])
-        pos += 8
+    # 5. イベントオフセットをヘッダーにパッチ
+    for event_id, pos in event_offset_positions:
+        header[pos:pos+8] = struct.pack('q', offsets[event_id])
     
-    # Write file
-    with open(all_bin_path, 'wb') as f:
-        f.write(header + data_sections)
-    class_id_generate()
+    # 6. ファイル書き込み
+    try:
+        with open(all_bin_path, 'wb') as f:
+            f.write(header + data_sections)
+        logger.info(f"Successfully wrote binary file: {all_bin_path}")
+    except Exception as e:
+        logger.error(f"Failed to write binary file {all_bin_path}: {e}")
+        return {"error": f"Failed to write binary file: {e}"}
+    
+    # 7. class_id_generate（仮に存在）
+    try:
+        class_id_generate()  # 未定義なので仮置き
+    except NameError:
+        logger.error("class_id_generate is not defined")
+        return {"error": "class_id_generate is not defined"}
+    
     return {"message": "All event bin generated"}
 
 def class_id_generate():
