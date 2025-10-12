@@ -77,6 +77,8 @@ namespace GameCore.Scenario
     public  class BaseOrigintScenarioRoleAction
     {
         public bool IsCompleted { get; protected set; } = false;
+        public bool IsStartUp { get; protected set; } = false;
+        public bool IsRelease { get; protected set; } = false;
         public virtual void ReadBinary(BinaryReader reader)
         {
             
