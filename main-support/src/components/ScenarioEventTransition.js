@@ -10,32 +10,30 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
 import RoleInputFactory from '../scenario/RoleInputFactory';
+import { debounce } from 'lodash';
 
-const CustomGroupNode = ({ data, id, saveCurrentTab }) => {
+const CustomGroupNode = ({ data, id, saveCurrentTab, roles: globalRoles, roleDataCache, roleFormSchemas }) => {
   const params = useParams();
   const eventId = params.eventId;
   const subId = params.subId;
   const [showMenu, setShowMenu] = useState(false);
   const [showDataMenu, setShowDataMenu] = useState(false);
-  const [roles, setRoles] = useState([]);
+  const [roles, setRoles] = useState(globalRoles);
   const [roleForms, setRoleForms] = useState({});
   const [formErrors, setFormErrors] = useState({});
   const [formDataState, setFormDataState] = useState({});
   const formRefs = useRef([]);
 
   useEffect(() => {
-    console.log('CustomGroupNode params:', { eventId, subId });
+    console.log('CustomGroupNode params:', { eventId, subId, nodeId: id });
     if (!eventId || !subId) {
-      console.error('CustomGroupNode: eventId or subId is undefined. URL should be /scenario-event/:eventId/sub/:subId/transition');
+      console.error('CustomGroupNode: eventId or subId is undefined');
     }
-  }, [eventId, subId]);
+  }, [eventId, subId, id]);
 
   useEffect(() => {
-    fetch('/api/scenario-role')
-      .then(res => res.json())
-      .then(rolesData => setRoles(rolesData))
-      .catch(error => console.error('Error fetching roles:', error));
-  }, []);
+    setRoles(globalRoles || []);
+  }, [globalRoles]);
 
   useEffect(() => {
     console.log('showMenu state for node', id, ':', showMenu);
@@ -45,22 +43,28 @@ const CustomGroupNode = ({ data, id, saveCurrentTab }) => {
   useEffect(() => {
     if (data.roles && data.roles.length > 0) {
       data.roles.forEach((role, index) => {
-        setFormDataState(prev => ({ ...prev, [role.uniqueId]: role.data || [] }));
-        formRefs.current[index] = { submit: () => {} }; // 初期化
+        const cachedData = roleDataCache?.[id]?.[role.uniqueId];
+        setFormDataState(prev => ({ ...prev, [role.uniqueId]: cachedData || role.data || [] }));
+        formRefs.current[index] = { submit: () => {} };
       });
       const loadRoleData = async () => {
         const updatedRoles = await Promise.all(data.roles.map(async (role) => {
+          const uniqueId = role.uniqueId;
+          if (roleDataCache?.[id]?.[uniqueId]) {
+            console.log(`Cache hit for node ${id}, role ${uniqueId}`);
+            return { ...role, data: roleDataCache[id][uniqueId] };
+          }
           try {
-            const res = await fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${role.uniqueId}`);
+            const res = await fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${uniqueId}`);
             if (res.ok) {
               const { formData } = await res.json();
-              setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
+              setFormDataState(prev => ({ ...prev, [uniqueId]: formData }));
+              window.dispatchEvent(new CustomEvent('updateRoleDataCache', { detail: { nodeId: id, uniqueId, formData } }));
               return { ...role, data: formData };
-            } else {
-              return role;
             }
+            return role;
           } catch (error) {
-            console.error('Error loading role data:', error);
+            console.error(`Error loading role data for node ${id}, role ${uniqueId}:`, error);
             return role;
           }
         }));
@@ -68,12 +72,13 @@ const CustomGroupNode = ({ data, id, saveCurrentTab }) => {
           window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles: updatedRoles } }));
         }
       };
-      loadRoleData();
+      const debouncedLoad = debounce(loadRoleData, 500);
+      debouncedLoad();
+      return () => debouncedLoad.cancel();
     }
-  }, [data.roles, eventId, subId, id]);
+  }, [data.roles, eventId, subId, id, roleDataCache]);
 
-useEffect(() => {
-  const loadForms = async () => {
+  const loadForms = useCallback(async () => {
     if (!eventId || !subId) {
       console.error('Cannot load role forms: eventId or subId is undefined');
       return;
@@ -81,18 +86,34 @@ useEffect(() => {
     try {
       const formPromises = (data.roles || []).map(async (role) => {
         try {
+          // 修正: 親から渡されたスキーマを使用
+          const cachedSchema = roleFormSchemas[role.name];
+          if (cachedSchema) {
+            console.log(`Using cached schema for role ${role.name}`);
+            const FormComp = await RoleInputFactory.getForm(
+              role.name,
+              formDataState[role.uniqueId] || role.data || [],
+              (formData) => {
+                console.log(`Form data updated for ${role.uniqueId}:`, formData);
+                setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
+              },
+              cachedSchema // スキーマを渡す
+            );
+            return { uniqueId: role.uniqueId, FormComp };
+          }
+          const res = await fetch(`/api/role-form-schema/${role.name}`);
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const schema = await res.json();
+          window.dispatchEvent(new CustomEvent('updateRoleFormSchema', { detail: { roleName: role.name, schema } }));
           const FormComp = await RoleInputFactory.getForm(
             role.name,
             formDataState[role.uniqueId] || role.data || [],
             (formData) => {
               console.log(`Form data updated for ${role.uniqueId}:`, formData);
               setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
-            }
+            },
+            schema
           );
-          if (typeof FormComp !== 'function') {
-            console.error(`RoleInputFactory.getForm returned non-function for role ${role.name}:`, FormComp);
-            return { uniqueId: role.uniqueId, error: `Invalid form component for role ${role.name}` };
-          }
           return { uniqueId: role.uniqueId, FormComp };
         } catch (error) {
           console.error(`Error loading form for role ${role.name}:`, error);
@@ -114,16 +135,20 @@ useEffect(() => {
     } catch (error) {
       console.error('Error loading role forms:', error);
     }
-  };
-  loadForms();
-}, [data.roles, eventId, subId]); // formDataState を依存配列から削除
+  }, [data.roles, eventId, subId, roleFormSchemas]); // 修正: formDataStateを依存から除外
+
+  useEffect(() => {
+    const debouncedLoad = debounce(loadForms, 500);
+    debouncedLoad();
+    return () => debouncedLoad.cancel();
+  }, [loadForms]);
 
   const handleAddRole = (role) => {
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
-    const uniqueId = Date.now().toString(); // ユニークID生成
+    const uniqueId = Date.now().toString();
     fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${id}/role`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -139,11 +164,7 @@ useEffect(() => {
         const newRoles = [...(data.roles || []), newRole];
         window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
         setShowMenu(false);
-        if (typeof saveCurrentTab === 'function') {
-          saveCurrentTab();
-        } else {
-          console.error('saveCurrentTab is not a function in handleAddRole');
-        }
+        saveCurrentTab();
       })
       .catch(error => {
         console.error('Error adding role:', error);
@@ -154,16 +175,12 @@ useEffect(() => {
   const handleDeleteRole = (uniqueId) => {
     const newRoles = (data.roles || []).filter(role => role.uniqueId !== uniqueId);
     window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
-    if (typeof saveCurrentTab === 'function') {
-      saveCurrentTab();
-    } else {
-      console.error('saveCurrentTab is not a function in handleDeleteRole');
-    }
+    saveCurrentTab();
   };
 
   const handleSaveRole = (uniqueId, formData) => {
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
     console.log('Saving role data:', { uniqueId, formData });
@@ -183,12 +200,8 @@ useEffect(() => {
           role.uniqueId === uniqueId ? { ...role, data: formData } : role
         );
         window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
-        if (typeof saveCurrentTab === 'function') {
-          saveCurrentTab();
-        } else {
-          console.error('saveCurrentTab is not a function in handleSaveRole');
-        }
-        console.log('Updated nodes after save:', newRoles);
+        window.dispatchEvent(new CustomEvent('updateRoleDataCache', { detail: { nodeId: id, uniqueId, formData } }));
+        saveCurrentTab();
       })
       .catch(error => {
         console.error('Error saving role data:', error);
@@ -386,16 +399,76 @@ function ScenarioEventTransition() {
   const [activeTab, setActiveTab] = useState('main');
   const [tabData, setTabData] = useState({ main: { nodes: [], edges: [] } });
   const [copiedNode, setCopiedNode] = useState(null);
+  const [globalRoles, setGlobalRoles] = useState([]);
+  const [roleDataCache, setRoleDataCache] = useState({});
+  const [roleFormSchemas, setRoleFormSchemas] = useState({}); // 修正: スキーマキャッシュ
 
-  const saveCurrentTab = useCallback(() => {
-    if (!tabData[activeTab] || !eventId || !subId) {
+  useEffect(() => {
+    fetch('/api/scenario-role')
+      .then(res => res.json())
+      .then(rolesData => setGlobalRoles(rolesData))
+      .catch(error => console.error('Error fetching roles:', error));
+  }, []);
+
+  // 修正: ロールスキーマを一括ロード
+  useEffect(() => {
+    const loadSchemas = async () => {
+      try {
+        const promises = globalRoles.map(async (role) => {
+          const res = await fetch(`/api/role-form-schema/${role.name}`);
+          if (res.ok) {
+            const schema = await res.json();
+            return { roleName: role.name, schema };
+          }
+          return null;
+        });
+        const results = await Promise.all(promises);
+        const schemas = results.reduce((acc, curr) => {
+          if (curr) acc[curr.roleName] = curr.schema;
+          return acc;
+        }, {});
+        setRoleFormSchemas(schemas);
+      } catch (error) {
+        console.error('Error loading role form schemas:', error);
+      }
+    };
+    if (globalRoles.length > 0) {
+      loadSchemas();
+    }
+  }, [globalRoles]);
+
+  useEffect(() => {
+    const handleUpdateRoleDataCache = (event) => {
+      const { nodeId, uniqueId, formData } = event.detail;
+      setRoleDataCache(prev => ({
+        ...prev,
+        [nodeId]: {
+          ...prev[nodeId],
+          [uniqueId]: formData
+        }
+      }));
+    };
+    const handleUpdateRoleFormSchema = (event) => {
+      const { roleName, schema } = event.detail;
+      setRoleFormSchemas(prev => ({ ...prev, [roleName]: schema }));
+    };
+    window.addEventListener('updateRoleDataCache', handleUpdateRoleDataCache);
+    window.addEventListener('updateRoleFormSchema', handleUpdateRoleFormSchema);
+    return () => {
+      window.removeEventListener('updateRoleDataCache', handleUpdateRoleDataCache);
+      window.removeEventListener('updateRoleFormSchema', handleUpdateRoleFormSchema);
+    };
+  }, []);
+
+  const debouncedSaveCurrentTab = useMemo(() => debounce((tabDataArg, activeTabArg, eventIdArg, subIdArg) => {
+    if (!tabDataArg[activeTabArg] || !eventIdArg || !subIdArg) {
       console.error('Cannot save tab: tabData or eventId/subId is undefined');
       return;
     }
     setIsLoading(true);
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
+    const parentId = activeTabArg.startsWith('subgroup-') ? activeTabArg.split('-')[1] : null;
     const saveData = {
-      nodes: tabData[activeTab].nodes.map(n => ({
+      nodes: tabDataArg[activeTabArg].nodes.map(n => ({
         id: n.id,
         type: n.type,
         position: n.position,
@@ -408,12 +481,11 @@ function ScenarioEventTransition() {
         },
         draggable: n.draggable
       })),
-      edges: tabData[activeTab].edges
+      edges: tabDataArg[activeTabArg].edges
     };
-    console.log('Saving tab data:', saveData);
-    const saveUrl = activeTab.startsWith('subgroup-')
-      ? `/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup`
-      : `/api/scenario-event/${eventId}/sub/${subId}/transition`;
+    const saveUrl = activeTabArg.startsWith('subgroup-')
+      ? `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition/${parentId}/subgroup`
+      : `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition`;
     fetch(saveUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -425,7 +497,7 @@ function ScenarioEventTransition() {
       })
       .then(result => {
         console.log('Save response:', result);
-        if (activeTab.startsWith('subgroup-')) {
+        if (activeTabArg.startsWith('subgroup-')) {
           setTabData(prev => ({
             ...prev,
             main: {
@@ -446,12 +518,93 @@ function ScenarioEventTransition() {
         alert('保存エラー: ' + error.message);
       })
       .finally(() => setIsLoading(false));
-  }, [tabData, activeTab, eventId, subId]);
+  }, 500), []);
 
-const nodeTypes = useMemo(() => ({
-  customGroup: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} />,
-  subGroupNode: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} />
-}), [saveCurrentTab]);
+  const saveCurrentTab = useCallback(() => {
+    debouncedSaveCurrentTab(tabData, activeTab, eventId, subId);
+  }, [debouncedSaveCurrentTab, tabData, activeTab, eventId, subId]);
+
+  const updateNodeId = useCallback((oldId, newId) => {
+    if (oldId === newId) return;
+    const currentNodes = tabData[activeTab].nodes;
+    if (currentNodes.some(n => n.id === newId)) {
+      alert('IDが重複しています');
+      return;
+    }
+    setIsLoading(true);
+    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
+    let updatedNodes = currentNodes.map(node =>
+      node.id === oldId ? {
+        ...node,
+        id: newId,
+        data: {
+          ...node.data,
+          label: activeTab.startsWith('subgroup-') ? `Group: ${parentId} / Sub: ${newId}` : newId,
+          subgroups: node.data.subgroups || {}
+        }
+      } : node
+    );
+    const updatedEdges = tabData[activeTab].edges.map(edge => ({
+      ...edge,
+      source: edge.source === oldId ? newId : edge.source,
+      target: edge.target === oldId ? newId : edge.target
+    }));
+    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } };
+    if (activeTab.startsWith('subgroup-')) {
+      newTabData.main = {
+        ...tabData.main,
+        nodes: tabData.main.nodes.map(node => {
+          if (node.id === parentId) {
+            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
+            const newSubNodes = currentSubData.nodes.map(n =>
+              n.id === oldId ? {
+                ...n,
+                id: newId,
+                data: { ...n.data, label: `Group: ${parentId} / Sub: ${newId}` }
+              } : n
+            );
+            const newSubEdges = currentSubData.edges.map(e => ({
+              ...e,
+              source: e.source === oldId ? newId : e.source,
+              target: e.target === oldId ? newId : e.target
+            }));
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                subgroups: {
+                  ...node.data.subgroups,
+                  [parentId]: { nodes: newSubNodes, edges: newSubEdges }
+                }
+              }
+            };
+          }
+          return node;
+        })
+      };
+    }
+    setTabData(newTabData);
+    setNodes(updatedNodes);
+    setEdges(updatedEdges);
+    saveCurrentTab();
+  }, [tabData, activeTab, setTabData, setNodes, setEdges, saveCurrentTab]);
+
+  const nodeTypes = useMemo(() => ({
+    customGroup: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} roles={globalRoles} roleDataCache={roleDataCache} roleFormSchemas={roleFormSchemas} />,
+    subGroupNode: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} roles={globalRoles} roleDataCache={roleDataCache} roleFormSchemas={roleFormSchemas} />
+  }), [saveCurrentTab, globalRoles, roleDataCache, roleFormSchemas]);
+
+  const memoizedNodes = useMemo(() => nodes.map(node => ({
+    ...node,
+    data: { ...node.data, saveCurrentTab }
+  })), [nodes, saveCurrentTab]);
+
+  const memoizedEdges = useMemo(() => edges.map(edge => ({
+    ...edge,
+    id: `${edge.source}-${edge.target}`, // 修正: エッジIDを明示
+    animated: true,
+    style: { strokeDasharray: '5,5', stroke: 'cyan', strokeWidth: 3 }
+  })), [edges]);
 
   const addOnShrinkToNodes = (nodeList, isSub = false) => {
     return nodeList.map(node => ({
@@ -534,7 +687,7 @@ const nodeTypes = useMemo(() => ({
   useEffect(() => {
     if (!eventId || !subId) {
       console.error('Cannot fetch transition: eventId or subId is undefined');
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       setIsLoading(false);
       return;
     }
@@ -548,9 +701,12 @@ const nodeTypes = useMemo(() => ({
       .then(result => {
         let loadedNodes = result.nodes || [];
         loadedNodes = addOnShrinkToNodes(loadedNodes, false);
-        setTabData(prev => ({ ...prev, main: { nodes: loadedNodes, edges: result.edges || [] } }));
+        const validEdges = (result.edges || []).filter(edge =>
+          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+        );
+        setTabData(prev => ({ ...prev, main: { nodes: loadedNodes, edges: validEdges } }));
         setNodes(loadedNodes);
-        setEdges(result.edges || []);
+        setEdges(validEdges);
       })
       .catch(error => {
         if (error.name === 'AbortError') return;
@@ -566,7 +722,7 @@ const nodeTypes = useMemo(() => ({
   const handleTabSwitch = useCallback((tabId, parentId = null) => {
     if (tabId === activeTab) return;
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
     setIsLoading(true);
@@ -576,9 +732,26 @@ const nodeTypes = useMemo(() => ({
         setActiveTab(tabId);
         const parentNode = tabData.main.nodes.find(n => n.id === parentId);
         const subGroupData = parentNode?.data.subgroups?.[parentId] || { nodes: [], edges: [] };
-        setNodes(addOnShrinkToNodes(subGroupData.nodes, true));
-        setEdges(subGroupData.edges);
-        setTabData(prev => ({ ...prev, [tabId]: subGroupData }));
+        const loadedNodes = addOnShrinkToNodes(subGroupData.nodes, true);
+        const validEdges = subGroupData.edges.filter(edge =>
+          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+        );
+        setNodes(loadedNodes);
+        setEdges(validEdges);
+        setTabData(prev => ({ ...prev, [tabId]: { nodes: loadedNodes, edges: validEdges } }));
+        setTimeout(() => {
+          const revalidatedEdges = validEdges.filter(edge =>
+            loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+          );
+          if (revalidatedEdges.length !== validEdges.length) {
+            console.warn('Invalid edges detected in tab switch:', { tabId, invalidEdges: validEdges.length - revalidatedEdges.length });
+            setEdges(revalidatedEdges);
+            setTabData(prev => ({
+              ...prev,
+              [tabId]: { ...prev[tabId], edges: revalidatedEdges }
+            }));
+          }
+        }, 0);
         setIsLoading(false);
         return;
       }
@@ -595,21 +768,24 @@ const nodeTypes = useMemo(() => ({
         .then(result => {
           let loadedNodes = result.nodes || [];
           loadedNodes = addOnShrinkToNodes(loadedNodes, true);
+          const validEdges = (result.edges || []).filter(edge =>
+            loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+          );
           setTabData(prev => ({
             ...prev,
-            [tabId]: { nodes: loadedNodes, edges: result.edges || [] },
+            [tabId]: { nodes: loadedNodes, edges: validEdges },
             main: {
               ...prev.main,
               nodes: prev.main.nodes.map(node =>
                 node.id === parentId ? {
                   ...node,
-                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: { nodes: loadedNodes, edges: result.edges || [] } } }
+                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: { nodes: loadedNodes, edges: validEdges } } }
                 } : node
               )
             }
           }));
           setNodes(loadedNodes);
-          setEdges(result.edges || []);
+          setEdges(validEdges);
           setActiveTab(tabId);
         })
         .catch(error => {
@@ -623,11 +799,29 @@ const nodeTypes = useMemo(() => ({
     } else {
       setActiveTab(tabId);
       const currentTabData = tabData[tabId] || { nodes: [], edges: [] };
-      setNodes(addOnShrinkToNodes(currentTabData.nodes, false));
-      setEdges(currentTabData.edges);
+      const loadedNodes = addOnShrinkToNodes(currentTabData.nodes, false);
+      const validEdges = currentTabData.edges.filter(edge =>
+        loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+      );
+      setNodes(loadedNodes);
+      setEdges(validEdges);
+      setTabData(prev => ({ ...prev, [tabId]: { nodes: loadedNodes, edges: validEdges } }));
+      setTimeout(() => {
+        const revalidatedEdges = validEdges.filter(edge =>
+          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+        );
+        if (revalidatedEdges.length !== validEdges.length) {
+          console.warn('Invalid edges detected in main tab switch:', { tabId, invalidEdges: validEdges.length - revalidatedEdges.length });
+          setEdges(revalidatedEdges);
+          setTabData(prev => ({
+            ...prev,
+            [tabId]: { ...prev[tabId], edges: revalidatedEdges }
+          }));
+        }
+      }, 0);
       setIsLoading(false);
     }
-  }, [eventId, subId, activeTab, tabData]);
+  }, [eventId, subId, activeTab, tabData, tabs]);
 
   const handleTabClose = (tabId) => {
     if (tabId === 'main') return;
@@ -642,6 +836,7 @@ const nodeTypes = useMemo(() => ({
   };
 
   const onConnect = (params) => {
+    console.log('onConnect called with params:', params);
     const sourceEdges = edges.filter(edge => edge.source === params.source);
     if (sourceEdges.length > 0) {
       alert('1つのノードから複数の接続はできません');
@@ -654,10 +849,15 @@ const nodeTypes = useMemo(() => ({
     }
     const newEdge = {
       ...params,
+      id: `${params.source}-${params.target}`, // 修正: エッジIDを明示
       animated: true,
       style: { strokeDasharray: '5,5', stroke: 'cyan', strokeWidth: 3 }
     };
-    setEdges(eds => addEdge(newEdge, eds));
+    setEdges(eds => {
+      const updatedEdges = addEdge(newEdge, eds);
+      console.log('New edges after addEdge:', updatedEdges);
+      return updatedEdges;
+    });
     setTabData(prev => ({
       ...prev,
       [activeTab]: { nodes: prev[activeTab].nodes, edges: [...prev[activeTab].edges, newEdge] }
@@ -666,18 +866,25 @@ const nodeTypes = useMemo(() => ({
     saveCurrentTab();
   };
 
-  const adjustTargetIds = (sourceId, targetId, visited = new Set()) => {
+  const adjustTargetIds = useCallback((sourceId, targetId, visited = new Set()) => {
+    console.log('adjustTargetIds called with:', { sourceId, targetId, visited });
     if (visited.has(targetId)) return;
     visited.add(targetId);
 
-    const currentNodes = tabData[activeTab].nodes;
+    const currentNodes = tabData[activeTab]?.nodes || [];
     const sourceNode = currentNodes.find(n => n.id === sourceId);
     const targetNode = currentNodes.find(n => n.id === targetId);
 
-    if (!sourceNode || !targetNode) return;
+    if (!sourceNode || !targetNode) {
+      console.warn('Source or target node not found:', { sourceId, targetId });
+      return;
+    }
 
     const sourceNum = parseInt(sourceId, 10);
-    if (isNaN(sourceNum)) return;
+    if (isNaN(sourceNum)) {
+      console.warn('Source ID is not a number:', sourceId);
+      return;
+    }
 
     let newTargetId = (sourceNum + 1).toString();
     while (currentNodes.some(n => n.id === newTargetId && n.id !== targetId)) {
@@ -685,14 +892,30 @@ const nodeTypes = useMemo(() => ({
     }
 
     if (newTargetId !== targetId) {
+      console.log('Updating node ID from', targetId, 'to', newTargetId);
       updateNodeId(targetId, newTargetId);
+      const updatedEdges = (tabData[activeTab]?.edges || []).map(edge => ({
+        ...edge,
+        source: edge.source === targetId ? newTargetId : edge.source,
+        target: edge.target === targetId ? newTargetId : edge.target,
+        id: `${edge.source === targetId ? newTargetId : edge.source}-${edge.target === targetId ? newTargetId : edge.target}` // 修正: エッジID更新
+      }));
+      setEdges(updatedEdges);
+      setTabData(prev => ({
+        ...prev,
+        [activeTab]: {
+          ...prev[activeTab],
+          edges: updatedEdges
+        }
+      }));
     }
 
-    const nextEdges = tabData[activeTab].edges.filter(e => e.source === targetId);
+    const nextEdges = (tabData[activeTab]?.edges || []).filter(e => e.source === newTargetId);
+    console.log('Next edges to process:', nextEdges);
     nextEdges.forEach(edge => {
       adjustTargetIds(newTargetId, edge.target, visited);
     });
-  };
+  }, [tabData, activeTab, updateNodeId]);
 
   const handleOpenAddDialog = () => {
     setAddDialogOpen(true);
@@ -706,7 +929,7 @@ const nodeTypes = useMemo(() => ({
 
   const handleAddNode = () => {
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
     if (!newId.trim()) {
@@ -745,14 +968,13 @@ const nodeTypes = useMemo(() => ({
           if (node.id === parentId) {
             const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
             const newSubNodes = [...currentSubData.nodes, newNode];
-            const newSubData = { nodes: newSubNodes, edges: currentSubData.edges };
             return {
               ...node,
               data: {
                 ...node.data,
                 subgroups: {
                   ...node.data.subgroups,
-                  [parentId]: newSubData
+                  [parentId]: { nodes: newSubNodes, edges: currentSubData.edges }
                 }
               }
             };
@@ -768,7 +990,7 @@ const nodeTypes = useMemo(() => ({
 
   const handleDeleteNode = (nodeId) => {
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
     setIsLoading(true);
@@ -784,14 +1006,13 @@ const nodeTypes = useMemo(() => ({
             const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
             const newSubNodes = currentSubData.nodes.filter(n => n.id !== nodeId);
             const newSubEdges = currentSubData.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
-            const newSubData = { nodes: newSubNodes, edges: newSubEdges };
             return {
               ...node,
               data: {
                 ...node.data,
                 subgroups: {
                   ...node.data.subgroups,
-                  [parentId]: newSubData
+                  [parentId]: { nodes: newSubNodes, edges: newSubEdges }
                 }
               }
             };
@@ -819,7 +1040,7 @@ const nodeTypes = useMemo(() => ({
         }
       });
     } else {
-      alert('ノードが見つかりません（tabDataに存在しません）');
+      alert('ノードが見つかりません');
     }
   };
 
@@ -829,7 +1050,7 @@ const nodeTypes = useMemo(() => ({
       return;
     }
     if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。URLを確認してください。');
+      alert('エラー: Event IDまたはSub IDが未定義です。');
       return;
     }
     setIsLoading(true);
@@ -869,14 +1090,13 @@ const nodeTypes = useMemo(() => ({
           if (node.id === parentId) {
             const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
             const newSubNodes = [...currentSubData.nodes, newNode];
-            const newSubData = { nodes: newSubNodes, edges: currentSubData.edges };
             return {
               ...node,
               data: {
                 ...node.data,
                 subgroups: {
                   ...node.data.subgroups,
-                  [parentId]: newSubData
+                  [parentId]: { nodes: newSubNodes, edges: currentSubData.edges }
                 }
               }
             };
@@ -903,72 +1123,6 @@ const nodeTypes = useMemo(() => ({
   const handleCloseEditDialog = () => {
     setEditDialogOpen(false);
     setEditNodeId(null);
-  };
-
-  const updateNodeId = (oldId, newId) => {
-    if (oldId === newId) return;
-    const currentNodes = tabData[activeTab].nodes;
-    if (currentNodes.some(n => n.id === newId)) {
-      alert('IDが重複しています');
-      return;
-    }
-    setIsLoading(true);
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
-    let updatedNodes = currentNodes.map(node =>
-      node.id === oldId ? {
-        ...node,
-        id: newId,
-        data: {
-          ...node.data,
-          label: activeTab.startsWith('subgroup-') ? `Group: ${parentId} / Sub: ${newId}` : newId,
-          subgroups: node.data.subgroups || {}
-        }
-      } : node
-    );
-    const updatedEdges = tabData[activeTab].edges.map(edge => ({
-      ...edge,
-      source: edge.source === oldId ? newId : edge.source,
-      target: edge.target === oldId ? newId : edge.target
-    }));
-    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } };
-    if (activeTab.startsWith('subgroup-')) {
-      newTabData.main = {
-        ...tabData.main,
-        nodes: tabData.main.nodes.map(node => {
-          if (node.id === parentId) {
-            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
-            const newSubNodes = currentSubData.nodes.map(n =>
-              n.id === oldId ? {
-                ...n,
-                id: newId,
-                data: { ...n.data, label: `Group: ${parentId} / Sub: ${newId}` }
-              } : n
-            );
-            const newSubEdges = currentSubData.edges.map(e => ({
-              ...e,
-              source: e.source === oldId ? newId : e.source,
-              target: e.target === oldId ? newId : e.target
-            }));
-            const newSubData = { nodes: newSubNodes, edges: newSubEdges };
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                subgroups: {
-                  ...node.data.subgroups,
-                  [parentId]: newSubData
-                }
-              }
-            };
-          }
-          return node;
-        })
-      };
-    }
-    setTabData(newTabData);
-    setNodes(updatedNodes);
-    setEdges(updatedEdges);
-    saveCurrentTab();
   };
 
   const handleEditNode = () => {
@@ -1024,8 +1178,8 @@ const nodeTypes = useMemo(() => ({
       </AppBar>
       <Box sx={{ flexGrow: 1, height: 'calc(100vh - 64px)' }}>
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={memoizedNodes}
+          edges={memoizedEdges}
           onNodesChange={(changes) => {
             onNodesChange(changes);
             setTabData(prev => {
@@ -1063,6 +1217,7 @@ const nodeTypes = useMemo(() => ({
           nodeTypes={nodeTypes}
           style={{ backgroundColor: 'black' }}
           fitView
+          fitViewOptions={{ padding: 0.2 }}
           nodesDraggable={true}
           minZoom={0.5}
           maxZoom={2}

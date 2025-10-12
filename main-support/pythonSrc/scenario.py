@@ -1204,8 +1204,8 @@ def class_id_generate():
                     "enum_property": f"{item.get('name', '')}_{details.get('name', '')}",
                     "description": f"{item.get('description', '')}_{details.get('name', '')}",
                     "data": [
-                        {"eventID": str(item.get("id", ""))},
-                        {"subID": str(details.get("subId", ""))}
+                        {"eventID" : {"value" : str(item.get("id", "")),"type": "string"}},
+                        {"subID"   : {"value" : str(details.get("subId", "")) ,"type" : "string"}}
                     ]
                 }
                 add_data["rows"].append(add_id_data)

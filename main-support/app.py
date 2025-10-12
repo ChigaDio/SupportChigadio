@@ -3635,7 +3635,7 @@ namespace GameCore.Scenario {{
     cs_action_path = os.path.join(role_dir, f"{name}RoleAction.cs")
     with open(cs_data_path, 'w', encoding='utf-8') as f:
         f.write(cs_data_content)
-    if not os.path.exists(cs_action_content):
+    if not os.path.exists(cs_action_path):
         with open(cs_action_path, 'w', encoding='utf-8') as f:
             f.write(cs_action_content)
     
