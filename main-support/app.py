@@ -761,7 +761,7 @@ if not os.path.exists(os.path.join(DATA_DIR, SCRIPT,EDITOR)):
     
 if not os.path.exists(os.path.join(DATA_DIR, SCRIPT,"SupportFiles.cs")):
     code_str = """
-    using UnityEngine;
+using UnityEngine;
 using System;
 using System.IO;
 #if UNITY_EDITOR
@@ -798,6 +798,11 @@ namespace GameCore
         public const string ALL_TEXTURE_BIN_FILE = "texture_data.bin";
         public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bin";
 
+        //Scenario
+        public const string SCENARIO_FOLDER = "scenario-data";
+        public const string SCENARIO_EVEMT_FOLDER = "scenario-event-data";
+        public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bin";
+
         // キャッシュ（最初に解決したパスを保持）
         public static string s_cachedSupportDataPath = null;
 
@@ -819,7 +824,7 @@ namespace GameCore
                     {
                         string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                         string absoluteSupportRoot = Path.GetFullPath(Path.Combine(projectRoot, assetsRelative)); // -> .../Project/Assets/.../SupportChigadio
-                        string dataPath = Path.Combine(absoluteSupportRoot, "..",SUPPORT_DATA_NAME);
+                        string dataPath = Path.Combine(absoluteSupportRoot, "..", SUPPORT_DATA_NAME);
                         s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\", "/");
                         return s_cachedSupportDataPath;
                     }
@@ -870,6 +875,7 @@ namespace GameCore
         public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER,SCENARIO_EVEMT_FOLDER, ALL_EVENTS_BIN)).Replace("\\", "/");
 
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
@@ -939,7 +945,8 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_TEXTURE_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.TEXTURE_FOLDER)),
             (SupportFiles.ALL_GAMEOBJECT_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.GAMEOBJECT_FOLDER)),
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
-            (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER)
+            (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
+            (SupportFiles.ALL_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER))
         };
 
         foreach (var (filePath, targetFolder) in allFiles)
