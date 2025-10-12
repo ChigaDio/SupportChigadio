@@ -1187,7 +1187,7 @@ def class_id_generate():
         add_data = {
             "columns": [
                 {"name": "eventID", "type": "string"},
-                {"name": "subID", "type": "int"}
+                {"name": "subID", "type": "string"}
             ],
             "rows": []
         }
@@ -1203,10 +1203,10 @@ def class_id_generate():
                     "id": count,
                     "enum_property": f"{item.get('name', '')}_{details.get('name', '')}",
                     "description": f"{item.get('description', '')}_{details.get('name', '')}",
-                    "data": [
-                        {"eventID" : {"value" : str(item.get("id", "")),"type": "string"}},
-                        {"subID"   : {"value" : str(details.get("subId", "")) ,"type" : "string"}}
-                    ]
+                    "data": {
+                        "eventID": {"value": str(item.get("id", "")), "type": "string"},
+                        "subID": {"value": str(details.get("name", "")), "type": "string"}
+                    }
                 }
                 add_data["rows"].append(add_id_data)
                 count += 1
