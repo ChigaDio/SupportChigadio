@@ -64,6 +64,7 @@ namespace GameCore.Scenario
     
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseOrigintScenarioRoleAction.cs")):
         code_str = """
+
 using System;
 using System.Collections;
 using UnityEngine;
@@ -73,32 +74,39 @@ namespace GameCore.Scenario
     public  class BaseOrigintScenarioRoleAction
     {
         public bool IsCompleted { get; protected set; } = false;
+        public bool IsOneExecute { get; protected set; } = false;
         public bool IsStartUp { get; protected set; } = false;
         public bool IsRelease { get; protected set; } = false;
         public virtual void ReadBinary(BinaryReader reader)
         {
             
         }
-        public virtual void OnInitialize()
+        public virtual void OnInitialize(ScenarioExecuteData executeData)
         {
             IsCompleted = false;
         }
-        public virtual void OnExecute()
+        public virtual void OnOneExecute(ScenarioExecuteData executeData)
         {
             // Implement action logic here
         }
-        public virtual void OnFinalize()
+        public virtual void OnExecute(ScenarioExecuteData executeData)
+        {
+            // Implement action logic here
+        }
+        public virtual void OnFinalize(ScenarioExecuteData executeData)
         {
             // Implement cleanup logic here
         }
     }
 }
+
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseOrigintScenarioRoleActionbstractScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseGeneralScenarioRoleAction.cs")):
         code_str = """
+
 using System;
 using System.Collections;
 using UnityEngine;
@@ -115,18 +123,20 @@ namespace GameCore.Scenario
         }
 
 
-        public override void OnInitialize()
+        public override void OnInitialize(ScenarioExecuteData executeData)
         {
-            base.OnInitialize();
+            base.OnInitialize(executeData);
         }
     }
 }
+
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseGeneralScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleAction.cs")):
         code_str = """
+
 using System;
 using System.Collections;
 using UnityEngine;
@@ -138,24 +148,26 @@ namespace GameCore.Scenario
 
         public BaseScenarioRoleAction(T roleData) : base(roleData)
         {
-            
+
         }
 
-        public override void OnInitialize()
+        public override  void OnInitialize(ScenarioExecuteData executeData)
         {
-            base.OnInitialize();
+            base.OnInitialize(executeData);
         }
 
 
 
     }
 }
+
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleBranchAction.cs")):
         code_str = """
+
 using System;
 using System.Collections;
 using UnityEngine;
@@ -168,17 +180,18 @@ namespace GameCore.Scenario
 
         public BaseScenarioRoleBranchAction(T roleData) : base(roleData)
         {
-            
+
         }
 
-        public override void OnInitialize()
+        public override void OnInitialize(ScenarioExecuteData executeData)
         {
-            base.OnInitialize();
+            base.OnInitialize(executeData);
         }
 
 
     }
 }
+
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleBranchAction.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -241,14 +254,14 @@ using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEngine;
 
 public class ScenarioMasterExecuteAction
 {
     private List<ScenarioGroupExecuteAction> scenarioActionList = new List<ScenarioGroupExecuteAction>();
     public int executeGroupID { get; private set; } = 1;
     public int executeSubGroupID { get; private set; } = 1;
-    public bool IsExecuteFinish {  get; private set; }
+    public bool IsExecuteFinish { get; private set; }
+    private ScenarioExecuteData executeData = new ScenarioExecuteData();
 
     private List<ScenarioGroupExecuteAction> FindGroupActionList(int groupID)
     {
@@ -257,22 +270,14 @@ public class ScenarioMasterExecuteAction
 
     public bool IsMaxReached()
     {
-        if (IsExecuteFinish) return true;
-        if (scenarioActionList.Count == 0) return true; // No groups, consider max reached
-        if (executeGroupID < scenarioActionList.Count - 1) return false; // Not at last group
-
-        var currentGroup = scenarioActionList.Find(data => data.GroupID == executeGroupID);
-        if (currentGroup == null) return true; // No group found, consider max reached
-
-        var subGroupCount = currentGroup.FindSubGroupActionList(int.MaxValue).Count;
-        return executeSubGroupID >= subGroupCount - 1; // At last subgroup of last group
+        return IsExecuteFinish;
     }
 
     public void SetUp(BinaryReader reader)
     {
         IsExecuteFinish = false;
-        int count = reader.ReadInt32();
-        for (int i = 0; i < count; i++)
+        int groupEventCount = reader.ReadInt32(); // グループイベント数
+        for (int i = 0; i < groupEventCount; i++)
         {
             var addAction = new ScenarioGroupExecuteAction();
             addAction.SetUp(reader);
@@ -285,7 +290,7 @@ public class ScenarioMasterExecuteAction
         if (IsMaxReached()) return;
 
         var find = FindGroupActionList(executeGroupID);
-        var tasks = find.Select(action => action.OnInitializeAsync(executeSubGroupID)).ToArray();
+        var tasks = find.Select(action => action.OnInitializeAsync(executeSubGroupID, executeData));
         await UniTask.WhenAll(tasks);
     }
 
@@ -293,8 +298,9 @@ public class ScenarioMasterExecuteAction
     {
         if (IsMaxReached()) return;
 
-        var find = FindGroupActionList(executeGroupID);
-        var tasks = find.Select(action => action.OnExecuteAsync(executeSubGroupID)).ToArray();
+        var find = FindGroupActionList(executeGroupID).First();
+        var subFind = find.FindSubGroupActionList(executeSubGroupID);
+        var tasks = subFind.Select(action => action.OnExecuteAsync(executeData)).ToArray();
         await UniTask.WhenAll(tasks);
     }
 
@@ -302,28 +308,29 @@ public class ScenarioMasterExecuteAction
     {
         if (IsMaxReached()) return;
 
-        var find = FindGroupActionList(executeGroupID);
-        var tasks = find.Select(action => action.OnFinalizeAsync(executeSubGroupID)).ToArray();
+        var find = FindGroupActionList(executeGroupID).First();
+        var subFind = find.FindSubGroupActionList(executeSubGroupID);
+        var tasks = subFind.Select(action => action.OnFinalizeAsync(executeData)).ToArray();
         await UniTask.WhenAll(tasks);
 
-        // Increment executeSubGroupID
         executeSubGroupID++;
-
         var currentGroup = scenarioActionList.Find(data => data.GroupID == executeGroupID);
         if (currentGroup != null)
         {
-            var subGroupCount = currentGroup.FindSubGroupActionList(int.MaxValue).Count;
-            if (executeSubGroupID >= subGroupCount)
+            var subGroupCount = currentGroup.FindSubGroupActionList(executeSubGroupID);
+            if (subGroupCount == null || !subGroupCount.Any())
             {
-                executeSubGroupID = 0; // Reset subGroupID
-                executeGroupID++; // Move to next group
-
-                if (executeGroupID >= scenarioActionList.Count)
+                executeGroupID++;
+                executeSubGroupID = 1;
+                if(executeGroupID >= scenarioActionList.Count)
                 {
-                    executeGroupID = 0; // Reset to first group
                     IsExecuteFinish = true;
                 }
             }
+        }
+        else
+        {
+            IsExecuteFinish = true;
         }
     }
 }
@@ -336,11 +343,8 @@ public class ScenarioMasterExecuteAction
         # Generate ScenarioGroupExecuteAction class
         factory_content = """
 using Cysharp.Threading.Tasks;
-using GameCore.Scenario;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using UnityEngine;
 
 public class ScenarioGroupExecuteAction
 {
@@ -354,9 +358,9 @@ public class ScenarioGroupExecuteAction
 
     public void SetUp(BinaryReader reader)
     {
-        GroupID = reader.ReadInt32(); // Added GroupID read, assuming it was missing
-        int count = reader.ReadInt32();
-        for (int i = 0; i < count; i++)
+        GroupID = reader.ReadInt32(); // グループイベントID
+        int subEventCount = reader.ReadInt32(); // サブイベント数
+        for (int i = 0; i < subEventCount; i++)
         {
             var addAction = new ScenarioSubGroupExecuteAction();
             addAction.SetUp(reader);
@@ -364,24 +368,24 @@ public class ScenarioGroupExecuteAction
         }
     }
 
-    public async UniTask OnInitializeAsync(int subGroupID)
+    public async UniTask OnInitializeAsync(int subGroupID, ScenarioExecuteData executeData)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnInitializeAsync()).ToArray();
+        var tasks = find.Select(action => action.OnInitializeAsync(executeData));
         await UniTask.WhenAll(tasks);
     }
 
-    public async UniTask OnExecuteAsync(int subGroupID)
+    public async UniTask OnExecuteAsync(int subGroupID, ScenarioExecuteData executeData)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnExecuteAsync()).ToArray();
+        var tasks = find.Select(action => action.OnExecuteAsync(executeData));
         await UniTask.WhenAll(tasks);
     }
 
-    public async UniTask OnFinalizeAsync(int subGroupID)
+    public async UniTask OnFinalizeAsync(int subGroupID, ScenarioExecuteData executeData)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnFinalizeAsync()).ToArray();
+        var tasks = find.Select(action => action.OnFinalizeAsync(executeData));
         await UniTask.WhenAll(tasks);
     }
 }
@@ -403,12 +407,11 @@ public class ScenarioExecuteAction
     private BaseScenarioRoleData roleData;
     private BaseOrigintScenarioRoleAction action;
 
-    public int GroupID => roleData.ScenarioGroupID;
-    public int SubGroupID => roleData.ScenarioSubGroupID;
 
     public bool IsStartUp => action != null && action.IsStartUp;
     public bool IsRelease => action != null && action.IsRelease;
     public bool IsCompleted => action != null && action.IsCompleted && action.IsStartUp;
+    public bool IsOneCompleted => action != null && action.IsOneExecute && action.IsStartUp;
 
     public void SetUp(ScenarioRoleID id, BinaryReader reader)
     {
@@ -417,33 +420,46 @@ public class ScenarioExecuteAction
         action = ScenarioRoleFactory.CreateRoleAction(roleData);
     }
 
-    public UniTask OnInitializeAsync()
+
+    public UniTask OnInitializeAsync(ScenarioExecuteData executeData)
     {
         if (IsStartUp)
         {
             return UniTask.CompletedTask;
         }
-        action.OnInitialize();
+        action.OnInitialize(executeData);
         return UniTask.CompletedTask;
     }
 
-    public UniTask OnExecuteAsync()
+
+    public UniTask OnOneExecuteAsync(ScenarioExecuteData executeData)
+    {
+        if (IsOneCompleted)
+        {
+            return UniTask.CompletedTask;
+        }
+        action.OnExecute(executeData);
+        return UniTask.CompletedTask;
+    }
+
+
+    public UniTask OnExecuteAsync(ScenarioExecuteData executeData)
     {
         if (IsCompleted)
         {
             return UniTask.CompletedTask;
         }
-        action.OnExecute();
+        action.OnExecute(executeData);
         return UniTask.CompletedTask;
     }
 
-    public UniTask OnFinalizeAsync()
+    public UniTask OnFinalizeAsync(ScenarioExecuteData executeData)
     {
         if (IsRelease)
         {
             return UniTask.CompletedTask;
         }
-        action.OnFinalize();
+        action.OnFinalize(executeData);
         return UniTask.CompletedTask;
     }
 }
@@ -460,7 +476,6 @@ using GameCore.Scenario;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEngine;
 
 public class ScenarioSubGroupExecuteAction
 {
@@ -469,39 +484,44 @@ public class ScenarioSubGroupExecuteAction
 
     public void SetUp(BinaryReader reader)
     {
-        SubGroupID = reader.ReadInt32();
-        int count = reader.ReadInt32();
-        for (int i = 0; i < count; i++)
+        SubGroupID = reader.ReadInt32(); // サブイベントID
+        int actionCount = reader.ReadInt32(); // アクション（ロール）数
+        for (int i = 0; i < actionCount; i++)
         {
             var addAction = new ScenarioExecuteAction();
-            var id = (ScenarioRoleID)reader.ReadInt32();
+            var id = (ScenarioRoleID)reader.ReadInt32(); // ロールID
             addAction.SetUp(id, reader);
             scenarioActionList.Add(addAction);
         }
     }
 
-    public async UniTask OnInitializeAsync()
+    public async UniTask OnInitializeAsync(ScenarioExecuteData executeData)
     {
-        var tasks = scenarioActionList.Select(action => action.OnInitializeAsync()).ToArray();
+        var tasks = scenarioActionList.Select(action => action.OnInitializeAsync(executeData));
         await UniTask.WhenAll(tasks);
     }
 
-    public async UniTask OnExecuteAsync()
+    public async UniTask OnExecuteAsync(ScenarioExecuteData executeData)
     {
+        var oneTasks = scenarioActionList
+                    .Where(action => !action.IsOneCompleted)
+                    .Select(action => action.OnExecuteAsync(executeData))
+                    .ToArray();
+        await UniTask.WhenAll(oneTasks);
         while (scenarioActionList.Any(action => !action.IsCompleted))
         {
             var tasks = scenarioActionList
                 .Where(action => !action.IsCompleted)
-                .Select(action => action.OnExecuteAsync())
+                .Select(action => action.OnExecuteAsync(executeData))
                 .ToArray();
             await UniTask.WhenAll(tasks);
-            await UniTask.Yield(); // Prevent tight loop, allow frame update
+            await UniTask.Yield();
         }
     }
 
-    public async UniTask OnFinalizeAsync()
+    public async UniTask OnFinalizeAsync(ScenarioExecuteData executeData)
     {
-        var tasks = scenarioActionList.Select(action => action.OnFinalizeAsync()).ToArray();
+        var tasks = scenarioActionList.Select(action => action.OnFinalizeAsync(executeData)).ToArray();
         await UniTask.WhenAll(tasks);
     }
 }
@@ -513,11 +533,11 @@ public class ScenarioSubGroupExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioEventBinaryHeader.cs")):
         # Generate ScenarioEventBinaryHeader class
         factory_content = """
-// EventBinaryHeader.cs
 using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 
 namespace GameCore.Scenario
@@ -545,55 +565,70 @@ namespace GameCore.Scenario
             }
         }
 
-        // バイナリファイルからヘッダーを非同期で読み込むメソッド
-        public static async UniTask ReadHeaderAsync(string filePath, Action onComplete = null)
+        public static async UniTask ReadHeaderAsync(Action action = null)
         {
-            try
+            using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
+            using (var reader = new BinaryReader(stream, Encoding.UTF8))
             {
-                using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                using (var reader = new BinaryReader(stream, Encoding.UTF8))
+                int eventCount = reader.ReadInt32();
+
+
+                if (eventCount <= 0)
                 {
-                    int eventCount = reader.ReadInt32(); // イベント数
-                    var events = new List<ScenarioEventInfo>();
-
-                    // イベント情報の読み込み
-                    for (int i = 0; i < eventCount; i++)
-                    {
-                        var eventInfo = ScenarioEventInfo.ReadFromBinary(reader);
-                        events.Add(eventInfo);
-                        await UniTask.Yield();
-                    }
-                    await UniTask.Yield();
-                    // サブイベント情報の読み込み
-                    foreach (var eventInfo in events)
-                    {
-                        stream.Seek(eventInfo.EventOffset, SeekOrigin.Begin);
-                        int subEventCount = reader.ReadInt32(); // サブイベント数
-                        for (int j = 0; j < subEventCount; j++)
-                        {
-                            var subEventInfo = ScenarioSubEventInfo.ReadFromBinary(reader);
-                            eventInfo.SubEvents.Add(subEventInfo);
-                        }
-                        await UniTask.Yield();
-                    }
-
-                    // staticフィールドに保存（メモリ保持）
-                    Events = events;
+                    throw new InvalidDataException($"Invalid event count: {eventCount}");
                 }
 
-                // 読み込み完了後にコールバックを呼び出し
-                onComplete?.Invoke();
-            }
-            catch (IOException ex)
-            {
-                throw new IOException($"Failed to read binary file: {filePath}", ex);
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Error reading binary header: {ex.Message}", ex);
-            }
+                Events.Clear();
+                for (int i = 0; i < eventCount; i++)
+                {
+                    int idLength = reader.ReadInt32();
+                    if (idLength < 0 || idLength > 1000) // 妥当な長さチェック
+                    {
+                        throw new InvalidDataException($"Invalid event ID length: {idLength} at position {stream.Position - 4}");
+                    }
+                    string eventId = Encoding.UTF8.GetString(reader.ReadBytes(idLength));
+                    int nameLength = reader.ReadInt32();
+                    if (nameLength < 0 || nameLength > 1000)
+                    {
+                        throw new InvalidDataException($"Invalid event name length: {nameLength} at position {stream.Position - 4}");
+                    }
+                    string eventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength));
+                    long eventOffset = reader.ReadInt64();
+                    if (eventOffset < 0 || eventOffset > stream.Length)
+                    {
+                        throw new InvalidDataException($"Invalid event offset: {eventOffset} at position {stream.Position - 8}");
+                    }
 
-            await UniTask.CompletedTask;
+                    int subEventCount = reader.ReadInt32();
+                    if (subEventCount < 0 || subEventCount > 1000)
+                    {
+                        throw new InvalidDataException($"Invalid subEvent count: {subEventCount} at position {stream.Position - 4}");
+                    }
+
+                    var subEvents = new List<ScenarioSubEventInfo>();
+                    for (int j = 0; j < subEventCount; j++)
+                    {
+                        int subEventId = reader.ReadInt32();
+                        int subNameLength = reader.ReadInt32();
+                        if (subNameLength < 0 || subNameLength > 1000)
+                        {
+                            throw new InvalidDataException($"Invalid subEvent name length: {subNameLength} at position {stream.Position - 4}");
+                        }
+                        string subEventName = Encoding.UTF8.GetString(reader.ReadBytes(subNameLength));
+                        long subEventOffset = reader.ReadInt64();
+                        if (subEventOffset < 0 || subEventOffset > stream.Length)
+                        {
+                            throw new InvalidDataException($"Invalid subEvent offset: {subEventOffset} at position {stream.Position - 8}");
+                        }
+                        subEvents.Add(new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset));
+                    }
+
+                    Events.Add(new ScenarioEventInfo(eventId, eventName, eventOffset, subEvents));
+                    await UniTask.Yield();
+                }
+                await UniTask.Yield();
+                action?.Invoke();
+            }
         }
 
         // イベント名とサブイベントIDからサブイベントのシーク座標を取得するメソッド
@@ -645,24 +680,14 @@ namespace GameCore.Scenario
         public long EventOffset { get; set; } // イベントのシーク座標
         public List<ScenarioSubEventInfo> SubEvents { get; set; } // サブイベントのリスト
 
-        public ScenarioEventInfo(string eventId, string eventName, long eventOffset)
+        public ScenarioEventInfo(string eventId, string eventName, long eventOffset,List<ScenarioSubEventInfo> value)
         {
             EventId = eventId ?? string.Empty;
             EventName = eventName ?? string.Empty;
             EventOffset = eventOffset;
-            SubEvents = new List<ScenarioSubEventInfo>();
+            SubEvents = value;
         }
 
-        // バイナリから読み込むメソッド
-        public static ScenarioEventInfo ReadFromBinary(BinaryReader reader)
-        {
-            int idLength = reader.ReadInt32(); // イベントIDの長さ
-            string eventId = Encoding.UTF8.GetString(reader.ReadBytes(idLength)); // イベントID
-            int nameLength = reader.ReadInt32(); // イベント名の長さ
-            string eventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength)); // イベント名
-            long eventOffset = reader.ReadInt64(); // イベントのシーク座標
-            return new ScenarioEventInfo(eventId, eventName, eventOffset);
-        }
     }
 }
 """
@@ -693,20 +718,30 @@ namespace GameCore.Scenario
             SubEventOffset = subEventOffset;
         }
 
-        // バイナリから読み込むメソッド
-        public static ScenarioSubEventInfo ReadFromBinary(BinaryReader reader)
-        {
-            int subEventId = reader.ReadInt32(); // サブイベントID
-            int nameLength = reader.ReadInt32(); // サブイベント名の長さ
-            string subEventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength)); // サブイベント名
-            long subEventOffset = reader.ReadInt64(); // サブイベントのシーク座標
-            return new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset);
-        }
+
     }
 }
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioSubEventInfo.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
+            
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData")):
+        code_str = """"
+using UnityEngine;
+
+
+/// <summary>
+/// ExecuteData
+/// </summary>
+public class ScenarioExecuteData
+{
+    
+}
+
+        """
+        
+        with open(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 
 # app.pyから借用/統合するための関数 (実際はapp.pyからインポート)
 def get_enum_values():
@@ -964,31 +999,47 @@ def pack_value(value, type_):
     else:  # enum/class_id
         return struct.pack('i', int(value))
     
+
 def generate_all_event_bin():
     all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bin')
     header = bytearray()
     data_sections = bytearray()
     
-# 1. 全イベントJSONの読み込み
+    # 1. Load event JSON files
     event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
-    event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))
+    event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))  # Original path
     events = []
     for event_file in event_files:
         try:
             with open(event_file, 'r', encoding='utf-8') as f:
                 event_data = json.load(f)
+                # Handle list-wrapped JSON
+                if isinstance(event_data, list) and event_data:
+                    event_data = event_data[0]  # Take first dict
+                if not isinstance(event_data, dict):
+                    logger.error(f"Invalid event data format in {event_file}: expected dict, got {type(event_data)}")
+                    continue
+                if 'id' not in event_data:
+                    logger.error(f"Missing 'id' in event data: {event_file}")
+                    continue
                 events.append(event_data)
+                logger.debug(f"Loaded event file: {event_file}, ID: {event_data.get('id')}")
         except Exception as e:
             logger.error(f"Failed to load event file {event_file}: {e}")
     
-    # ヘッダーにイベント数
+    if not events:
+        logger.error("No valid event files loaded")
+        return {"error": "No valid event files loaded"}
+    
+    # Write event count
     header.extend(struct.pack('i', len(events)))
+    logger.debug(f"Writing event count: {len(events)}")
     
-    # イベントごとのオフセット管理
-    offsets = {}  # event_id -> ファイル内絶対オフセット
-    event_offset_positions = []  # ヘッダー内のオフセットプレースホルダー位置
+    # Event offset management
+    offsets = {}
+    event_offset_positions = []
     
-    # 2. イベントヘッダー（ID, 名前, オフセットプレースホルダー）
+    # 2. Event headers
     for event in events:
         event_id = event.get('id', '')
         id_encoded = event_id.encode('utf-8')
@@ -997,12 +1048,15 @@ def generate_all_event_bin():
         header.extend(id_encoded)
         header.extend(struct.pack('i', len(name_encoded)))
         header.extend(name_encoded)
-        offset_pos = len(header)  # オフセット書き込み位置
-        header.extend(struct.pack('q', 0))  # プレースホルダー
+        offset_pos = len(header)
+        header.extend(struct.pack('q', 0))
         event_offset_positions.append((event_id, offset_pos))
+        logger.debug(f"Event header: ID={event_id}, Name={event.get('name', '')}, OffsetPos={offset_pos}")
     
-    # 3. ロールスキーマの読み込み
-    role_schemas = {}
+    # 3. Load role schemas
+    role_schemas = {
+        'TalkText': [('text', 'string'), ('name', 'string')]  # Temporary schema
+    }
     role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
     for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
         role_name = os.path.basename(os.path.dirname(role_file))
@@ -1011,75 +1065,70 @@ def generate_all_event_bin():
                 schema_data = json.load(f)
                 fields = schema_data.get('data', [])
                 role_schemas[role_name] = [(field['name'], field['type']) for field in fields]
+            logger.debug(f"Loaded role schema: {role_name}")
         except Exception as e:
             logger.error(f"Failed to load role file {role_file}: {e}")
     
-    # 4. データセクション生成
-    for idx, event in enumerate(events):
+    # 4. Data section generation
+    for event in events:
         event_id = event.get('id', '')
         event_offset = len(header) + len(data_sections)
         offsets[event_id] = event_offset
+        logger.debug(f"Event {event_id} data at offset: {event_offset}")
 
         section = bytearray()
-        subEvents = event.get('subEvents', [])  # リストとして取得
-        logger.debug(f"Generating bin for event {event_id}: {len(subEvents)} subEvents")
-        section.extend(struct.pack('i', len(subEvents)))
+        subEvents = event.get('subEvents', [])
+        section.extend(struct.pack('i', len(subEvents)))  # SubEvent count
+        logger.debug(f"Writing subEvent count for {event_id}: {len(subEvents)}")
 
-        sub_offsets = {}  # sub_id -> ファイル内絶対オフセット
-        sub_offset_positions = []  # section内のオフセットプレースホルダー位置
+        sub_offsets = {}
+        sub_offset_positions = []
 
-        # 4.1 サブイベントのプレースホルダー
+        # 4.1 SubEvent placeholders
         for sub_data in subEvents:
-            try:
-                sub_id = str(sub_data.get('subId', 0))  # subIdを文字列として扱う
-                name_encoded = sub_data.get('name', '').encode('utf-8')
-                section.extend(struct.pack('i', int(sub_id)))
-                section.extend(struct.pack('i', len(name_encoded)))
-                section.extend(name_encoded)
-                pos_in_section = len(section)
-                section.extend(struct.pack('q', 0))  # プレースホルダー
-                sub_offset_positions.append((sub_id, pos_in_section))
-            except (ValueError, TypeError) as e:
-                logger.error(f"Invalid subEvent data for event {event_id}, sub_data {sub_data}: {e}")
-                continue
-            
-        # 4.2 サブイベントのデータセクション
+            sub_id = str(sub_data.get('subId', 0))
+            name_encoded = sub_data.get('name', '').encode('utf-8')
+            section.extend(struct.pack('i', int(sub_id)))
+            section.extend(struct.pack('i', len(name_encoded)))
+            section.extend(name_encoded)
+            pos_in_section = len(section)
+            section.extend(struct.pack('q', 0))
+            sub_offset_positions.append((sub_id, pos_in_section))
+            logger.debug(f"SubEvent header: ID={sub_id}, Name={sub_data.get('name', '')}, OffsetPos={pos_in_section}")
+
+        # 4.2 SubEvent data
         for sub_data in subEvents:
-            sub_id = str(sub_data.get('subId', 0))  # subIdを文字列として
+            sub_id = str(sub_data.get('subId', 0))
             sub_offset = len(header) + len(data_sections) + len(section)
             sub_offsets[sub_id] = sub_offset
+            logger.debug(f"SubEvent {sub_id} data at offset: {sub_offset}")
 
             sub_section = bytearray()
-            # サブイベントに対応するsubgroupsを取得
             subgroups = event.get('subgroups', {}).get(sub_id, {})
-            if not isinstance(subgroups, dict) or 'nodes' not in subgroups:
-                logger.error(f"Invalid subgroup for event {event_id}, sub_id {sub_id}: {subgroups}")
-                continue
-            
-            nodes = subgroups.get('nodes', [])
-            sub_section.extend(struct.pack('i', len(nodes)))  # num_groups
+            groups = subgroups.get('nodes', []) if isinstance(subgroups, dict) else []
+            sub_section.extend(struct.pack('i', len(groups)))  # Group count
+            logger.debug(f"Writing group count for subEvent {sub_id}: {len(groups)}")
 
-            for node in nodes:
-                node_id = int(node.get('id', '0')) if node.get('id', '0').isdigit() else 0
-                sub_section.extend(struct.pack('i', node_id))  # GroupID
+            for group in groups:
+                group_id = int(group.get('id', '0')) if group.get('id', '0').isdigit() else 0
+                sub_section.extend(struct.pack('i', group_id))  # Group ID
+                logger.debug(f"Group ID: {group_id}")
 
-                roles = node.get('data', {}).get('roles', [])
-                inner_subgroups = node.get('data', {}).get('subgroups', {})
+                roles = group.get('data', {}).get('roles', [])
+                inner_subgroups = group.get('data', {}).get('subgroups', {})
+                inner_nodes = sum([inner_sub.get('nodes', []) for inner_sub in inner_subgroups.values()], [])
+                num_subgroups = (1 if roles else 0) + len(inner_nodes)
+                sub_section.extend(struct.pack('i', num_subgroups))  # SubGroup count
+                logger.debug(f"SubGroup count for Group {group_id}: {num_subgroups}")
 
-                # num_subgroups = (1 if roles else 0) + len(inner_subgroups)
-                num_subgroups = 0
-                if len(roles) > 0:
-                    num_subgroups += 1
-                num_subgroups += len(inner_subgroups)
-                sub_section.extend(struct.pack('i', num_subgroups))  # num_subgroups
-
-                # top rolesをSubGroupID=0のsubgroupとして扱う
-                if len(roles) > 0:
-                    sub_section.extend(struct.pack('i', 0))  # SubGroupID = 0 (メイン)
-                    sub_section.extend(struct.pack('i', len(roles)))  # num_actions
+                if roles:
+                    sub_section.extend(struct.pack('i', 0))  # SubGroup ID = 0
+                    sub_section.extend(struct.pack('i', len(roles)))  # Action count
+                    logger.debug(f"Roles for Group {group_id}: {len(roles)}")
                     for role in roles:
                         role_id = int(role.get('id', '0')) if isinstance(role.get('id', '0'), (int, str)) and str(role.get('id', '0')).isdigit() else 0
-                        sub_section.extend(struct.pack('i', role_id))  # RoleID (typeとして仮定)
+                        sub_section.extend(struct.pack('i', role_id))
+                        logger.debug(f"Role ID: {role_id}")
                         schema_fields = role_schemas.get(role.get('name', ''), [])
                         fields = role.get('data', [])
                         for field_idx in range(min(len(fields), len(schema_fields))):
@@ -1087,23 +1136,19 @@ def generate_all_event_bin():
                             _, field_type = schema_fields[field_idx]
                             sub_section.extend(pack_value(field.get('value', ''), field_type))
 
-                # inner_subgroupsを追加のsubgroupとして扱い、inner_nodesのinner_rolesをflattenしてactionとして
                 for inner_sub_id, inner_sub in inner_subgroups.items():
                     inner_nodes = inner_sub.get('nodes', [])
-                    sub_section.extend(struct.pack('i', int(inner_sub_id) if inner_sub_id.isdigit() else 0))  # SubGroupID
-
-                    # num_actions = 合計inner_roles数 (flatten)
-                    num_actions = 0
                     for inner_node in inner_nodes:
+                        inner_sub_group_id = int(inner_node.get('id', '0')) if inner_node.get('id', '0').isdigit() else 0
+                        sub_section.extend(struct.pack('i', inner_sub_group_id))  # SubGroup ID
                         inner_roles = inner_node.get('data', {}).get('roles', [])
-                        num_actions += len(inner_roles)
-                    sub_section.extend(struct.pack('i', num_actions))  # num_actions
+                        sub_section.extend(struct.pack('i', len(inner_roles)))  # Action count
+                        logger.debug(f"SubGroup ID: {inner_sub_group_id}, Action count: {len(inner_roles)}")
 
-                    for inner_node in inner_nodes:
-                        inner_roles = inner_node.get('data', {}).get('roles', [])
                         for inner_role in inner_roles:
                             inner_role_id = int(inner_role.get('id', '0')) if isinstance(inner_role.get('id', '0'), (int, str)) and str(inner_role.get('id', '0')).isdigit() else 0
-                            sub_section.extend(struct.pack('i', inner_role_id))  # RoleID (typeとして仮定)
+                            sub_section.extend(struct.pack('i', inner_role_id))
+                            logger.debug(f"Inner Role ID: {inner_role_id}")
                             inner_schema_fields = role_schemas.get(inner_role.get('name', ''), [])
                             inner_fields = inner_role.get('data', [])
                             for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
@@ -1113,28 +1158,26 @@ def generate_all_event_bin():
 
             section.extend(sub_section)
 
-        # 4.4 サブイベントのオフセットをパッチ
         for sub_id, pos_in_section in sub_offset_positions:
+            logger.debug(f"Patching SubEvent {sub_id} offset: {sub_offsets[sub_id]} at position {pos_in_section}")
             section[pos_in_section:pos_in_section+8] = struct.pack('q', sub_offsets[sub_id])
 
         data_sections.extend(section)
     
-    # 5. イベントオフセットをヘッダーにパッチ
     for event_id, pos in event_offset_positions:
+        logger.debug(f"Patching Event {event_id} offset: {offsets[event_id]} at position {pos}")
         header[pos:pos+8] = struct.pack('q', offsets[event_id])
     
-    # 6. ファイル書き込み
     try:
         with open(all_bin_path, 'wb') as f:
             f.write(header + data_sections)
-        logger.info(f"Successfully wrote binary file: {all_bin_path}")
+        logger.info(f"Successfully wrote binary file: {all_bin_path} (Size: {len(header + data_sections)} bytes)")
     except Exception as e:
         logger.error(f"Failed to write binary file {all_bin_path}: {e}")
         return {"error": f"Failed to write binary file: {e}"}
     
-    # 7. class_id_generate（仮に存在）
     try:
-        class_id_generate()  # 未定義なので仮置き
+        class_id_generate()
     except NameError:
         logger.error("class_id_generate is not defined")
         return {"error": "class_id_generate is not defined"}

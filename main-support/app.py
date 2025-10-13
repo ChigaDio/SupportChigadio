@@ -3614,17 +3614,20 @@ namespace GameCore.Scenario {{
         public {name}RoleAction({name}RoleData roleData) : base(roleData) {{
         }}
 
-        public override void OnInitialize() {{
+        public override void OnInitialize(ScenarioExecuteData executeData) {{
             // Custom initialization logic
             base.OnInitialize();
         }}
+        
+        public override void OnOneExecute(ScenarioExecuteData executeData) {{
+        }}
 
-        public override void OnExecute() {{
+        public override void OnExecute(ScenarioExecuteData executeData) {{
             // Custom action logic using RoleData
             Debug.Log($"Executing {name} with RoleID: {{RoleData.RoleID}}");
         }}
 
-        public override void OnFinalize() {{
+        public override void OnFinalize(ScenarioExecuteData executeData) {{
             // Custom cleanup logic
         }}
     }}
