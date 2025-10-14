@@ -1114,12 +1114,12 @@ def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, cla
     elif type_ + "ID" in enum_data:
         # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
         property_name = value
-        actual_id = next((item['id'] for item in enum_data[type_ + "ID"] if item['property'] == property_name.split('.')[-1]), 0)
+        actual_id = next((item['id'] for item in enum_data[type_ + "ID"] if item['property'] == property_name.split('.')[-1]), -1)
         return struct.pack('i', actual_id)
                     
     elif type_ + "ID" in class_data_id:
         property_name = value
-        actual_id = next((row['id'] for row in class_data_id[type_+ "ID"]['rows'] if row['enum_property'] == property_name.split('.')[-1]), 0)
+        actual_id = next((row['id'] for row in class_data_id[type_+ "ID"]['rows'] if row['enum_property'] == property_name.split('.')[-1]), -1)
         return struct.pack('i', actual_id)
     else:  # enuass_id
         return struct.pack('i', int(value))

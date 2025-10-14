@@ -1174,6 +1174,57 @@ public static class DebugLogBridge
     '''
     with open(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridge.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
+        
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,"BaseSingleton.cs")):
+    code_str = """
+using UnityEngine;
+
+namespace GameCore
+{
+    public class BaseSingleton<T> : MonoBehaviour where T : MonoBehaviour
+    {
+        protected static T instance;
+
+        public static T Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    // まず、既にシーン内にあるかチェック
+                    instance = GameObject.FindFirstObjectByType<T>();
+
+                    if (instance == null)
+                    {
+                        // まだなければ新しく生成
+                        GameObject instanceObj = new GameObject();
+                        instance = instanceObj.AddComponent<T>();
+                        instanceObj.name = typeof(T).Name;
+                    }
+                }
+
+                return instance;
+            }
+        }
+
+        public virtual void AwakeSingleton()
+        {
+            if (instance == null)
+            {
+                instance = gameObject.GetComponent<T>();
+            }
+        }
+
+        public void Awake()
+        {
+            AwakeSingleton();
+        }
+    }
+}
+    """
+    
+    with open(os.path.join(DATA_DIR,SCRIPT,"BaseSingleton.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
     
     
     
@@ -1286,10 +1337,10 @@ def generate_enum_cs(name):
         valid_data = [item for item in data if not isnan(item['value']) and isfinite(item['value'])]
         cs_content = "namespace GameCore.Enums\n{\n"
         cs_content += f"    public enum {name}ID\n    {{\n"
-        cs_content += "        None = 0, // デフォルト値\n"
+        cs_content += "        None = -1, // デフォルト値\n"
         for item in valid_data:
             cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
-        max_value = max([item['value'] for item in valid_data], default=-1) + 1
+        max_value = max([item['value'] for item in valid_data], default=0) + 1
         cs_content += f"        Max = {max_value}\n"
         cs_content += "    }\n}"
         cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}ID.cs")
@@ -1523,11 +1574,11 @@ def generate_binary_data(name, json_data):
                     binary_data.extend(struct.pack(TYPE_MAP[type_]['pack'], value if value is not None else TYPE_MAP[type_].get('default', 0)))
             elif type_id in enum_data:
                 property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)
+                actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), -1)
                 binary_data.extend(struct.pack('i', actual_id))
             elif type_id in class_data_id:
                 property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
+                actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), -1)
                 binary_data.extend(struct.pack('i', actual_id))
             else:
                 binary_data.extend(struct.pack('i', 0))
@@ -1606,7 +1657,7 @@ def generate_table_id():
         
         cs_content = "namespace GameCore.Enums\n{\n"
         cs_content += "    public enum TableID\n    {\n"
-        cs_content += "        None = 0,\n"
+        cs_content += "        None = -1,\n"
         for item in class_list:
             cs_content += f"        {item['name']} = {item['id']},\n"
         max_id = max([item['id'] for item in class_list], default=0) + 1
@@ -1637,10 +1688,10 @@ def generate_all_enums():
             valid_data = [item for item in data if not isnan(item['value']) and isfinite(item['value'])]
             cs_content = "namespace GameCore.Enums\n{\n"
             cs_content += f"    public enum {name}ID\n    {{\n"
-            cs_content += "        None = 0, // デフォルト値\n"
+            cs_content += "        None = -1, // デフォルト値\n"
             for item in valid_data:
                 cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
-            max_value = max([item['value'] for item in valid_data], default=-1) + 1
+            max_value = max([item['value'] for item in valid_data], default=0) + 1
             cs_content += f"        Max = {max_value}\n"
             cs_content += "    }\n}"
             
@@ -2016,7 +2067,7 @@ def generate_class_data_id_cs(name):
             ef.write("using System;\n\n")
             ef.write("namespace GameCore.Tables.ID\n{\n")
             ef.write(f"    public enum {name}TableID\n    {{\n")
-            ef.write("        None = 0,\n")
+            ef.write("        None = -1,\n")
             for i, row in enumerate(rows, start=1):
                 ef.write(f"        {row['enum_property']} = {i},\n")
             ef.write("        Max\n")
@@ -2085,7 +2136,7 @@ def write_binary_field(f, value, type_str, enum_list, class_list):
 
     elif type_str in enum_list:
         # Enumはintとして処理
-        f.write(struct.pack('i', int(value) if value is not None else 0))
+        f.write(struct.pack('i', int(value) if value is not None else -1))
 
     elif type_str in class_list:
         # ClassDataの再帰処理
@@ -2165,13 +2216,13 @@ def generate_binary(name):
                     elif type_id in enum_data:
                         # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
                         property_name = col_value['value'].split('.')[-1]
-                        actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)
+                        actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), -1)
                         f.write(struct.pack('i', actual_id))
                     
                     elif type_id in class_data_id:
                         # 文字列ならPersonalityID.以降を取得、辞書ならvalueを使用
                         property_name = col_value['value'].split('.')[-1]
-                        actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
+                        actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), -1)
                         f.write(struct.pack('i', actual_id))
                     
                     elif col['type'] in class_list:
