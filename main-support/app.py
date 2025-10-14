@@ -3562,7 +3562,7 @@ namespace GameCore.Scenario {{
         if type_ in enum_list:
             type_ = f"Enums.{type_}ID"
         elif type_ in class_data_id_list:
-            type_ = f"Tables.ID.{type_}ID"
+            type_ = f"Tables.ID.{type_}TableID"
         name_ = item['name']
         array_size = item['arraySize']
         if array_size > 0:
@@ -3595,7 +3595,10 @@ namespace GameCore.Scenario {{
                 else:
                     cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = reader.{TYPE_MAP[type_.lower()]['cs_read']}(); }}\n"
             else:
-                cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = ({type_})reader.ReadInt32(); }}\n"
+                if type_ in enum_list:
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = (Enums.{type_}ID)reader.ReadInt32(); }}\n"
+                elif type_ in class_data_id_list:
+                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = (Tables.ID.{type_}TableID)reader.ReadInt32(); }}\n"
         else:
             if type_.lower() in TYPE_MAP:
                 if type_.lower() == 'string':
@@ -3607,7 +3610,10 @@ namespace GameCore.Scenario {{
                 else:
                     cs_data_content += f"            {name_} = reader.{TYPE_MAP[type_.lower()]['cs_read']}();\n"
             else:
-                cs_data_content += f"            {name_} = ({type_})reader.ReadInt32();\n"
+                if type_ in enum_list:
+                    cs_data_content += f"            {name_} = (Enums.{type_}ID)reader.ReadInt32();\n"
+                elif type_ in class_data_id_list:
+                    cs_data_content += f"            {name_} = (Tables.ID.{type_}TableID)reader.ReadInt32();\n"
     
 
     
@@ -3627,7 +3633,7 @@ namespace GameCore.Scenario {{
 
         public override void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom initialization logic
-            base.OnInitialize();
+            base.OnInitialize(executeData,ct);
         }}
         
         public override void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
