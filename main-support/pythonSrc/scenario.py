@@ -212,7 +212,7 @@ namespace GameCore.Scenario
             
             
     
-    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioEventManager.cs")):        
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioRoleID.cs")):        
         # Generate ScenarioRoleID enum
         enum_content = """using System;
 
