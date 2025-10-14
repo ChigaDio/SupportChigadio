@@ -3606,7 +3606,10 @@ namespace GameCore.Scenario {{
     cs_data_content += "    }\n  }\n}\n"
     base_action_class = "BaseScenarioRoleBranchAction" if branch_type == 'Branch' else "BaseScenarioRoleAction"
     # Generate Action class inheriting from BaseScenarioRoleAction
-    cs_action_content = f"""using System;
+    cs_action_content = f"""
+using Cysharp.Threading.Tasks;
+using System;
+using System.Threading;
 using UnityEngine;
 
 namespace GameCore.Scenario {{
@@ -3614,20 +3617,20 @@ namespace GameCore.Scenario {{
         public {name}RoleAction({name}RoleData roleData) : base(roleData) {{
         }}
 
-        public override void OnInitialize(ScenarioExecuteData executeData) {{
+        public override void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom initialization logic
             base.OnInitialize();
         }}
         
-        public override void OnOneExecute(ScenarioExecuteData executeData) {{
+        public override void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
         }}
 
-        public override void OnExecute(ScenarioExecuteData executeData) {{
+        public override void OnExecute(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom action logic using RoleData
             Debug.Log($"Executing {name} with RoleID: {{RoleData.RoleID}}");
         }}
 
-        public override void OnFinalize(ScenarioExecuteData executeData) {{
+        public override void OnFinalize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom cleanup logic
         }}
     }}

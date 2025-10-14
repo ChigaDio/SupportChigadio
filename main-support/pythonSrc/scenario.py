@@ -65,10 +65,13 @@ namespace GameCore.Scenario
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseOrigintScenarioRoleAction.cs")):
         code_str = """
 
+
+
 using System;
 using System.Collections;
 using UnityEngine;
 using System.IO;
+using System.Threading;
 namespace GameCore.Scenario
 {
     public  class BaseOrigintScenarioRoleAction
@@ -81,24 +84,26 @@ namespace GameCore.Scenario
         {
             
         }
-        public virtual void OnInitialize(ScenarioExecuteData executeData)
+        public virtual void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             IsCompleted = false;
         }
-        public virtual void OnOneExecute(ScenarioExecuteData executeData)
+        public virtual void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement action logic here
         }
-        public virtual void OnExecute(ScenarioExecuteData executeData)
+        public virtual void OnExecute(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement action logic here
         }
-        public virtual void OnFinalize(ScenarioExecuteData executeData)
+        public virtual void OnFinalize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement cleanup logic here
         }
     }
 }
+
+
 
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseOrigintScenarioRoleActionbstractScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
@@ -107,10 +112,12 @@ namespace GameCore.Scenario
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseGeneralScenarioRoleAction.cs")):
         code_str = """
 
+
 using System;
 using System.Collections;
 using UnityEngine;
 using System.IO;
+using System.Threading;
 namespace GameCore.Scenario
 {
     public  class BaseGeneralScenarioRoleAction<T> : BaseOrigintScenarioRoleAction where T : BaseScenarioRoleData
@@ -123,12 +130,13 @@ namespace GameCore.Scenario
         }
 
 
-        public override void OnInitialize(ScenarioExecuteData executeData)
+        public override void OnInitialize(ScenarioExecuteData executeData,CancellationTokenSource ct)
         {
-            base.OnInitialize(executeData);
+            base.OnInitialize(executeData,ct);
         }
     }
 }
+
 
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseGeneralScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
@@ -137,8 +145,10 @@ namespace GameCore.Scenario
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleAction.cs")):
         code_str = """
 
+
 using System;
 using System.Collections;
+using System.Threading;
 using UnityEngine;
 
 namespace GameCore.Scenario
@@ -151,15 +161,16 @@ namespace GameCore.Scenario
 
         }
 
-        public override  void OnInitialize(ScenarioExecuteData executeData)
+        public override  void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
-            base.OnInitialize(executeData);
+            base.OnInitialize(executeData,ct);
         }
 
 
 
     }
 }
+
 
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleAction.cs"), 'w', encoding='utf-8') as f:
@@ -168,8 +179,10 @@ namespace GameCore.Scenario
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleBranchAction.cs")):
         code_str = """
 
+
 using System;
 using System.Collections;
+using System.Threading;
 using UnityEngine;
 
 namespace GameCore.Scenario
@@ -183,14 +196,15 @@ namespace GameCore.Scenario
 
         }
 
-        public override void OnInitialize(ScenarioExecuteData executeData)
+        public override void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
-            base.OnInitialize(executeData);
+            base.OnInitialize(executeData,ct);
         }
 
 
     }
 }
+
 
 """
         with open(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenarioRoleBranchAction.cs"), 'w', encoding='utf-8') as f:
@@ -254,6 +268,7 @@ using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 public class ScenarioMasterExecuteAction
 {
@@ -262,6 +277,7 @@ public class ScenarioMasterExecuteAction
     public int executeSubGroupID { get; private set; } = 1;
     public bool IsExecuteFinish { get; private set; }
     private ScenarioExecuteData executeData = new ScenarioExecuteData();
+    public ScenarioExecuteData ExecuteData {  get { return executeData; } }
 
     private List<ScenarioGroupExecuteAction> FindGroupActionList(int groupID)
     {
@@ -285,33 +301,33 @@ public class ScenarioMasterExecuteAction
         }
     }
 
-    public async UniTask OnInitializeAsync()
+    public async UniTask OnInitializeAsync(CancellationTokenSource ct)
     {
         if (IsMaxReached()) return;
 
         var find = FindGroupActionList(executeGroupID);
-        var tasks = find.Select(action => action.OnInitializeAsync(executeSubGroupID, executeData));
-        await UniTask.WhenAll(tasks);
+        var tasks = find.Select(action => action.OnInitializeAsync(executeSubGroupID, executeData,ct));
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnExecuteAsync()
+    public async UniTask OnExecuteAsync(CancellationTokenSource ct)
     {
         if (IsMaxReached()) return;
 
         var find = FindGroupActionList(executeGroupID).First();
         var subFind = find.FindSubGroupActionList(executeSubGroupID);
-        var tasks = subFind.Select(action => action.OnExecuteAsync(executeData)).ToArray();
-        await UniTask.WhenAll(tasks);
+        var tasks = subFind.Select(action => action.OnExecuteAsync(executeData, ct)).ToArray();
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnFinalizeAsync()
+    public async UniTask OnFinalizeAsync(CancellationTokenSource ct)
     {
         if (IsMaxReached()) return;
 
         var find = FindGroupActionList(executeGroupID).First();
         var subFind = find.FindSubGroupActionList(executeSubGroupID);
-        var tasks = subFind.Select(action => action.OnFinalizeAsync(executeData)).ToArray();
-        await UniTask.WhenAll(tasks);
+        var tasks = subFind.Select(action => action.OnFinalizeAsync(executeData, ct)).ToArray();
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
 
         executeSubGroupID++;
         var currentGroup = scenarioActionList.Find(data => data.GroupID == executeGroupID);
@@ -345,6 +361,7 @@ public class ScenarioMasterExecuteAction
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 public class ScenarioGroupExecuteAction
 {
@@ -368,25 +385,25 @@ public class ScenarioGroupExecuteAction
         }
     }
 
-    public async UniTask OnInitializeAsync(int subGroupID, ScenarioExecuteData executeData)
+    public async UniTask OnInitializeAsync(int subGroupID, ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnInitializeAsync(executeData));
-        await UniTask.WhenAll(tasks);
+        var tasks = find.Select(action => action.OnInitializeAsync(executeData,ct));
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnExecuteAsync(int subGroupID, ScenarioExecuteData executeData)
+    public async UniTask OnExecuteAsync(int subGroupID, ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnExecuteAsync(executeData));
-        await UniTask.WhenAll(tasks);
+        var tasks = find.Select(action => action.OnExecuteAsync(executeData,ct));
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnFinalizeAsync(int subGroupID, ScenarioExecuteData executeData)
+    public async UniTask OnFinalizeAsync(int subGroupID, ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         var find = FindSubGroupActionList(subGroupID);
-        var tasks = find.Select(action => action.OnFinalizeAsync(executeData));
-        await UniTask.WhenAll(tasks);
+        var tasks = find.Select(action => action.OnFinalizeAsync(executeData,ct));
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 }
 """
@@ -400,6 +417,7 @@ public class ScenarioGroupExecuteAction
 using Cysharp.Threading.Tasks;
 using GameCore.Scenario;
 using System.IO;
+using System.Threading;
 using UnityEngine;
 
 public class ScenarioExecuteAction
@@ -421,46 +439,45 @@ public class ScenarioExecuteAction
     }
 
 
-    public UniTask OnInitializeAsync(ScenarioExecuteData executeData)
+    public async UniTask OnInitializeAsync(ScenarioExecuteData executeData,CancellationTokenSource ct)
     {
         if (IsStartUp)
         {
-            return UniTask.CompletedTask;
         }
-        action.OnInitialize(executeData);
-        return UniTask.CompletedTask;
+        action.OnInitialize(executeData, ct);
+        await UniTask.Yield(ct.Token);
     }
 
 
-    public UniTask OnOneExecuteAsync(ScenarioExecuteData executeData)
+    public async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         if (IsOneCompleted)
         {
-            return UniTask.CompletedTask;
+            await UniTask.Yield(ct.Token);
         }
-        action.OnExecute(executeData);
-        return UniTask.CompletedTask;
+        action.OnOneExecute(executeData, ct);
+        await UniTask.Yield(ct.Token);
     }
 
 
-    public UniTask OnExecuteAsync(ScenarioExecuteData executeData)
+    public async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         if (IsCompleted)
         {
-            return UniTask.CompletedTask;
+            await UniTask.Yield(ct.Token);
         }
-        action.OnExecute(executeData);
-        return UniTask.CompletedTask;
+        action.OnExecute(executeData, ct);
+        await UniTask.Yield(ct.Token);
     }
 
-    public UniTask OnFinalizeAsync(ScenarioExecuteData executeData)
+    public async UniTask OnFinalizeAsync(ScenarioExecuteData executeData,CancellationTokenSource ct)
     {
         if (IsRelease)
         {
-            return UniTask.CompletedTask;
+            await UniTask.Yield(ct.Token);
         }
-        action.OnFinalize(executeData);
-        return UniTask.CompletedTask;
+        action.OnFinalize(executeData, ct);
+        await UniTask.Yield(ct.Token);
     }
 }
 """
@@ -476,6 +493,7 @@ using GameCore.Scenario;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 public class ScenarioSubGroupExecuteAction
 {
@@ -495,34 +513,35 @@ public class ScenarioSubGroupExecuteAction
         }
     }
 
-    public async UniTask OnInitializeAsync(ScenarioExecuteData executeData)
+    public async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
-        var tasks = scenarioActionList.Select(action => action.OnInitializeAsync(executeData));
-        await UniTask.WhenAll(tasks);
+        var tasks = scenarioActionList.Select(action => action.OnInitializeAsync(executeData,ct));
+       
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnExecuteAsync(ScenarioExecuteData executeData)
+    public async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
         var oneTasks = scenarioActionList
                     .Where(action => !action.IsOneCompleted)
-                    .Select(action => action.OnExecuteAsync(executeData))
+                    .Select(action => action.OnOneExecuteAsync(executeData,ct))
                     .ToArray();
-        await UniTask.WhenAll(oneTasks);
+        await UniTask.WhenAll(oneTasks).AttachExternalCancellation(ct.Token).AttachExternalCancellation(ct.Token);
         while (scenarioActionList.Any(action => !action.IsCompleted))
         {
             var tasks = scenarioActionList
                 .Where(action => !action.IsCompleted)
-                .Select(action => action.OnExecuteAsync(executeData))
+                .Select(action => action.OnExecuteAsync(executeData,ct))
                 .ToArray();
-            await UniTask.WhenAll(tasks);
-            await UniTask.Yield();
+            await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
+            await UniTask.Yield(ct.Token);
         }
     }
 
-    public async UniTask OnFinalizeAsync(ScenarioExecuteData executeData)
+    public async UniTask OnFinalizeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
-        var tasks = scenarioActionList.Select(action => action.OnFinalizeAsync(executeData)).ToArray();
-        await UniTask.WhenAll(tasks);
+        var tasks = scenarioActionList.Select(action => action.OnFinalizeAsync(executeData,ct)).ToArray();
+        await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 }
 """
@@ -533,7 +552,7 @@ public class ScenarioSubGroupExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioEventBinaryHeader.cs")):
         # Generate ScenarioEventBinaryHeader class
         factory_content = """
-using Cysharp.Threading.Tasks;
+sing Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -563,6 +582,19 @@ namespace GameCore.Scenario
             {
                 _events = value;
             }
+        }
+
+        public static long GetEventSeekPos(string eventName,string subName)
+        {
+            var find = _events.Find(data => data.EventId == eventName);
+            var findSub = find.SubEvents.Find(data => data.SubEventName == subName);
+            return findSub.SubEventOffset;
+        }
+        public static long GetEventSeekPos(string eventName, int subID)
+        {
+            var find = _events.Find(data => data.EventId == eventName);
+            var findSub = find.SubEvents.Find(data => data.SubEventId == subID);
+            return findSub.SubEventOffset;
         }
 
         public static async UniTask ReadHeaderAsync(Action action = null)
@@ -725,7 +757,7 @@ namespace GameCore.Scenario
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioSubEventInfo.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
             
-    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData")):
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData.cs")):
         code_str = """"
 using UnityEngine;
 
@@ -740,7 +772,90 @@ public class ScenarioExecuteData
 
         """
         
-        with open(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
+    
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioManagerCore.cs")):
+        code_str = """
+using Cysharp.Threading.Tasks;
+using GameCore;
+using GameCore.Scenario;
+using System;
+using System.IO;
+using System.Text;
+using System.Threading;
+using UnityEngine;
+
+public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
+{
+    public bool IsHeaderLoad { get; private set; } = false;
+
+    private ScenarioMasterExecuteAction master = new ScenarioMasterExecuteAction();
+    public override void AwakeSingleton()
+    {
+        base.AwakeSingleton();
+
+        ScenarioEventBinaryHeader.ReadHeaderAsync(() =>
+        {
+            IsHeaderLoad = true;
+        }).Forget();
+    }
+
+    /// <summary>
+    /// シナリオを実行します。
+    /// </summary>
+    /// <param name="eventName">イベント名</param>
+    /// <param name="eventSubName">サブイベント名</param>
+    /// <param name="action">完了時に実行するアクション</param>
+    /// <param name="cts">外部キャンセルトークン。呼び出し元で Dispose する必要があります。</param>
+    public async UniTask ScenarioExecuteUpdate(string eventName, string eventSubName, Action<ScenarioExecuteData> action = null, CancellationTokenSource cts = null)
+    {
+        using var ct = new CancellationTokenSource();
+        using var linkedCts = cts != null
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct.Token, cts.Token, this.GetCancellationTokenOnDestroy())
+            : CancellationTokenSource.CreateLinkedTokenSource(ct.Token, this.GetCancellationTokenOnDestroy());
+
+        try
+        {
+            var seekPos = ScenarioEventBinaryHeader.GetEventSeekPos(eventName, eventSubName);
+            using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
+            using (var reader = new BinaryReader(stream, Encoding.UTF8))
+            {
+                ScenarioCanvas.instance.FadeTalkFrameAlpha(1.0f);
+                stream.Seek(seekPos, SeekOrigin.Begin);
+                master.SetUp(reader);
+                await UniTask.Yield(cancellationToken: linkedCts.Token);
+
+                while (!master.IsExecuteFinish && !linkedCts.Token.IsCancellationRequested)
+                {
+                    if(master.ExecuteData.ChangeScenarioData.IsChangeTrigger)
+                    {
+                        break;
+                    }
+                    await master.OnInitializeAsync(linkedCts);
+                    await master.OnExecuteAsync(linkedCts);
+                    await master.OnFinalizeAsync(linkedCts);
+                    await UniTask.Yield(cancellationToken: linkedCts.Token);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.Log($"ScenarioExecuteUpdate canceled for {eventName}/{eventSubName}");
+            throw;
+        }
+        finally
+        {
+            action?.Invoke(master.ExecuteData);
+            ScenarioCanvas.instance.FadeTalkFrameAlpha(0.0f);
+            await UniTask.Yield(cancellationToken: linkedCts.Token);
+        }
+    }
+}
+
+
+        """
+        with open(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioManagerCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
 # app.pyから借用/統合するための関数 (実際はapp.pyからインポート)
