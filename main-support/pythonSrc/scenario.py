@@ -920,7 +920,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
 
     for var in role_data:
         field = {"name": var['name'], "label": var['name'], "description": var.get('description', '')}
-        var_type = var['type'].lower()
+        var_type = var['type']
 
         # 各数値型を個別に割り当て
         if var_type in ['int', 'float', 'double', 'short', 'long', 'decimal', 'byte', 'char']:
@@ -1090,7 +1090,7 @@ def write_7bit_encoded_int(value: int) -> bytes:
     return bytes(result)
 
 # Event bin 生成ヘルパー
-def pack_value(value, type_):
+def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id):
     type_lower = type_.lower()
     if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
         return b''  # スキップ
@@ -1111,14 +1111,27 @@ def pack_value(value, type_):
         return struct.pack('fff', *map(float, value))
     elif type_lower == 'vector4':
         return struct.pack('ffff', *map(float, value))
-    else:  # enum/class_id
+    elif type_ + "ID" in enum_data:
+        # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
+        property_name = value
+        actual_id = next((item['id'] for item in enum_data[type_ + "ID"] if item['property'] == property_name.split('.')[-1]), 0)
+        return struct.pack('i', actual_id)
+                    
+    elif type_ + "ID" in class_data_id:
+        property_name = value
+        actual_id = next((row['id'] for row in class_data_id[type_+ "ID"]['rows'] if row['enum_property'] == property_name.split('.')[-1]), 0)
+        return struct.pack('i', actual_id)
+    else:  # enuass_id
         return struct.pack('i', int(value))
     
 
-def generate_all_event_bin():
+def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id ):
     all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bin')
     header = bytearray()
     data_sections = bytearray()
+    
+    
+    
     
     # 1. Load event JSON files
     event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
@@ -1249,7 +1262,7 @@ def generate_all_event_bin():
                         for field_idx in range(min(len(fields), len(schema_fields))):
                             field = fields[field_idx]
                             _, field_type = schema_fields[field_idx]
-                            sub_section.extend(pack_value(field.get('value', ''), field_type))
+                            sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id))
 
                 for inner_sub_id, inner_sub in inner_subgroups.items():
                     inner_nodes = inner_sub.get('nodes', [])
@@ -1269,7 +1282,7 @@ def generate_all_event_bin():
                             for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
                                 field = inner_fields[field_idx]
                                 _, field_type = inner_schema_fields[field_idx]
-                                sub_section.extend(pack_value(field.get('value', ''), field_type))
+                                sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id))
 
             section.extend(sub_section)
 

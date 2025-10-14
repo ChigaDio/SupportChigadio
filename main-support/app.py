@@ -1236,7 +1236,9 @@ def manage_enum_id():
 
 @app.route('/api/enum/<name>', methods=['GET', 'POST', 'DELETE'])
 def manage_enum_detail(name):
-    file_path = os.path.join(DATA_DIR, ENUM, name, f'{name}.json')
+    
+    
+    file_path = os.path.join(DATA_DIR, ENUM, name.replace("ID",""), f'{name}.json')
     if request.method == 'GET':
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -1884,7 +1886,7 @@ def manage_class_data_id():
 # ClassDataID詳細データ（GET追加）
 @app.route('/api/class-data-id/<name>', methods=['GET', 'POST', 'DELETE'])
 def class_data_id_detail(name):
-    file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}.json")
+    file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name.replace("ID",""), f"{name}.json")
     if request.method == 'GET':
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -3537,6 +3539,8 @@ def handle_scenario_role_detail(name):
 def generate_scenario_role_cs(name):
     role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
     data_path = os.path.join(role_dir, f"{name}.json")
+    
+    basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
     if not os.path.exists(data_path):
         return jsonify({"error": "Data not found"}), 404
     with open(data_path, 'r', encoding='utf-8') as f:
@@ -3555,6 +3559,10 @@ namespace GameCore.Scenario {{
 """
     for item in data:
         type_ = item['type']
+        if type_ in enum_list:
+            type_ = f"Enums.{type_}ID"
+        elif type_ in class_data_id_list:
+            type_ = f"Tables.ID.{type_}ID"
         name_ = item['name']
         array_size = item['arraySize']
         if array_size > 0:
@@ -4039,7 +4047,8 @@ def fix_all_events_endpoint():
 def generate_all_event_bin_endpoint():
     try:
         scenario.fix_all_events()  # 先に Fix
-        result = scenario.generate_all_event_bin()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
+        result = scenario.generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error generating all event bin: {str(e)}")

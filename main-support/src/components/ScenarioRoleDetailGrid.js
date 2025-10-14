@@ -39,11 +39,13 @@ function ScenarioRoleDetailGrid() {
 
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
-      fetch('/api/class-data').then(res => res.json())
-    ]).then(([enumList, classList]) => {
+      fetch('/api/class-data').then(res => res.json()),
+      fetch('/api/class-data-id').then(res => res.json())
+    ]).then(([enumList, classList, classIdList]) => {
       const enumTypes = enumList.map(item => item.name);
       const classTypes = classList.map(item => item.name);
-      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes]);
+      const classIdTypes = classIdList.map(item => item.name);
+      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIdTypes]);
     }).catch(error => console.error('タイプオプション取得エラー:', error));
   }, []);
 
