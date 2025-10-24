@@ -501,7 +501,7 @@ def generate_base():
 
             public string GetGroupStats()
             {
-                var stats = new StringBuilder("AddressableDataContainer Stats:\n");
+                var stats = new StringBuilder("AddressableDataContainer Stats:");
                 foreach (var groupKvp in groupDataMap)
                 {
                     stats.AppendLine($"Group: {groupKvp.Key}, Total Count: {GetGroupCount(groupKvp.Key)}");
