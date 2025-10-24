@@ -2360,6 +2360,7 @@ def generate_class_data_id_cs(name):
                 }}
             }}
             """
+            ef.write(template)
 
         return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
     except Exception as e:
