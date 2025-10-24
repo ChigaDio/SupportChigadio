@@ -2326,28 +2326,27 @@ namespace GameCore.Tables
         }}
         public static List<{name}TableID> FindAll(Func<{name}TableID, bool> predicate)
         {{
-            if (predicate == null) throw new ArgumentNullException(nameof(predicate)
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
             var results = new List<{name}TableID>();
             for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
             {{
                 {name}TableID value = id;
-                if (!Enum.IsDefined(typeof({name}TableID), value))
-                    continue; // 無効な値はスキップ
-                if (predicate(value))
-                    results.Add(value);
+                if (!Enum.IsDefined(typeof({name}TableID), value))continue; // 無効な値はスキップ
+                if (predicate(value))results.Add(value);
+            }}
             
             return results;
+        }}
         
         public static {name}TableID Find(Func<{name}TableID, bool> predicate)
         {{
-            if (predicate == null) throw new ArgumentNullException(nameof(predicate)
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
             for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
             {{
                 {name}TableID value = id;
-                if (!Enum.IsDefined(typeof({name}TableID), value))
-                    continue; // 無効な値はスキップ
-                if (predicate(value))
-                    return value;
+                if (!Enum.IsDefined(typeof({name}TableID), value))continue; // 無効な値はスキップ
+                if (predicate(value))return value;
+            }}
             
             return {name}TableID.None; // デフォルト値（必要に応じて変更）
         }}
