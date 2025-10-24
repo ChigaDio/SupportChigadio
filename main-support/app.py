@@ -197,6 +197,34 @@ def load_json_files(item_list, base_dir):
     
     return data_dict
 
+def load_json_data_files(item_list, base_dir):
+    data_dict = {}
+    for item in item_list:
+        name = item.get('name')
+        if not name or not isinstance(name, str):
+            print(f"警告: 不正なnameが見つかりました: {item}")
+            continue
+        
+        # JSONファイルのパスを構築
+        json_path = os.path.join(DATA_DIR, base_dir, name, f"{name}.class.json")
+        
+        try:
+            if os.path.exists(json_path):
+                with open(json_path, 'r',encoding='utf-8') as f:
+                    data_dict[name] = json.load(f)
+                    print(f"成功: {json_path} を読み込みました")
+            else:
+                print(f"警告: {json_path} は存在しません")
+                data_dict[name] = []  # ファイルが存在しない場合は空リストを設定
+        except json.JSONDecodeError as e:
+            print(f"エラー: {json_path} のJSONパースに失敗しました: {e}")
+            data_dict[name] = []
+        except Exception as e:
+            print(f"エラー: {json_path} の読み込み中に予期しないエラーが発生しました: {e}")
+            data_dict[name] = []
+    
+    return data_dict
+
 # 型リスト取得
 def get_type_lists():
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
@@ -207,6 +235,7 @@ def get_type_lists():
     # enum_listとclass_listからJSONファイルを読み込む
     enum_data = load_json_files(enum_list, ENUM)
     class_data_id = load_json_files(class_data_id_list, CLASS_DATA_ID)
+    class_data = load_json_data_files(class_list,CLASS_DATA)
     return (
     basic_types,
     unity_types,
@@ -214,7 +243,8 @@ def get_type_lists():
     [c.get('name') for c in class_list] if class_list else [],
     [c.get('name') for c in class_data_id_list] if class_data_id_list else [],
     enum_data if enum_data else [],
-    class_data_id if class_data_id else []
+    class_data_id if class_data_id else [],
+    class_data if class_data else []
 )
     
 def get_json_enum(name):
@@ -576,6 +606,22 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
     }
     """
     with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixRow.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+        
+#BaseCustomClassData
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, "BaseCustomClassData.cs")):
+    code_str = """
+    using System.IO;
+
+    namespace GameCore.Classes
+    {
+        public abstract class BaseCustomClassData
+        {
+            public abstract void Read(BinaryReader reader);
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA, "BaseClassDaBaseCustomClassDatataMatrixRow.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
 
 #ClassDataIDCore.cs 生成
@@ -1410,26 +1456,31 @@ def manage_class_detail(name):
 def generate_class_cs(name):
     try:
         data = request.get_json()
-        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data= get_type_lists()
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name)):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA, name), exist_ok=True)
-        cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"Base{name}.cs")
         
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
-            f.write(f"    public class {name} : BaseClassData\n    {{\n")
+            f.write(f"    public class Base{name} : BaseCustomClassData\n    {{\n")
             read_codes = []
             for item in data:
-                field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
+                field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
                 f.write(field_data['field'])
                 read_codes.append(field_data['read'])
-            f.write(f"\n        public {name}(BinaryReader reader) : base(reader)\n        {{\n")
+            f.write(f"\n        public {name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
             for read_code in read_codes:
                 f.write(read_code)
             f.write("        }\n")
             f.write("    }\n}\n")
-            f.r
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
+            f.write("namespace GameCore.Classes\n{\n")
+            f.write(f"    public class {name} : Base{name}\n    {{\n")
+            f.write("    }\n}\n")
         return jsonify({"message": f"C# file generated: {cs_path}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1487,7 +1538,7 @@ def generate_binary_data(name, json_data):
     binary_data = bytearray()
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
-    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
     
     binary_data.extend(struct.pack('i', len(rows)))
     binary_data.extend(struct.pack('i', len(columns)))
@@ -1927,7 +1978,7 @@ def generate_class_data_id_cs(name):
         data = request.get_json()
         columns = data['columns']
         rows = data['rows']
-        basic_types, unity_types, enum_list, class_list, class_data_id_list ,enum_data,class_data_id= get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list ,enum_data,class_data_id,class_data= get_type_lists()
         enum_name = f"{name}TableID"  # Enum名をTableIDに変更
 
         # 出力ディレクトリ作成
@@ -2119,7 +2170,7 @@ def generate_binary(name):
         bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bin")
         os.makedirs(os.path.dirname(bin_path), exist_ok=True)
         
-        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
         
         with open(bin_path, 'wb') as f:
             # ヘッダ: 行数, カラム数
@@ -2300,7 +2351,7 @@ def generate_state_manager_data(file_path, name, json_data):
     base_code_str = []
 
 
-    base_list,unity_types,enum_list, class_list,class_data_id_list,enum_data,class_data_id = get_type_lists()
+    base_list,unity_types,enum_list, class_list,class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
     unity_types = [
     'GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 
@@ -2309,7 +2360,7 @@ def generate_state_manager_data(file_path, name, json_data):
     'ScriptableObject'
     ]
     for item in json_data.get('manager', []):
-        base_code_str.append(f"{generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)}")
+        base_code_str.append(f"{generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)}")
         
     with open(file_base_state_manager_data_path, 'w', encoding='utf-8') as f:
         f.write('using System.Collections.Generic;\n')
@@ -2509,7 +2560,7 @@ def generate_state_classes(file_path, name, json_data):
 
 
     # 型情報の取得（ダミー関数、外で定義する想定）
-    basic_types, unity_types, enum_list, class_list,class_data_id_list,enum_data,class_data_id = get_type_lists()  
+    basic_types, unity_types, enum_list, class_list,class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()  
 
     basic_types = [
         'int', 'float', 'bool', 'string', 'double',
@@ -2524,7 +2575,7 @@ def generate_state_classes(file_path, name, json_data):
 
     base_code_str = []
     for item in json_data.get('base', []):
-        base_code_str.append(generate_csharp_field(item, enum_list, class_list, unity_types, basic_types))
+        base_code_str.append(generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list))
 
         
     base_state_path = os.path.join(state_dir, f'Base{name}State.cs')
@@ -2669,57 +2720,8 @@ def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
 
 
 
-#stateで使用
-def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types):
-    """
-    C#フィールド宣言を生成する汎用関数
-
-    Parameters:
-        item (dict): {"type": str, "name": str, "arraySize": int, "description": str}
-        enum_list (list): Enum 型名のリスト
-        class_list (list): クラス型名のリスト
-        unity_types (list): Unity 固有型のリスト
-        basic_types (list): 基本型リスト
-
-    Returns:
-        str: C#のフィールド定義コード
-    """
-    type_str = item['type']
-    var_name = item['name']
-    array_size = item.get('arraySize', 0)
-    description = item.get('description', '')
-
-    # 初期値の決定
-    lower_type = type_str.lower()
-    if lower_type in ['int', 'byte', 'short', 'long']:
-        initial = '0'
-    elif lower_type in ['float', 'double', 'decimal']:
-        initial = '0.0'
-    elif lower_type == 'bool':
-        initial = 'false'
-    elif lower_type == 'string' or lower_type == 'char':
-        initial = '""'
-    elif type_str in enum_list:
-        initial = f"GameCore.Enums.{type_str}.None"
-        type_str = f"GameCore.Enums.{type_str}"
-    elif type_str in class_list or type_str in unity_types or lower_type == 'object':
-        initial = f"new {type_str}()"
-    else:
-        # 未知の型 → null 初期化
-        initial = 'null'
-
-    # 配列/リストの処理
-    if array_size == -1:
-        type_str = f"List<{type_str}>"
-        initial = f"new List<{item['type']}>()"
-    elif array_size > 0:
-        type_str = f"{type_str}[]"
-        initial = f"new {item['type']}[{array_size}]"
-
-    return f"        public {type_str} {var_name} = {initial}; // {description}\n"   
-
 # C#フィールド生成（private + ゲッター）
-def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types):
+def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list):
     type_str = item['type']
     var_name = item['name']
     array_size = item.get('arraySize', 0)
@@ -2729,7 +2731,9 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
     if type_str in enum_list:
         type_str = f"GameCore.Enums.{type_str}ID"
     elif type_str in class_list:
-        type_str = f"GameCore.Classes.{type_str}TableID"
+        type_str = f"GameCore.Classes.{type_str}"
+    elif type_str in class_id_list:
+        type_str = f"GameCore.Tables.{type_str}TableID"
     elif type_str.lower() in TYPE_MAP:
         type_str = type_str.capitalize() if type_str.lower() in ['vector2', 'vector3'] else type_str.lower()
     else:
@@ -2758,6 +2762,8 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
         initial = 'new Vector3()'
     elif type_str.startswith('GameCore.Enums.'):
         initial = f"{type_str}.None"
+    elif type_str.startswith('GameCore.Tables.'):
+        initial = f"{type_str}.None"
     else:
         initial = f"new {type_str}()"
 
@@ -2776,8 +2782,12 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
                 read_code += f"                {var_name}.Add(reader.{TYPE_MAP[item['type'].lower()]['cs_read']}());\n"
         elif item['type'] in enum_list:
             read_code += f"                {var_name}.Add((GameCore.Enums.{item['type']})Enum.ToObject(typeof(GameCore.Enums.{item['type']}), reader.ReadInt32()));\n"
+        elif item['type'] in class_id_list:
+            read_code += f"                {var_name}.Add((GameCore.Tables.{item['type']})Enum.ToObject(typeof(GameCore.Tables.{item['type']}), reader.ReadInt32()));\n"
         elif item['type'] in class_list:
-            read_code += f"                {var_name}.Add(new GameCore.Classes.{item['type']}(reader));\n"
+            read_code += f"                var add_data = new GameCore.Classes.{item['type']}();\n"
+            read_code += f"                add_data.Read(reader);\n"
+            read_code += f"                {var_name}.Add(add_data);\n"
         else:
             read_code += f"                {var_name}.Add(new {item['type']}()); // Unsupported\n"
         read_code += "            }\n"
@@ -2793,8 +2803,11 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
                 read_code += f"                {var_name}[i] = reader.{TYPE_MAP[item['type'].lower()]['cs_read']}();\n"
         elif item['type'] in enum_list:
             read_code += f"                {var_name}[i] = (GameCore.Enums.{item['type']})Enum.ToObject(typeof(GameCore.Enums.{item['type']}), reader.ReadInt32());\n"
+        elif item['type'] in class_id_list:
+            read_code += f"                {var_name}[i] = (GameCore.Tables.{item['type']})Enum.ToObject(typeof(GameCore.Tables.{item['type']}), reader.ReadInt32());\n" 
         elif item['type'] in class_list:
-            read_code += f"                {var_name}[i] = new GameCore.Classes.{item['type']}(reader);\n"
+            read_code += f"                {var_name}[i] = new GameCore.Classes.{item['type']}\n"
+            read_code += f"                {var_name}[i].Read(reader)\n"
         else:
             read_code += f"                {var_name}[i] = new {item['type']}(); // Unsupported\n"
         read_code += "            }\n"
@@ -2807,6 +2820,8 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types)
             else:
                 read_code = f"            {var_name} = reader.{TYPE_MAP[type_str.lower()]['cs_read']}();\n"
         elif type_str.startswith('GameCore.Enums.'):
+            read_code = f"            {var_name} = ({type_str})Enum.ToObject(typeof({type_str}), reader.ReadInt32());\n"
+        elif type_str.startswith('GameCore.Tables.'):
             read_code = f"            {var_name} = ({type_str})Enum.ToObject(typeof({type_str}), reader.ReadInt32());\n"
         elif type_str.startswith('GameCore.Classes.'):
             read_code = f"            {var_name} = new {type_str}(reader);\n"
@@ -3120,10 +3135,12 @@ def generate_cs_matrix(name):
         col_id = json_data['colId']
         fields = json_data['fields']
         
-        data_id = get_type_lists()[4]
-        if row_id in data_id:
+        
+        
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+        if row_id in class_data_id_list:
             row_id += "Table"
-        if col_id in data_id:
+        if col_id in class_data_id_list:
             col_id += "Table"    
 
         # {name}MatrixRow.cs
@@ -3131,7 +3148,7 @@ def generate_cs_matrix(name):
         row_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixRow : BaseClassDataMatrixRow {{\n"
         read_code = "        public override void Read(BinaryReader reader) {\n"
         for field in fields:
-            field_info = generate_csharp_field(field, get_type_lists()[2], get_type_lists()[3], get_type_lists()[1], get_type_lists()[0])
+            field_info = generate_csharp_field(field, enum_list, class_list, unity_types, basic_types,class_data_id_list)
             row_cs += field_info['field']
             read_code += field_info['read']
         row_cs += read_code + "        }\n    }\n}\n"
@@ -3166,7 +3183,7 @@ def generate_binary_matrix(name):
         row_keys = list(json_data['data'].keys())
         col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
         fields = json_data['fields']
-        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data= get_type_lists()
 
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bin"), 'wb') as f:
             f.write(struct.pack('i', len(row_keys)))
@@ -3214,7 +3231,7 @@ def generate_binary_matrix_data(name, json_data):
     rowId = json_data['rowId'] + "ID"
     colId = json_data['colId'] + "ID"
     fields = json_data['fields']
-    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id = get_type_lists()
+    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
 
     binary_data.extend(struct.pack('i', len(row_keys)))
     for rk in row_keys:
@@ -3540,7 +3557,7 @@ def generate_scenario_role_cs(name):
     role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
     data_path = os.path.join(role_dir, f"{name}.json")
     
-    basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
+    basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
     if not os.path.exists(data_path):
         return jsonify({"error": "Data not found"}), 404
     with open(data_path, 'r', encoding='utf-8') as f:
@@ -3548,76 +3565,23 @@ def generate_scenario_role_cs(name):
     data = json_data.get('data', [])
     branch_type = json_data.get('branchType', 'General')
     
-    # Generate Data class inheriting from BaseScenarioRoleData
-    cs_data_content = f"""using System;
-using System.IO;
-using UnityEngine;
-
-namespace GameCore.Scenario {{
-    public class {name}RoleData : BaseScenarioRoleData {{
-        
-"""
-    for item in data:
-        type_ = item['type']
-        if type_ in enum_list:
-            type_ = f"Enums.{type_}ID"
-        elif type_ in class_data_id_list:
-            type_ = f"Tables.ID.{type_}TableID"
-        name_ = item['name']
-        array_size = item['arraySize']
-        if array_size > 0:
-            cs_data_content += f"        public {type_}[] {name_} {{ get; set; }}\n"
-        else:
-            cs_data_content += f"        public {type_} {name_} {{ get; set; }}\n"
-            
-    cs_data_content += f"""        
-        public {name}RoleData()
-        {{
-            RoleID = ScenarioRoleID.{name};
-        }}
-    """
-            
-    cs_data_content += f"""       public override void ReadBinary(BinaryReader reader) {{
-"""
-    for item in data:
-        type_ = item['type']
-        name_ = item['name']
-        array_size = item['arraySize']
-        if array_size > 0:
-            cs_data_content += f"            {name_} = new {type_}[{array_size}];\n"
-            if type_.lower() in TYPE_MAP:
-                if type_.lower() == 'string':
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = reader.ReadString(); }}\n"
-                elif type_.lower() == 'vector2':
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = new Vector2(reader.ReadSingle(), reader.ReadSingle()); }}\n"
-                elif type_.lower() == 'vector3':
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()); }}\n"
-                else:
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = reader.{TYPE_MAP[type_.lower()]['cs_read']}(); }}\n"
-            else:
-                if type_ in enum_list:
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = (Enums.{type_}ID)reader.ReadInt32(); }}\n"
-                elif type_ in class_data_id_list:
-                    cs_data_content += f"            for (int i = 0; i < {array_size}; i++) {{ {name_}[i] = (Tables.ID.{type_}TableID)reader.ReadInt32(); }}\n"
-        else:
-            if type_.lower() in TYPE_MAP:
-                if type_.lower() == 'string':
-                    cs_data_content += f"            {name_} = reader.ReadString();\n"
-                elif type_.lower() == 'vector2':
-                    cs_data_content += f"            {name_} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
-                elif type_.lower() == 'vector3':
-                    cs_data_content += f"            {name_} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n"
-                else:
-                    cs_data_content += f"            {name_} = reader.{TYPE_MAP[type_.lower()]['cs_read']}();\n"
-            else:
-                if type_ in enum_list:
-                    cs_data_content += f"            {name_} = (Enums.{type_}ID)reader.ReadInt32();\n"
-                elif type_ in class_data_id_list:
-                    cs_data_content += f"            {name_} = (Tables.ID.{type_}TableID)reader.ReadInt32();\n"
+    cs_data_path = os.path.join(role_dir, f"{name}RoleData.cs")
+    with open(cs_data_path, 'w', encoding='utf-8') as f:
+        f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
+        f.write("namespace GameCore.Scenario \n{\n")
+        f.write(f"   public class {name}RoleData : BaseScenarioRoleData \n    {{\n")
+        read_codes = []
+        for item in data:
+            field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
+            f.write(field_data['field'])
+            read_codes.append(field_data['read'])
+        f.write(f"\n        public {name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
+        for read_code in read_codes:
+            f.write(read_code)
+        f.write("        }\n")
+        f.write("    }\n}\n")
     
-
-    
-    cs_data_content += "    }\n  }\n}\n"
+  
     base_action_class = "BaseScenarioRoleBranchAction" if branch_type == 'Branch' else "BaseScenarioRoleAction"
     # Generate Action class inheriting from BaseScenarioRoleAction
     cs_action_content = f"""
@@ -3652,10 +3616,8 @@ namespace GameCore.Scenario {{
 """
     
     # Write both files
-    cs_data_path = os.path.join(role_dir, f"{name}RoleData.cs")
     cs_action_path = os.path.join(role_dir, f"{name}RoleAction.cs")
-    with open(cs_data_path, 'w', encoding='utf-8') as f:
-        f.write(cs_data_content)
+
     if not os.path.exists(cs_action_path):
         with open(cs_action_path, 'w', encoding='utf-8') as f:
             f.write(cs_action_content)
@@ -3756,8 +3718,15 @@ def add_sub_event(id):
                     f.seek(0)
                     f.truncate()
                     json.dump(events, f)
-                    with open(event_path, 'w', encoding='utf-8') as ef:
-                        json.dump(event, ef)
+                    with open(event_path, 'r+', encoding='utf-8') as ef:
+                        eventData = json.load(ef)
+                        for subEv in eventData["subEvents"]:
+                            if subEv['name'] == name:
+                                return jsonify({"message": "すでに存在しています", "subId": max_sub_id})
+                        eventData["subEvents"].append(new_sub)
+                        ef.seek(0)
+                        ef.truncate()
+                        json.dump(eventData, ef)
                     return jsonify({"message": "Sub event added", "subId": max_sub_id})
         return jsonify({"error": "Event not found"}), 404
     return jsonify({"error": "Event not found"}), 404
@@ -4053,8 +4022,8 @@ def fix_all_events_endpoint():
 def generate_all_event_bin_endpoint():
     try:
         scenario.fix_all_events()  # 先に Fix
-        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id = get_type_lists()
-        result = scenario.generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id)
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+        result = scenario.generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error generating all event bin: {str(e)}")

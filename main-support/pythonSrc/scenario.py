@@ -919,7 +919,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
     schema = {"fields": [], "branchType": branch_type}
 
     for var in role_data:
-        field = {"name": var['name'], "label": var['name'], "description": var.get('description', '')}
+        field = {"name": var['name'], "label": var['name'], "arraySize":var["arraySize"], "description": var.get('description', '')}
         var_type = var['type']
 
         # 各数値型を個別に割り当て
@@ -1090,7 +1090,7 @@ def write_7bit_encoded_int(value: int) -> bytes:
     return bytes(result)
 
 # Event bin 生成ヘルパー
-def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id):
+def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data):
     type_lower = type_.lower()
     if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
         return b''  # スキップ
@@ -1121,11 +1121,41 @@ def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, cla
         property_name = value
         actual_id = next((row['id'] for row in class_data_id[type_+ "ID"]['rows'] if row['enum_property'] == property_name.split('.')[-1]), 0)
         return struct.pack('i', actual_id)
+    elif type_ in class_list:
+        property_name = value
+        customData =  class_data[type_]
+        section = bytearray()
+        for detailsData in customData:
+            typeDetails = detailsData["type"]
+            arraySize = detailsData["arraySize"]
+            valueDetails = None
+            
+            for key, valueData in value.items():
+                if(key == detailsData["name"]):
+                    valueDetails = valueData
+                    break
+            if valueDetails == None:
+                 return struct.pack('i', int(0))
+            
+            if arraySize == 0:
+                return (pack_value(valueDetails, typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+            elif arraySize > 0:
+                for count in range(0,arraySize):
+                    section.extend(pack_value(valueDetails[count], typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+            elif arraySize <= -1:
+                section.extend(struct.pack('i', int(arraySize)))
+                for count in range(0,arraySize):
+                    section.extend(pack_value(valueDetails[count], typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+                    
+        
+        
+        
+        return section
     else:  # enuass_id
         return struct.pack('i', int(value))
     
 
-def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id ):
+def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data ):
     all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bin')
     header = bytearray()
     data_sections = bytearray()
@@ -1262,7 +1292,7 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                         for field_idx in range(min(len(fields), len(schema_fields))):
                             field = fields[field_idx]
                             _, field_type = schema_fields[field_idx]
-                            sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id))
+                            sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
 
                 for inner_sub_id, inner_sub in inner_subgroups.items():
                     inner_nodes = inner_sub.get('nodes', [])
@@ -1282,7 +1312,16 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                             for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
                                 field = inner_fields[field_idx]
                                 _, field_type = inner_schema_fields[field_idx]
-                                sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id))
+                                arraySize = field.get('arraySize',0)
+                                if arraySize == 0:
+                                    sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+                                elif arraySize > 0:
+                                    for count in range(0,arraySize):
+                                        sub_section.extend(pack_value(field.get('value', '')[count], field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+                                elif arraySize <= -1:
+                                    sub_section.extend(struct.pack('i', int(arraySize)))
+                                    for count in range(0,arraySize):
+                                        sub_section.extend(pack_value(field.get('value', '')[count], field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
 
             section.extend(sub_section)
 

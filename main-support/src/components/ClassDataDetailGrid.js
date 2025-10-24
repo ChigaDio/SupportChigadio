@@ -37,11 +37,13 @@ function ClassDataDetailGrid() {
 
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
-      fetch('/api/class-data').then(res => res.json())
-    ]).then(([enumList, classList]) => {
+      fetch('/api/class-data').then(res => res.json()),
+      fetch('/api/class-data-id').then(res => res.json())
+    ]).then(([enumList, classList,classIDList]) => {
       const enumTypes = enumList.map(item => item.name);
       const classTypes = classList.map(item => item.name);
-      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes]);
+      const classIDTypes = classIDList.map(item => item.name);
+      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes,...classIDTypes]);
     }).catch(error => console.error('Error fetching type options:', error));
   }, []);
 
