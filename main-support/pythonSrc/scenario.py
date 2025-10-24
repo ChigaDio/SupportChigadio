@@ -552,7 +552,7 @@ public class ScenarioSubGroupExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioEventBinaryHeader.cs")):
         # Generate ScenarioEventBinaryHeader class
         factory_content = """
-sing Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -758,7 +758,7 @@ namespace GameCore.Scenario
             f.write(factory_content)
             
     if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData.cs")):
-        code_str = """"
+        code_str = """
 using UnityEngine;
 
 

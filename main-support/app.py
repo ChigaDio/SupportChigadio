@@ -923,7 +923,7 @@ namespace GameCore
         public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER,SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\", "/");
 
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
@@ -1170,8 +1170,6 @@ public class DebugLogBridgeRuntime : MonoBehaviour
         
 if not os.path.exists(os.path.join(DATA_DIR,ENUM,"EnumIDIter.cs")):
     code_str = """
-using GameCore.Enums;
-using GameCore.Tables.ID;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -1910,8 +1908,6 @@ def generate_all_cs_header():
     try:
         cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'ClassDataHeader.cs')
         list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
-        with open(list_path, 'r', encoding='utf-8') as f:
-            class_list = json.load(f)
         
         cs_content = """
 using System;
@@ -1959,6 +1955,9 @@ namespace GameCore.Tables
     except Exception as e:
         logger.error(f"Error generating C# header: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+generate_all_cs_header()
+
 
 # StateData-ID管理
 @app.route('/api/state-data', methods=['GET', 'POST', 'PATCH'])
@@ -3605,8 +3604,7 @@ def generate_all_cs_matrix_header():
         # ClassDataMatrixHeader.cs
         cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'ClassDataMatrixHeader.cs')
         list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
-        with open(list_path, 'r', encoding='utf-8') as f:
-            matrix_list = json.load(f)
+
         
         cs_content = """
 
@@ -3655,6 +3653,8 @@ namespace GameCore.Tables
     except Exception as e:
         logger.error(f"Error generating C# headers: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    
+generate_all_cs_matrix_header()
 
 @app.route('/api/generate-matrix-table-id', methods=['POST'])
 def generate_matrix_table_id():
