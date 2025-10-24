@@ -665,17 +665,17 @@ namespace GameCore.Sound
 
             foreach (var sound in sounds.Sounds)
             {
-                var addressable = new AddressableData<AudioClip>(groupCategory, AssetCategory.Audio);
+                var addressable = new AddressableData<AudioClip>(groupCategory, AssetCategory.Audio, sound.AddressablePath);
                 
-                tasks.Add(addressable.LoadAsync(sound.AddressablePath, clip =>
+                tasks.Add(addressable.LoadAsync(clip =>
                 {
                     if (addressable.IsLoadedAndSetup)
                     {
-                        loadedClips[group][SoundID] = addressable;
+                        loadedClips[group][sound.SoundID] = addressable;
                     }
                 }, ex =>
                 {
-                    Debug.LogError($"Failed to load audio clip for {SoundID} at {sound.AddressablePath}: {ex.Message}");
+                    Debug.LogError($"Failed to load audio clip for {sound.SoundID} at {sound.AddressablePath}: {ex.Message}");
                 }).AttachExternalCancellation(destroyToken));
             }
 
@@ -890,6 +890,7 @@ namespace GameCore.Sound
         }
     }
 }
+
 """
         with open(os.path.join(SOUND_DATA, "SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -1284,8 +1285,8 @@ namespace GameCore.Texture
                 if (texture.IsSpriteSheet)
                 {
                     // スプライトシート自体のロード
-                    var addressableSpriteSheet = new TextureAddressableData(groupCategory, AssetCategory.Sprite, true);
-                    tasks.Add(addressableSpriteSheet.LoadAsync(texture.AddressablePath, texture.Sprites.Count, obj =>
+                    var addressableSpriteSheet = new TextureAddressableData(groupCategory, AssetCategory.Sprite, texture.AddressablePath,true);
+                    tasks.Add(addressableSpriteSheet.LoadAsync(texture.Sprites.Count, obj =>
                     {
                         if (addressableSpriteSheet.IsLoadedAndSetup)
                         {
@@ -1296,12 +1297,15 @@ namespace GameCore.Texture
                         Debug.LogError($"Failed to load sprite sheet for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
                     }).AttachExternalCancellation(destroyToken));
 
+
+
+
                 }
                 else
                 {
                     // テクスチャのロード
-                    var addressableTexture = new TextureAddressableData(groupCategory, AssetCategory.Texture, false);
-                    tasks.Add(addressableTexture.LoadAsync(texture.AddressablePath, 0, obj =>
+                    var addressableTexture = new TextureAddressableData(groupCategory, AssetCategory.Texture, texture.AddressablePath, false);
+                    tasks.Add(addressableTexture.LoadAsync(0, obj =>
                     {
                         if (addressableTexture.IsLoadedAndSetup)
                         {
@@ -1337,6 +1341,8 @@ namespace GameCore.Texture
             action?.Invoke();
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
+
+        
 
         public Texture2D GetTexture(TextureGroup group, TextureID id)
         {
@@ -1413,6 +1419,7 @@ namespace GameCore.Texture
         }
     }
 }
+
 """
         with open(os.path.join(TEXTURE_DATA, "TextureCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -1943,8 +1950,8 @@ namespace GameCore.GameObject
 
             foreach (var go in gameObjects.GameObjects)
             {
-                var addressable = new AddressableData<GameObject>(groupCategory, AssetCategory.GameObject);
-                tasks.Add(addressable.LoadAsync(go.AddressablePath, obj =>
+                var addressable = new AddressableData<GameObject>(groupCategory, AssetCategory.GameObject,go.AddressablePath);
+                tasks.Add(addressable.LoadAsync( obj =>
                 {
                     if (addressable.IsLoadedAndSetup)
                     {
