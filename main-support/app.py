@@ -13,6 +13,7 @@ import psutil
 import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
 import pythonSrc.dbgServer as dbgServer
+import pythonSrc.addressableInit as addressable
 import threading
 from pathlib import Path
 
@@ -112,6 +113,7 @@ move_dll_files()
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
 assets.generate_base()
+addressable.generate_base()
 
 
 
@@ -1165,7 +1167,73 @@ public class DebugLogBridgeRuntime : MonoBehaviour
     '''
     with open(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridgeRuntime.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
-    
+        
+if not os.path.exists(os.path.join(DATA_DIR,ENUM,"EnumIDIter.cs")):
+    code_str = """
+using GameCore.Enums;
+using GameCore.Tables.ID;
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+namespace GameCore
+{
+    public readonly struct EnumIDIter<T> where T : unmanaged, Enum
+    {
+        private readonly int _value;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public EnumIDIter(T value)
+        {
+            _value = Unsafe.As<T, int>(ref value);
+    #if UNITY_EDITOR
+            if (!Enum.IsDefined(typeof(T), value))
+                throw new ArgumentException($"Invalid enum value: {value}");
+    #endif
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static implicit operator EnumIDIter<T>(T value) => new(value);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static implicit operator T(EnumIDIter<T> iter)
+        {
+            int val = iter._value;
+            return Unsafe.As<int, T>(ref val);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static EnumIDIter<T> operator ++(EnumIDIter<T> iter)
+        {
+            int next = iter._value + 1;
+            T nextEnum = Unsafe.As<int, T>(ref next);
+    #if UNITY_EDITOR
+            if (!Enum.IsDefined(typeof(T), nextEnum))
+                throw new InvalidOperationException($"Enum value out of range: {next}");
+    #endif
+            return new(nextEnum);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator <(EnumIDIter<T> a, EnumIDIter<T> b) => a._value < b._value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator >(EnumIDIter<T> a, EnumIDIter<T> b) => a._value > b._value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator ==(EnumIDIter<T> a, EnumIDIter<T> b) => a._value == b._value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator !=(EnumIDIter<T> a, EnumIDIter<T> b) => a._value != b._value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator <=(EnumIDIter<T> a, EnumIDIter<T> b) => a._value <= b._value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator >=(EnumIDIter<T> a, EnumIDIter<T> b) => a._value >= b._value;
+
+        public override bool Equals(object obj) => obj is EnumIDIter<T> other && this == other;
+        public override int GetHashCode() => _value.GetHashCode();
+    }
+}
+
+    """
+    with open(os.path.join(DATA_DIR,ENUM,"EnumIDIter.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
     
 if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridge.cs")):
     code_str = '''
@@ -1220,6 +1288,62 @@ public static class DebugLogBridge
     '''
     with open(os.path.join(DATA_DIR,SCRIPT,DEBUG,LOG,"DebugLogBridge.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
+        
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,"BaseSingleton.cs")):
+    code_str = '''
+using NUnit.Framework;
+using UnityEngine;
+
+namespace GameCore
+{
+    public class BaseSingleton<T> : MonoBehaviour where T : MonoBehaviour
+    {
+        protected static T instance;
+
+        public static T Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    // まず、既にシーン内にあるかチェック
+                    instance = GameObject.FindFirstObjectByType<T>();
+
+                    if (instance == null)
+                    {
+                        // まだなければ新しく生成
+                        GameObject instanceObj = new GameObject();
+                        instance = instanceObj.AddComponent<T>();
+                        instanceObj.name = typeof(T).Name;
+                    }
+                }
+
+                return instance;
+            }
+        }
+
+        public virtual void AwakeSingleton()
+        {
+            if (instance == null)
+            {
+                instance = gameObject.GetComponent<T>();
+            }
+        }
+
+        public void Awake()
+        {
+            AwakeSingleton();
+        }
+
+    }
+}
+
+
+    '''
+    with open(os.path.join(DATA_DIR,SCRIPT,"BaseSingleton.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+        
+    
     
     
     
@@ -1333,7 +1457,12 @@ def generate_enum_cs(name):
         cs_content = "namespace GameCore.Enums\n{\n"
         cs_content += f"    public enum {name}ID\n    {{\n"
         cs_content += "        None = 0, // デフォルト値\n"
+        defauldFlag = False
+        default = ""
         for item in valid_data:
+            if defauldFlag == False:
+                default = f"{item['value']}"
+                defauldFlag = True
             cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
         max_value = max([item['value'] for item in valid_data], default=-1) + 1
         cs_content += f"        Max = {max_value}\n"
@@ -1341,6 +1470,77 @@ def generate_enum_cs(name):
         cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}ID.cs")
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
+            
+        #Extension
+        cs_path = os.path.join(DATA_DIR, ENUM, f"{name}", f"{name}IDExtensions.cs")
+        cs_content = f"""
+using System;
+using UnityEngine;
+namespace GameCore.Enums
+{{
+    public static class {name}IDExtensions
+    {{
+        public static int ToInt(this {name}ID id)
+        {{
+            return (int)id;
+        }}
+        public static {name}ID To{name}ID(this int id)
+        {{
+            return ({name}ID)id;
+        }}
+        public static int ToIndex(this {name}TableID id)
+        {{
+            return (int)id - 1;
+        }}
+        public static void ForID(Action<{name}ID> action)
+        {{
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            for (EnumIDIter<{name}ID> id = {name}ID.{default}; id < {name}ID.Max; id++)
+            {{
+                action(id);
+            }}
+        }}
+        public static List<{name}ID> FindAll(Func<{name}ID, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+            var results = new List<{name}ID>();
+            for (EnumIDIter<{name}ID> id = {name}ID.{default}; id < {name}ID.Max; id++)
+            {{
+                {name}ID value = id;
+                if (!Enum.IsDefined(typeof({name}ID), value))
+                    continue; // 無効な値はスキップ
+                if (predicate(value))
+                    results.Add(value);
+            }}
+
+            return results;
+        }}
+
+        public static {name}ID Find(Func<{name}ID, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+            for (EnumIDIter<{name}ID> id = {name}ID.{default}; id < {name}ID.Max; id++)
+            {{
+                {name}ID value = id;
+                if (!Enum.IsDefined(typeof({name}ID), value))
+                    continue; // 無効な値はスキップ
+                if (predicate(value))
+                    return value;
+            }}
+
+            return {name}ID.None; // デフォルト値（必要に応じて変更）
+        }}
+        
+        
+        
+    }}
+}}
+        """
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(cs_content)
+        
         return jsonify({"message": f"C# enum {name}ID generated successfully"})
     except Exception as e:
         logger.error(f"Error generating C# enum {name}: {str(e)}")
@@ -2063,12 +2263,17 @@ def generate_class_data_id_cs(name):
 
         # --- Enum File ---
         enum_cs_path = os.path.join(table_dir, f"{name}TableID.cs")
+        defaultFlag = False
+        default = ""
         with open(enum_cs_path, 'w', encoding='utf-8') as ef:
             ef.write("using System;\n\n")
             ef.write("namespace GameCore.Tables.ID\n{\n")
             ef.write(f"    public enum {name}TableID\n    {{\n")
             ef.write("        None = 0,\n")
             for i, row in enumerate(rows, start=1):
+                if defaultFlag == False:
+                    default = row['enum_property']
+                    defaultFlag = True
                 ef.write(f"        {row['enum_property']} = {i},\n")
             ef.write("        Max\n")
             ef.write("    }\n}\n")
@@ -2076,23 +2281,84 @@ def generate_class_data_id_cs(name):
         # Example
         exsample_cs_path = os.path.join(table_dir, f"{name}TableExample.cs")
         with open(exsample_cs_path, 'w', encoding='utf-8') as ef:
-            ef.write("using System;\nusing UnityEngine;\n")
-            ef.write("using GameCore.Tables;\nusing GameCore.Tables.ID;\n\n")
-            ef.write("namespace GameCore.Tables\n{\n")
-            ef.write(f"    public static class {name}IDExtensions\n    {{\n")
-            ef.write(f"        public static {name}Row GetRow(this {name}TableID id)\n")
-            ef.write("        {\n")
-            ef.write(f"            if ({name}Table.Table.TryGetValue(id, out var row))\n")
-            ef.write("            {\n")
-            ef.write("                return row;\n")
-            ef.write("            }\n")
-            ef.write("            else\n")
-            ef.write("            {\n")
-            ef.write("                return null; // または throw new KeyNotFoundException()\n")
-            ef.write("            }\n")
-            ef.write("        }\n")
-            ef.write("    }\n")
-            ef.write("}\n")
+            template = f"""
+            using System;
+            using UnityEngine;
+            using GameCore.Tables;
+            using GameCore.Tables.ID;
+
+            namespace GameCore.Tables
+            {{
+                public static class {name}IDExtensions
+                {{
+                    public static {name}Row GetRow(this {name}TableID id)
+                    {{
+                        if ({name}Table.Table.TryGetValue(id, out var row))
+                        {{
+                            return row;
+                        }}
+                        else
+                        {{
+                            return null; // または throw new KeyNotFoundException()
+                        }}
+                    }}
+                    public static int ToInt(this {name}TableID id)
+                    {{
+                        return (int)id;
+                    }}
+                    
+                    public static int ToIndex(this {name}TableID id)
+                    {{
+                        return (int)id - 1;
+                    }}
+                    public static {name}TableID To{name}TableID(this int id)
+                    {{
+                        return ({name}TableID)id;
+                    }}
+                    public static void ForID(Action<{name}TableID> action)
+                    {{
+                        if (action == null) throw new ArgumentNullException(nameof(action));
+                        for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
+                        {{
+                            action(id);
+                        }}
+                    }}
+                    public static List<{name}TableID> FindAll(Func<{name}TableID, bool> predicate)
+                    {{
+                        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+                        var results = new List<{name}TableID>();
+                        for (EnumIDIter<{name}TableID> id = {name}ID.{default}; id < {name}TableID.Max; id++)
+                        {{
+                            {name}TableID value = id;
+                            if (!Enum.IsDefined(typeof({name}TableID), value))
+                                continue; // 無効な値はスキップ
+                            if (predicate(value))
+                                results.Add(value);
+                        }}
+
+                        return results;
+                    }}
+
+                    public static {name}TableID Find(Func<{name}TableID, bool> predicate)
+                    {{
+                        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+                        for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
+                        {{
+                            {name}TableID value = id;
+                            if (!Enum.IsDefined(typeof({name}TableID), value))
+                                continue; // 無効な値はスキップ
+                            if (predicate(value))
+                                return value;
+                        }}
+
+                        return {name}TableID.None; // デフォルト値（必要に応じて変更）
+                    }}
+        
+                }}
+            }}
+            """
 
         return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
     except Exception as e:
