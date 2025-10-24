@@ -111,7 +111,23 @@ def generate_base():
         f.seek(0)
         json.dump(enum_list, f, ensure_ascii=False, indent=4)
         f.truncate()
-
+        
+    # 各IDの作成
+    for entry in new_entries:
+        if not os.path.exists(os.path.join(ENUM_DIR,entry["name"])):
+            os.makedirs(os.path.join(ENUM_DIR,entry["name"]))
+        code_str = f"""
+namespace GameCore.Enums
+{{
+    public enum {entry["name"]}ID
+    {{
+        None = 0, // デフォルト値
+        Max
+    }}
+}}
+        """
+        if not os.path.exists(os.path.join(ENUM_DIR,entry["name"],f"{entry["name"]}ID.cs")):
+            with open(os.path.join(ENUM_DIR,entry["name"],f"{entry["name"]}ID.cs")) as f:
     # EditorCommunication.cs
     if not os.path.exists(os.path.join(EDITOR_DATA, "EditorCommunication.cs")):
         code_str = """
