@@ -13,7 +13,7 @@ import psutil
 import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
 import pythonSrc.dbgServer as dbgServer
-import pythonSrc.addressableInit as addressable
+import pythonSrc.addressableInit
 import threading
 from pathlib import Path
 
@@ -113,7 +113,7 @@ move_dll_files()
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
 assets.generate_base()
-addressable.generate_base()
+pythonSrc.addressableInit.generate_base()
 
 
 
