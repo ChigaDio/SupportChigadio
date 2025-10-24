@@ -1458,10 +1458,10 @@ def generate_enum_cs(name):
         cs_content += f"    public enum {name}ID\n    {{\n"
         cs_content += "        None = 0, // デフォルト値\n"
         defauldFlag = False
-        default = ""
+        default = "None"
         for item in valid_data:
             if defauldFlag == False:
-                default = f"{item['value']}"
+                default = f"{item['property']}"
                 defauldFlag = True
             cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
         max_value = max([item['value'] for item in valid_data], default=-1) + 1
@@ -1476,6 +1476,7 @@ def generate_enum_cs(name):
         cs_content = f"""
 using System;
 using UnityEngine;
+using System.Collections.Generic;
 namespace GameCore.Enums
 {{
     public static class {name}IDExtensions
@@ -1488,7 +1489,7 @@ namespace GameCore.Enums
         {{
             return ({name}ID)id;
         }}
-        public static int ToIndex(this {name}TableID id)
+        public static int ToIndex(this {name}ID id)
         {{
             return (int)id - 1;
         }}
@@ -2264,7 +2265,7 @@ def generate_class_data_id_cs(name):
         # --- Enum File ---
         enum_cs_path = os.path.join(table_dir, f"{name}TableID.cs")
         defaultFlag = False
-        default = ""
+        default = "None"
         with open(enum_cs_path, 'w', encoding='utf-8') as ef:
             ef.write("using System;\n\n")
             ef.write("namespace GameCore.Tables.ID\n{\n")
