@@ -2283,82 +2283,76 @@ def generate_class_data_id_cs(name):
         exsample_cs_path = os.path.join(table_dir, f"{name}TableExample.cs")
         with open(exsample_cs_path, 'w', encoding='utf-8') as ef:
             template = f"""
-            using System;
-            using UnityEngine;
-            using GameCore.Tables;
-            using GameCore.Tables.ID;
-
-            namespace GameCore.Tables
+using System;
+using UnityEngine;
+using GameCore.Tables;
+using GameCore.Tables.ID;
+using System.Collections.Generic;
+namespace GameCore.Tables
+{{
+    public static class {name}IDExtensions
+    {{
+        public static {name}Row GetRow(this {name}TableID id)
+        {{
+            if ({name}Table.Table.TryGetValue(id, out var row))
             {{
-                public static class {name}IDExtensions
-                {{
-                    public static {name}Row GetRow(this {name}TableID id)
-                    {{
-                        if ({name}Table.Table.TryGetValue(id, out var row))
-                        {{
-                            return row;
-                        }}
-                        else
-                        {{
-                            return null; // または throw new KeyNotFoundException()
-                        }}
-                    }}
-                    public static int ToInt(this {name}TableID id)
-                    {{
-                        return (int)id;
-                    }}
-                    
-                    public static int ToIndex(this {name}TableID id)
-                    {{
-                        return (int)id - 1;
-                    }}
-                    public static {name}TableID To{name}TableID(this int id)
-                    {{
-                        return ({name}TableID)id;
-                    }}
-                    public static void ForID(Action<{name}TableID> action)
-                    {{
-                        if (action == null) throw new ArgumentNullException(nameof(action));
-                        for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
-                        {{
-                            action(id);
-                        }}
-                    }}
-                    public static List<{name}TableID> FindAll(Func<{name}TableID, bool> predicate)
-                    {{
-                        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-
-                        var results = new List<{name}TableID>();
-                        for (EnumIDIter<{name}TableID> id = {name}ID.{default}; id < {name}TableID.Max; id++)
-                        {{
-                            {name}TableID value = id;
-                            if (!Enum.IsDefined(typeof({name}TableID), value))
-                                continue; // 無効な値はスキップ
-                            if (predicate(value))
-                                results.Add(value);
-                        }}
-
-                        return results;
-                    }}
-
-                    public static {name}TableID Find(Func<{name}TableID, bool> predicate)
-                    {{
-                        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-
-                        for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
-                        {{
-                            {name}TableID value = id;
-                            if (!Enum.IsDefined(typeof({name}TableID), value))
-                                continue; // 無効な値はスキップ
-                            if (predicate(value))
-                                return value;
-                        }}
-
-                        return {name}TableID.None; // デフォルト値（必要に応じて変更）
-                    }}
-        
-                }}
+                return row;
             }}
+            else
+            {{
+                return null; // または throw new KeyNotFoundException()
+            }}
+        }}
+        public static int ToInt(this {name}TableID id)
+        {{
+            return (int)id;
+        }}
+        
+        public static int ToIndex(this {name}TableID id)
+        {{
+            return (int)id - 1;
+        }}
+        public static {name}TableID To{name}TableID(this int id)
+        {{
+            return ({name}TableID)id;
+        }}
+        public static void ForID(Action<{name}TableID> action)
+        {{
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
+            {{
+                action(id);
+            }}
+        }}
+        public static List<{name}TableID> FindAll(Func<{name}TableID, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate)
+            var results = new List<{name}TableID>();
+            for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
+            {{
+                {name}TableID value = id;
+                if (!Enum.IsDefined(typeof({name}TableID), value))
+                    continue; // 無効な値はスキップ
+                if (predicate(value))
+                    results.Add(value);
+            
+            return results;
+        
+        public static {name}TableID Find(Func<{name}TableID, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate)
+            for (EnumIDIter<{name}TableID> id = {name}TableID.{default}; id < {name}TableID.Max; id++)
+            {{
+                {name}TableID value = id;
+                if (!Enum.IsDefined(typeof({name}TableID), value))
+                    continue; // 無効な値はスキップ
+                if (predicate(value))
+                    return value;
+            
+            return {name}TableID.None; // デフォルト値（必要に応じて変更）
+        }}
+    }}
+}}
             """
             ef.write(template)
 
