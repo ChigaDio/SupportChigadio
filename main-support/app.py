@@ -1955,8 +1955,53 @@ namespace GameCore.Tables
     except Exception as e:
         logger.error(f"Error generating C# header: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    
+    
+cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'ClassDataHeader.cs')
+list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+        
+cs_content = """
+using System;
+using System.IO;
+using System.Collections.Generic;
+using GameCore.Enums;
 
-generate_all_cs_header()
+namespace GameCore.Tables
+{
+    public class ClassDataHeader
+    {
+        public Dictionary<TableID, (string Name, long Offset, int Size)> Entries = new Dictionary<TableID, (string, long, int)>();
+
+        public ClassDataHeader(BinaryReader reader)
+        {
+            int count = reader.ReadInt32();
+            for(int i = 0; i < count; i++)
+            {
+                int id = reader.ReadInt32();
+                TableID tableId = (TableID)Enum.ToObject(typeof(TableID), id);
+                int nameLen = reader.ReadInt32();
+                string name = new string(reader.ReadChars(nameLen));
+                long offset = reader.ReadInt64();
+                int size = reader.ReadInt32();
+                Entries[tableId] = (name, offset, size);
+            }
+        }
+
+        public TTable GetData<TTable>(TableID id, BinaryReader reader) where TTable : BaseTable,new()
+        {
+            if (!Entries.TryGetValue(id, out var entry)) return null;
+            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
+            TTable data = new TTable();
+            data.Read(reader);
+            return data;
+        }
+
+
+    }
+}
+"""
+with open(cs_path, 'w', encoding='utf-8') as f:
+    f.write(cs_content)
 
 
 # StateData-ID管理
@@ -3654,7 +3699,53 @@ namespace GameCore.Tables
         logger.error(f"Error generating C# headers: {str(e)}")
         return jsonify({"error": str(e)}), 500
     
-generate_all_cs_matrix_header()
+ # ClassDataMatrixHeader.cs
+cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'ClassDataMatrixHeader.cs')
+list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+
+        
+cs_content = """
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using GameCore.Enums;
+
+namespace GameCore.Tables
+{
+    public class ClassDataMatrixHeader
+    {
+        public Dictionary<MatrixTableID, (string Name, long Offset, int Size)> Entries = new Dictionary<MatrixTableID, (string, long, int)>();
+
+        public ClassDataMatrixHeader(BinaryReader reader)
+        {
+            int count = reader.ReadInt32();
+            for(int i = 0; i < count; i++)
+            {
+                int id = reader.ReadInt32();
+                MatrixTableID tableId = (MatrixTableID)Enum.ToObject(typeof(MatrixTableID), id);
+                int nameLen = reader.ReadInt32();
+                string name = new string(reader.ReadChars(nameLen));
+                long offset = reader.ReadInt64();
+                int size = reader.ReadInt32();
+                Entries[tableId] = (name, offset, size);
+            }
+        }
+
+        public TTable GetData<TTable>(MatrixTableID id, BinaryReader reader) where TTable : BaseTableMatrix, new()
+        {
+            if (!Entries.TryGetValue(id, out var entry)) return null;
+            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
+            TTable data = new TTable();
+            data.Read(reader);
+            return data;
+        }
+    }
+}
+
+"""
+with open(cs_path, 'w', encoding='utf-8') as f:
+    f.write(cs_content)
 
 @app.route('/api/generate-matrix-table-id', methods=['POST'])
 def generate_matrix_table_id():
