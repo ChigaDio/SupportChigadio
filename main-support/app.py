@@ -1341,6 +1341,28 @@ namespace GameCore
     with open(os.path.join(DATA_DIR,SCRIPT,"BaseSingleton.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
         
+#TableID MatrixTableID の事前作成
+new_entries = [
+    {'name': 'TableID',"namespace" :"Enums"},
+    {'name': 'MatrixTableID',"namespace" : "Tables"},
+]
+
+for entry in new_entries:
+    path_file_path = os.path.join(DATA_DIR,ENUM,f"{entry['name']}ID.cs")
+    if not os.path.exists(path_file_path):
+        code_str = f"""
+namespace GameCore.{entry['namespace']}
+{{
+    public enum {entry['name']}
+    {{
+        None = 0,
+        Max
+    }}
+}}
+"""
+        with open(path_file_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+        
     
     
     
@@ -3755,6 +3777,7 @@ def generate_matrix_table_id():
         cs = "namespace GameCore.Tables {\n    public enum MatrixTableID {\n        None = 0,\n"
         for item in data:
             cs += f"        {item['name']} = {item['id']},\n"
+        cs += f"        Max,\n"
         cs += "    }\n}\n"
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "MatrixTableID.cs"), 'w', encoding='utf-8') as f:
             f.write(cs)
