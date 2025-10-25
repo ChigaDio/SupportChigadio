@@ -126,8 +126,9 @@ namespace GameCore.Enums
     }}
 }}
         """
-        if not os.path.exists(os.path.join(ENUM_DIR,entry["name"],f"{entry["name"]}ID.cs")):
-            with open(os.path.join(ENUM_DIR,entry["name"],f"{entry["name"]}ID.cs")) as f:
+        if not os.path.exists(os.path.join(ENUM_DIR,entry["name"],f"{entry['name']}ID.cs")):
+            with open(os.path.join(ENUM_DIR,entry["name"],f"{entry['name']}ID.cs"),"w",encoding="utf-8") as f:
+                f.write(code_str)
     # EditorCommunication.cs
     if not os.path.exists(os.path.join(EDITOR_DATA, "EditorCommunication.cs")):
         code_str = """
