@@ -143,7 +143,7 @@ using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
 using UnityEditorInternal;
 using System.Collections.Generic;
-using UnityEditor.U2D.Sprites;
+using System.Linq;
 
 public class EditorCommunication : EditorWindow
 {
@@ -281,10 +281,10 @@ public class EditorCommunication : EditorWindow
             string filePath = data.file_path;
             Debug.Log($"Received filePath: {filePath}");
 
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\\\", "/").TrimEnd('/');
             Debug.Log($"Project root (normalized): {projectRoot}");
 
-            string normalizedFilePath = filePath.Replace("\\", "/").TrimEnd('/');
+            string normalizedFilePath = filePath.Replace("\\\\", "/").TrimEnd('/');
             Debug.Log($"Normalized filePath: {normalizedFilePath}");
 
             string assetPath = normalizedFilePath;
@@ -298,14 +298,14 @@ public class EditorCommunication : EditorWindow
                 Debug.LogWarning($"filePath does not start with project root: {projectRoot}");
             }
 
-            assetPath = assetPath.Replace("\\", "/").Trim();
+            assetPath = assetPath.Replace("\\\\", "/").Trim();
             if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = "Assets/" + assetPath.TrimStart('/');
             }
             Debug.Log($"Final assetPath: {assetPath}");
 
-            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\", "/");
+            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\\\", "/");
             if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(assetPath)) && !File.Exists(fullPath))
             {
                 Debug.LogWarning($"Invalid asset path for AssetDatabase: {assetPath}");
@@ -343,8 +343,8 @@ public class EditorCommunication : EditorWindow
         else if (command == "get_sprite_info")
         {
             string filePath = data.file_path;
-            string assetPath = filePath.Replace("\\", "/");
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
+            string assetPath = filePath.Replace("\\\\", "/");
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\\\", "/").TrimEnd('/');
             if (assetPath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = assetPath.Substring(projectRoot.Length).TrimStart('/');

@@ -821,17 +821,12 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
             using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
             using (var reader = new BinaryReader(stream, Encoding.UTF8))
             {
-                ScenarioCanvas.instance.FadeTalkFrameAlpha(1.0f);
                 stream.Seek(seekPos, SeekOrigin.Begin);
                 master.SetUp(reader);
                 await UniTask.Yield(cancellationToken: linkedCts.Token);
 
                 while (!master.IsExecuteFinish && !linkedCts.Token.IsCancellationRequested)
                 {
-                    if(master.ExecuteData.ChangeScenarioData.IsChangeTrigger)
-                    {
-                        break;
-                    }
                     await master.OnInitializeAsync(linkedCts);
                     await master.OnExecuteAsync(linkedCts);
                     await master.OnFinalizeAsync(linkedCts);
@@ -847,7 +842,6 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         finally
         {
             action?.Invoke(master.ExecuteData);
-            ScenarioCanvas.instance.FadeTalkFrameAlpha(0.0f);
             await UniTask.Yield(cancellationToken: linkedCts.Token);
         }
     }

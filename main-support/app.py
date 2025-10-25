@@ -873,7 +873,7 @@ namespace GameCore
                         string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
                         string absoluteSupportRoot = Path.GetFullPath(Path.Combine(projectRoot, assetsRelative)); // -> .../Project/Assets/.../SupportChigadio
                         string dataPath = Path.Combine(absoluteSupportRoot, "..", SUPPORT_DATA_NAME);
-                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\", "/");
+                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\\\", "/");
                         return s_cachedSupportDataPath;
                     }
                 }
@@ -887,7 +887,7 @@ namespace GameCore
                 string candidate = Path.Combine(projectRootFs, SUPPORT_ROOT_NAME, SUPPORT_DATA_NAME);
                 if (Directory.Exists(candidate))
                 {
-                    s_cachedSupportDataPath = Path.GetFullPath(candidate).Replace("\\", "/");
+                    s_cachedSupportDataPath = Path.GetFullPath(candidate).Replace("\\\\", "/");
                     return s_cachedSupportDataPath;
                 }
 
@@ -899,7 +899,7 @@ namespace GameCore
                     {
                         string found = dirs[0];
                         string dataPath = Path.Combine(found, SUPPORT_DATA_NAME);
-                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\", "/");
+                        s_cachedSupportDataPath = Path.GetFullPath(dataPath).Replace("\\\\", "/");
                         return s_cachedSupportDataPath;
                     }
                 }
@@ -910,7 +910,7 @@ namespace GameCore
 
                 // 最後の最終手段：Project直下の GameData を使う
                 string fallback = Path.Combine(projectRootFs, "GameData");
-                s_cachedSupportDataPath = Path.GetFullPath(fallback).Replace("\\", "/");
+                s_cachedSupportDataPath = Path.GetFullPath(fallback).Replace("\\\\", "/");
                 return s_cachedSupportDataPath;
             }
         }
@@ -918,12 +918,12 @@ namespace GameCore
         /// <summary>
         /// これだけ参照すれば all_sound.bin のフルパスが得られる（呼び出し側はこれだけ見れば良い）
         /// </summary>
-        public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_TEXTURE_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, TEXTURE_FOLDER, ALL_TEXTURE_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\", "/");
-        public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\", "/");
+        public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_TEXTURE_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, TEXTURE_FOLDER, ALL_TEXTURE_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\\\", "/");
 
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
@@ -946,8 +946,8 @@ namespace GameCore
         public static string GetAssetRelativePath(string absolutePath)
         {
             if (string.IsNullOrEmpty(absolutePath)) return null;
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/");
-            absolutePath = Path.GetFullPath(absolutePath).Replace("\\", "/");
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\\\", "/");
+            absolutePath = Path.GetFullPath(absolutePath).Replace("\\\\", "/");
             if (absolutePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
                 string rel = absolutePath.Substring(projectRoot.Length).TrimStart('/', '\\');
