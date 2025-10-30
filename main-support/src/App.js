@@ -18,6 +18,8 @@ import ScenarioRoleDetailGrid from './components/ScenarioRoleDetailGrid';
 import ScenarioEventGrid from './components/ScenarioEventGrid';
 import ScenarioEventTransition from './components/ScenarioEventTransition';
 import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
+import BehaviorGrid from './components/BehaviorGrid';
+import BehaviorDetailGrid from './components/BehaviorDetailGrid';
 
 import Sound from './assets/sound';
 import Texture from './assets/texture';
@@ -49,6 +51,9 @@ function AppContent() {
           break;
         case 'state':
           navigate('/state');
+          break;
+        case 'behavior':
+          navigate('/behavior');
           break;
         default:
           navigate('/enum-id'); // GenerateTool default
@@ -111,10 +116,14 @@ function AppContent() {
           <Route path="/class-data-matrix-id/:name" element={<ClassDataMatrinxIdDetailGrid />} />
           <Route path="/state" element={<StateGrid />} />
           <Route path="/state/:name" element={<StateDetailGridGrid />} />
+          <Route path="/behavior" element={<BehaviorGrid />} />
+          <Route path="/behavior/:name" element={<BehaviorDetailGrid />} />
           <Route path="/scenario-role" element={<ScenarioRoleGrid />} />
           <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
           <Route path="/scenario-event" element={<ScenarioEventGrid />} />
           <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+
+
           <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
           <Route path="/sound" element={<Sound />} />
           <Route path="/texture" element={<Texture />} />

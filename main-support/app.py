@@ -14,6 +14,7 @@ import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
 import pythonSrc.dbgServer as dbgServer
 import pythonSrc.addressableInit
+import pythonSrc.behavior
 import threading
 from pathlib import Path
 
@@ -113,8 +114,9 @@ move_dll_files()
 scenario.generate_scenario_folder(DATA_DIR)
 scenario.generate_base_script_file(DATA_DIR)
 assets.generate_base()
-pythonSrc.addressableInit.generate_base()
 
+pythonSrc.addressableInit.generate_base()
+pythonSrc.behavior.generate_base()
 
 
 # 型マッピング（Vector2, Vector3追加）
@@ -4587,6 +4589,38 @@ def serve_sound(group_name, index):
     if file_path and os.path.exists(file_path):
         return send_file(file_path, mimetype='audio/mpeg')
     return jsonify({'error': 'File not found'}), 404
+
+# =================================================
+# Behavior Tree API (追加部分)
+
+
+
+@app.route('/api/behavior-data', methods=['GET'])
+def get_behavior_data():
+    return pythonSrc.behavior.get_behavior_data()
+
+@app.route('/api/behavior-data', methods=['POST'])
+def add_behavior():
+    return pythonSrc.behavior.add_behavior(request)
+
+
+@app.route('/api/behavior-data/<name>', methods=['DELETE'])
+def delete_behavior(name):
+    return pythonSrc.behavior.delete_behavior()
+
+@app.route('/api/behavior-data/<name>', methods=['GET'])
+def get_behavior_detail(name):
+    return pythonSrc.behavior.get_behavior_detail(name)
+
+@app.route('/api/behavior-data/<name>', methods=['PUT'])
+def save_behavior_detail(name):
+    return pythonSrc.behavior.save_behavior_detail(name,request)
+
+@app.route('/api/behavior-generate/<name>', methods=['POST'])
+def generate_behavior_code(name):
+    basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+    return pythonSrc.behavior.generate_behavior_code(name,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
+
 
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})

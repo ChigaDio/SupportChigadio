@@ -18,6 +18,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'Class Data ID', key: 'class-data-id' },
         { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
         { name: 'State', key: 'state' },
+        {name: 'Behavior' , key: 'behavior'}
       ],
     },
             {
