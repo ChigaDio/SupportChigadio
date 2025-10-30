@@ -954,6 +954,7 @@ namespace GameCore.Behavior
         public abstract void OnInit(Action<TBlackboard> action = null,TBlackboard blackboard = null);
         public abstract BehaviorResultStatus Tick();
         public abstract void OnReset(Action<TBlackboard> action = null);
+        public void SetBlackboard(TBlackboard blackboard) => Blackboard = blackboard;
     }
 }
 """
@@ -1557,7 +1558,7 @@ namespace GameCore.Behavior
             
             if(blackboard != null)
             {{
-                this.Blackboard = blackboard;
+                SetBlackboard(blackboard);
             }}
             Blackboard.OnInit(action);
 
