@@ -513,7 +513,23 @@ function BehaviorDetailGrid() {
             columns={[
               { field: 'name', headerName: '変数名', flex: 1 },
               { field: 'type', headerName: '型', width: 100 },
-              { field: 'description', headerName: '説明', flex: 1 }
+              { field: 'description', headerName: '説明', flex: 1 },
+              {
+  field: 'actions',
+  headerName: '',
+  width: 100,
+  renderCell: (params) => (
+    <Button
+      size="small"
+      color="error"
+      onClick={() => {
+        setBlackboard(prev => prev.filter((_, i) => i !== params.id));
+      }}
+    >
+      <DeleteIcon fontSize="small" />
+    </Button>
+  )
+}
             ]}
             autoHeight
             disableSelectionOnClick
@@ -531,9 +547,24 @@ function BehaviorDetailGrid() {
               { field: 'name', headerName: '名前', flex: 1 },
               { field: 'type', headerName: '継承元', width: 120 },
               { field: 'description', headerName: '説明', flex: 1 },
-              { field: 'actions', headerName: '', width: 120, renderCell: (p) => (
-                <Button size="small" onClick={() => addChildNode('root', 'custom', p.row.name)}>配置</Button>
-              )}
+              {
+                field: 'actions',
+                headerName: '',
+                width: 180,
+                renderCell: (p) => (
+                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() => {
+                        setCustomNodes(prev => prev.filter((_, i) => i !== p.id));
+                      }}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </Button>
+                  </Box>
+                )
+              }
             ]}
             autoHeight
             disableSelectionOnClick

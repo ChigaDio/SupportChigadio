@@ -951,7 +951,7 @@ namespace GameCore.Behavior
 
         public void SetRoot(BaseBehaviorNode<TBlackboard, TEnum> root) => Root = root;
 
-        public abstract void OnInit(Action<TBlackboard> action = null);
+        public abstract void OnInit(Action<TBlackboard> action = null,TBlackboard blackboard = null);
         public abstract BehaviorResultStatus Tick();
         public abstract void OnReset(Action<TBlackboard> action = null);
     }
@@ -1198,7 +1198,7 @@ def generate_custom_node(data,name):
         path = os.path.join(DATA_DIR, BEHAVIOR_DATA, name, f"{name}{node['name']}")
         path += "Action.cs"  if node['type'] == "action" else "Condition.cs"
         if node['type'] == "condition":
-            add_str += f"""
+            add_str = f"""
         protected override bool Compare({name}BehaviorBlackboard blackboard)
         {{
             return true;
@@ -1552,8 +1552,13 @@ namespace GameCore.Behavior
 {{
     public class {name}BehaviorTree : BaseBehaviorTree<{name}BehaviorBlackboard, {name}BehaviorID>
     {{
-        public override void OnInit(Action<{name}BehaviorBlackboard> action = null)
+        public override void OnInit(Action<{name}BehaviorBlackboard> action = null,{name}BehaviorBlackboard blackboard = null)
         {{
+            
+            if(blackboard != null)
+            {{
+                this.Blackboard = blackboard;
+            }}
             Blackboard.OnInit(action);
 
             // === ツリー構築 ===
@@ -1562,6 +1567,7 @@ namespace GameCore.Behavior
             // ルート設定
             SetRoot({root_var});
             Root?.OnInit(Blackboard);
+            
         }}
 
         public override BehaviorResultStatus Tick()
