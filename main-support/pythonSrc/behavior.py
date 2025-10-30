@@ -144,7 +144,7 @@ namespace GameCore.Behavior
 
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA,"BaseBehaviorNode.cs"),code_str)
-    # -------------------------------------------------
+        # -------------------------------------------------
     # 4. ConditionNode.cs
     # -------------------------------------------------
     code_str = """
@@ -1192,7 +1192,7 @@ def generate_custom_node(data,name):
         else:
             path_add += "Condition"
             class_str = f"{name}{node['name']}ConditionNode"
-            base_class = f"{name}{node['name']}ConditionNode : Condition<{name}BehaviorBlackboard,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>"
             init_id = "BlackboardCondition"
             tick_return = "bool result = Compare(blackboard);\n            return result ? BehaviorResultStatus.Success : BehaviorResultStatus.Failure;"
         path = os.path.join(DATA_DIR, BEHAVIOR_DATA, name, f"{name}{node['name']}")
