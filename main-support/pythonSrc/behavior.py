@@ -1474,7 +1474,7 @@ using System.Collections.Generic;
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>>
+    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>
     {{
         public Base{name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {{
