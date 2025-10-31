@@ -40,7 +40,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class ActionNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
 
@@ -76,12 +76,13 @@ namespace GameCore.Behavior
 {
     public class BaseBehaviorBlackboard<T, TEnum> 
     where T : BaseBehaviorBlackboard<T,TEnum>, new()
-    where TEnum : Enum
+    where TEnum : struct, Enum
+
     {
-        protected readonly FastEnumBitFlags<TFlag> Flags;
+        protected readonly Utils.FastEnumBitFlags<TEnum> Flags = new Utils.FastEnumBitFlags<TEnum>();
         public BaseBehaviorBlackboard()
         {
-            Flags = new FastEnumBitFlags<TFlag>();
+            Flags = new Utils.FastEnumBitFlags<TEnum>();
         }
         public void OnInit(Action<T> action = null)
         {
@@ -94,28 +95,31 @@ namespace GameCore.Behavior
         }
 
         // ================ フラグ操作（委譲） ================
-        public bool IsFlagSet(TFlag flag) => Flags.IsSet(flag);
-        public void SetFlag(TFlag flag) => Flags.Set(flag);
-        public void ClearFlag(TFlag flag) => Flags.Clear(flag);
-        public void ToggleFlag(TFlag flag) => Flags.Toggle(flag);
-        public void XORFlag(TFlag flag, bool value) => Flags.XORBit(flag, value);
-        public void ANDFlag(TFlag flag, bool value) => Flags.ANDBit(flag, value);
-        public void ORFlag(TFlag flag, bool value) => Flags.ORBit(flag, value);
+        public bool IsFlagSet(TEnum flag) => Flags.IsSet(flag);
+        public void SetFlag(TEnum flag) => Flags.Set(flag);
+        public void ClearFlag(TEnum flag) => Flags.Clear(flag);
+        public void ToggleFlag(TEnum flag) => Flags.Toggle(flag);
+        public void XORFlag(TEnum flag, bool value) => Flags.XORBit(flag, value);
+        public void ANDFlag(TEnum flag, bool value) => Flags.ANDBit(flag, value);
+        public void ORFlag(TEnum flag, bool value) => Flags.ORBit(flag, value);
         public void ClearAllFlags() => Flags.ClearAll();
         public void SetAllFlags() => Flags.SetAll();
     }
+
+
 }
 
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA,"BaseBehaviorBlackboard.cs"),code_str)
     code_str = """
+
 using System;
 using System.Collections.Generic;
 
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorNode<TBlackboard, TEnum> : OriginBehaviorNode
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public BehaviorNodeCategory NodeCategory { get; protected set; }
@@ -144,26 +148,26 @@ namespace GameCore.Behavior
         public void CheckResetExecute(BaseBehaviorNode<TBlackboard, TEnum> child,TBlackboard blackboard)
         {
             if (child == null) return;
-            if (child.BehaviorResetTypeID == BehaviorResetTypeID.None) return;
+            if (child.ResetTypeID == BehaviorResetTypeID.None) return;
             
-            blackboard.XORFlag(result.CustomNodeID,true);
-            var check = blackboard.IsFlagSet(result.CustomNodeID);
+            blackboard.XORFlag(child.CustomNodeID,true);
+            var check = blackboard.IsFlagSet(child.CustomNodeID);
             if (check == false) return;
             
 
-            if (child.BehaviorResetTypeID == BehaviorResetTypeID.THIS_RESET)
+            if (child.ResetTypeID == BehaviorResetTypeID.THIS_RESET)
             {
                 this.OnReset(blackboard);
             }
-            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.THIS_CHILD_RESET_ALL)
+            else if (child.ResetTypeID == BehaviorResetTypeID.THIS_CHILD_RESET_ALL)
             {
                 this.OnAllReset(blackboard);
             }
-            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            else if (child.ResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
             {
                 child.OnReset(blackboard);
             }
-            else if(hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            else if(child.ResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
             {
                 child.OnAllReset(blackboard);
             }
@@ -172,9 +176,9 @@ namespace GameCore.Behavior
         }
         public void OnAllReset(TBlackboard blackboard)
         {
-            OnReset();
+            OnReset(blackboard);
             foreach (var child in Children)
-                child.OnAllReset();
+                child.OnAllReset(blackboard);
         }
 
         public void AddChild(BaseBehaviorNode<TBlackboard, TEnum> child)
@@ -201,6 +205,8 @@ namespace GameCore.Behavior
     }
 }
 
+
+
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA,"BaseBehaviorNode.cs"),code_str)
         # -------------------------------------------------
@@ -212,7 +218,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class ConditionNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public ConditionNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -252,7 +258,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class SequenceNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public SequenceNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -295,7 +301,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class SelectorNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public SelectorNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -345,7 +351,7 @@ namespace GameCore.Behavior
     }
 
     public class ParallelNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public ParallelPolicyID SuccessPolicy { get; set; } = ParallelPolicyID.ALL;
@@ -404,7 +410,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class RaceNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         private bool _finished = false;
@@ -455,7 +461,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class RepeaterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public int Count { get; set; } = 3;
@@ -503,7 +509,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class DelayNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 1.0f;
@@ -560,7 +566,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class FailerNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public FailerNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -601,7 +607,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class LimiterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public int Max { get; set; } = 3;
@@ -646,7 +652,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class RepeatUntilSuccessNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public RepeatUntilSuccessNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -685,7 +691,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class InverterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public InverterNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -725,7 +731,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class CooldownNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 1.0f;
@@ -789,7 +795,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class TimeoutNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 5.0f;
@@ -934,12 +940,13 @@ namespace GameCore.Behavior
 {
     public class BaseBehaviorBlackboard<T, TEnum> 
     where T : BaseBehaviorBlackboard<T,TEnum>, new()
-    where TEnum : Enum
+    where TEnum : struct, Enum
+
     {
-        protected readonly FastEnumBitFlags<TFlag> Flags;
+        protected readonly Utils.FastEnumBitFlags<TEnum> Flags = new Utils.FastEnumBitFlags<TEnum>();
         public BaseBehaviorBlackboard()
         {
-            Flags = new FastEnumBitFlags<TFlag>();
+            Flags = new Utils.FastEnumBitFlags<TEnum>();
         }
         public void OnInit(Action<T> action = null)
         {
@@ -952,16 +959,18 @@ namespace GameCore.Behavior
         }
 
         // ================ フラグ操作（委譲） ================
-        public bool IsFlagSet(TFlag flag) => Flags.IsSet(flag);
-        public void SetFlag(TFlag flag) => Flags.Set(flag);
-        public void ClearFlag(TFlag flag) => Flags.Clear(flag);
-        public void ToggleFlag(TFlag flag) => Flags.Toggle(flag);
-        public void XORFlag(TFlag flag, bool value) => Flags.XORBit(flag, value);
-        public void ANDFlag(TFlag flag, bool value) => Flags.ANDBit(flag, value);
-        public void ORFlag(TFlag flag, bool value) => Flags.ORBit(flag, value);
+        public bool IsFlagSet(TEnum flag) => Flags.IsSet(flag);
+        public void SetFlag(TEnum flag) => Flags.Set(flag);
+        public void ClearFlag(TEnum flag) => Flags.Clear(flag);
+        public void ToggleFlag(TEnum flag) => Flags.Toggle(flag);
+        public void XORFlag(TEnum flag, bool value) => Flags.XORBit(flag, value);
+        public void ANDFlag(TEnum flag, bool value) => Flags.ANDBit(flag, value);
+        public void ORFlag(TEnum flag, bool value) => Flags.ORBit(flag, value);
         public void ClearAllFlags() => Flags.ClearAll();
         public void SetAllFlags() => Flags.SetAll();
     }
+
+
 }
 
 """
@@ -977,7 +986,7 @@ using System.Collections.Generic;
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorNode<TBlackboard, TEnum> : OriginBehaviorNode
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public BehaviorNodeCategory NodeCategory { get; protected set; }
@@ -1075,7 +1084,7 @@ using System;
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorTree<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public TBlackboard Blackboard { get; private set; } = new();
@@ -1101,7 +1110,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class BlackboardConditionNode<TBlackboard, TEnum> : ConditionNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard,TEnum>, new()
         where TEnum : struct, Enum
     {
         public BlackboardConditionNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
@@ -1340,13 +1349,13 @@ def generate_custom_node(data,name):
         if node['type'] == "action":
             path_add += "Action"
             class_str = f"{name}{node['name']}ActionNode"
-            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>"
             init_id = "Action"
             tick_return = "return BehaviorResultStatus.Success;"
         else:
             path_add += "Condition"
             class_str = f"{name}{node['name']}ConditionNode"
-            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>"
             init_id = "BlackboardCondition"
             tick_return = "bool result = Compare(blackboard);\n            return result ? BehaviorResultStatus.Success : BehaviorResultStatus.Failure;"
         path = os.path.join(DATA_DIR, BEHAVIOR_DATA, name, f"{name}{node['name']}")
@@ -1464,7 +1473,7 @@ using System.Collections.Generic;
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>
+    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>
     {{
         public Base{name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {{
