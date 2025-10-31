@@ -1530,12 +1530,12 @@ namespace GameCore.Utils
         
 #TableID MatrixTableID の事前作成
 new_entries = [
-    {'name': 'TableID',"namespace" :"Enums"},
-    {'name': 'MatrixTableID',"namespace" : "Tables"},
+    {'name': 'TableID',"namespace" :"Enums","Path":CLASS_DATA_ID},
+    {'name': 'MatrixTableID',"namespace" : "Tables","Path": CLASS_DATA_MATRIX_ID},
 ]
 
 for entry in new_entries:
-    path_file_path = os.path.join(DATA_DIR,ENUM,f"{entry['name']}ID.cs")
+    path_file_path = os.path.join(DATA_DIR,f"{entry['Path']}",f"{entry['name']}.cs")
     if not os.path.exists(path_file_path):
         code_str = f"""
 namespace GameCore.{entry['namespace']}
@@ -3244,12 +3244,16 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
     # 型変換
     if type_str in enum_list:
         type_str = f"GameCore.Enums.{type_str}ID"
+        item['type'] =  type_str
     elif type_str in class_list:
         type_str = f"GameCore.Classes.{type_str}"
+        item['type'] =  type_str
     elif type_str in class_id_list:
-        type_str = f"GameCore.Tables.{type_str}TableID"
+        type_str = f"GameCore.Tables.ID.{type_str}TableID"
+        item['type'] =  type_str
     elif type_str.lower() in TYPE_MAP:
         type_str = type_str.capitalize() if type_str.lower() in ['vector2', 'vector3'] else type_str.lower()
+        
     else:
         type_str = type_str
 
@@ -3295,11 +3299,11 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             else:
                 read_code += f"                {var_name}.Add(reader.{TYPE_MAP[item['type'].lower()]['cs_read']}());\n"
         elif item['type'] in enum_list:
-            read_code += f"                {var_name}.Add((GameCore.Enums.{item['type']})Enum.ToObject(typeof(GameCore.Enums.{item['type']}), reader.ReadInt32()));\n"
+            read_code += f"                {var_name}.Add(({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32()));\n"
         elif item['type'] in class_id_list:
-            read_code += f"                {var_name}.Add((GameCore.Tables.{item['type']})Enum.ToObject(typeof(GameCore.Tables.{item['type']}), reader.ReadInt32()));\n"
+            read_code += f"                {var_name}.Add(({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32()));\n"
         elif item['type'] in class_list:
-            read_code += f"                var add_data = new GameCore.Classes.{item['type']}();\n"
+            read_code += f"                var add_data = new {item['type']}();\n"
             read_code += f"                add_data.Read(reader);\n"
             read_code += f"                {var_name}.Add(add_data);\n"
         else:
@@ -3316,11 +3320,11 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             else:
                 read_code += f"                {var_name}[i] = reader.{TYPE_MAP[item['type'].lower()]['cs_read']}();\n"
         elif item['type'] in enum_list:
-            read_code += f"                {var_name}[i] = (GameCore.Enums.{item['type']})Enum.ToObject(typeof(GameCore.Enums.{item['type']}), reader.ReadInt32());\n"
+            read_code += f"                {var_name}[i] = ({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32());\n"
         elif item['type'] in class_id_list:
-            read_code += f"                {var_name}[i] = (GameCore.Tables.{item['type']})Enum.ToObject(typeof(GameCore.Tables.{item['type']}), reader.ReadInt32());\n" 
+            read_code += f"                {var_name}[i] = ({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32());\n" 
         elif item['type'] in class_list:
-            read_code += f"                {var_name}[i] = new GameCore.Classes.{item['type']}\n"
+            read_code += f"                {var_name}[i] = new {item['type']}\n"
             read_code += f"                {var_name}[i].Read(reader)\n"
         else:
             read_code += f"                {var_name}[i] = new {item['type']}(); // Unsupported\n"
