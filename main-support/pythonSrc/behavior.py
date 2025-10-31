@@ -1345,6 +1345,7 @@ def generate_custom_node(data,name):
     class_str = ""
     tick_return = ""
     for node in customNodes:
+        add_str = ""
         path_add = node['name']
         if node['type'] == "action":
             path_add += "Action"
@@ -1517,7 +1518,7 @@ namespace GameCore.Behavior
 {{
     public class {name}BlackboardConditionNode : Base{name}BlackboardConditionNode
     {{
-        public {name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
+        public {name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {{
             
         }}
@@ -1610,7 +1611,7 @@ namespace GameCore.Behavior
 
 namespace GameCore.Behavior
 {{
-    public class {name}BehaviorBlackboard :  Base{name}BehaviorBlackboard
+    public class {name}BehaviorBlackboard :  Base{name}BehaviorBlackboard<{name}BehaviorBlackboard>
     {{
     }}
 }}
