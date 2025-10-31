@@ -168,8 +168,7 @@ const gridRows = useMemo(() => {
       case 'vector2': return [0, 0];
       case 'vector3': return [0, 0, 0];
       default:
-        if (type in enumValues && enumValues[type].length > 0) return `${type}ID.${enumValues[type][0]['property'] || enumValues[type][0]}`;
-        return '';
+        return `${type}ID.None`;  // ← ここを変更
     }
   };
 
@@ -478,13 +477,19 @@ const columns = [
         </Box>
       ),
       type: isNumber ? 'number' : isBool ? 'boolean' : isString ? 'string' : isVector ? 'string' : 'singleSelect',
-      valueOptions: isBool ? [
-        { value: true, label: 'true' },
-        { value: false, label: 'false' }
-      ] : (isEnum ? enumValues[col.type].map(v => ({
-        value: `${col.type}ID.${v['property'] || v['enum_property'] || v}`,
-        label: `${v['property'] || v['enum_property'] || v}`
-      })) : undefined),
+valueOptions: isBool ? [
+  { value: true, label: 'true' },
+  { value: false, label: 'false' }
+] : (isEnum ? [
+  { value: `${col.type}ID.None`, label: 'None' },
+  ...enumValues[col.type].map(v => {
+    const key = v['property'] || v['enum_property'] || v;
+    return {
+      value: `${col.type}ID.${key}`,
+      label: key
+    };
+  })
+] : undefined),
 
       valueFormatter: ({ value }) => {
         if (Array.isArray(value)) {
@@ -517,9 +522,15 @@ valueParser: (value) => {
         if (!Array.isArray(parsedValue) || parsedValue.length !== 3) throw new Error('不正なVector3形式');
         break;
       default:
-        if (isEnum) {
-          const enumOpts = enumValues[col.type].map(v => `${col.type}ID.${v['property'] || v['enum_property'] || v}`);
-          parsedValue = enumOpts.includes(value) ? value : (enumOpts.length > 0 ? enumOpts[0] : '');
+if (isEnum) {
+    const validValues = [
+      `${col.type}ID.None`,
+      ...enumValues[col.type].map(v => {
+        const key = v['property'] || v['enum_property'] || v;
+        return `${col.type}ID.${key}`;
+      })
+    ];
+    parsedValue = validValues.includes(value) ? value : `${col.type}ID.None`;
         } else {
           parsedValue = value ?? '';
         }

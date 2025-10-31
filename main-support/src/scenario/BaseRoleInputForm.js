@@ -43,16 +43,10 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
         case 'vector4': return [0, 0, 0, 0];
         default:
           if (type in enumValues && enumValues[type].length > 0) {
-            if (typeof enumValues[type][0] === 'object') {
-              return `${type}ID.${enumValues[type][0].property || enumValues[type][0].enum_property || enumValues[type][0]}`;
-            }
-            return `${type}ID.${enumValues[type][0]}`;
+            return `${type}ID.None`;  
           }
           if (type in classDataSchemas && classDataSchemas[type].length > 0) {
-            return classDataSchemas[type].reduce((acc, subField) => {
-              acc[subField.name] = getDefaultValue(subField.type, subField.arraySize);
-              return acc;
-            }, {});
+            return `${type}ID.None`;  
           }
           return '';
       }
@@ -234,27 +228,29 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
     }
 
     const renderSingle = (value, onValueChange) => {
-      if (enumValues[field.type] && enumValues[field.type].length > 0) {
-        const options = enumValues[field.type].map(v => {
-          if (typeof v === 'object') {
-            const val = v.property || v.enum_property || v;
-            return { value: `${field.type}ID.${val}`, label: val };
-          }
-          return { value: `${field.type}ID.${v}`, label: v };
-        });
-        return (
-          <Autocomplete
-            key={key}
-            options={options}
-            getOptionLabel={(option) => option.label}
-            value={options.find(opt => opt.value === value) || null}
-            onChange={(e, newValue) => onValueChange(newValue ? newValue.value : '')}
-            renderInput={params => <TextField {...params} label={field.label || field.name} sx={{ mb: 1 }} />}
-            fullWidth
-            isOptionEqualToValue={(option, val) => option.value === val?.value}
-          />
-        );
-      }
+if (enumValues[field.type] && enumValues[field.type].length > 0) {
+  const options = [
+    { value: `${field.type}ID.None`, label: 'None' },
+    ...enumValues[field.type].map(v => {
+      const val = typeof v === 'object' ? (v.property || v.enum_property || v) : v;
+      return { value: `${field.type}ID.${val}`, label: val };
+    })
+  ];
+
+  return (
+    <Autocomplete
+      key={key}
+      options={options}
+      getOptionLabel={(option) => option.label}
+      value={options.find(opt => opt.value === value) || null}
+      onChange={(e, newValue) => onValueChange(newValue ? newValue.value : `${field.type}ID.None`)}
+      renderInput={params => <TextField {...params} label={field.label || field.name} sx={{ mb: 1 }} />}
+      fullWidth
+      isOptionEqualToValue={(option, val) => option.value === val?.value}
+    />
+  );
+
+}
 
       if (classDataSchemas[field.type] && classDataSchemas[field.type].length > 0) {
         const subSchema = {

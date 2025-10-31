@@ -4137,7 +4137,7 @@ def generate_scenario_role_cs(name):
             field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
             f.write(field_data['field'])
             read_codes.append(field_data['read'])
-        f.write(f"\n        public {name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
+        f.write(f"\n        public {name}RoleData() : base() {{ }}\n        public override void ReadBinary(BinaryReader reader)        {{\n")
         for read_code in read_codes:
             f.write(read_code)
         f.write("        }\n")

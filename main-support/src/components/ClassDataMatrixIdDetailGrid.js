@@ -107,6 +107,22 @@ function ClassDataMatrixIdDetailGrid() {
   const [cellValues, setCellValues] = useState({});
   const apiRef = useGridApiRef();
 
+const enumOptions = useMemo(() => {
+  const options = {};
+  data.fields.forEach(field => {
+    if (field.type in enumValues && enumValues[field.type]?.length > 0) {
+      options[field.name] = [
+        { value: `${field.type}ID.None`, label: 'None' },
+        ...enumValues[field.type].map(v => ({
+          value: `${field.type}ID.${v}`,
+          label: v
+        }))
+      ];
+    }
+  });
+  return options;
+}, [data.fields, enumValues]);
+
   const gridRows = useMemo(() => {
     return rowKeys.map((rowKey, index) => {
       const rowData = { id: index, rowKey };
@@ -254,7 +270,11 @@ function ClassDataMatrixIdDetailGrid() {
       case 'string': return '';
       case 'vector2': return [0, 0];
       case 'vector3': return [0, 0, 0];
-      default: return enumValues[type]?.[0] ? `${type}ID.${enumValues[type][0]}` : '';
+default:
+      if (enumValues[type] && enumValues[type].length > 0) {
+        return `${type}ID.None`;  // ← ここを変更
+      }
+      return '';
     }
   };
 
@@ -645,53 +665,62 @@ function ClassDataMatrixIdDetailGrid() {
             セル編集 ({editingCell?.rowKey}, {editingCell?.colKey})
           </DialogTitle>
           <DialogContent sx={{ pt: 2 }}>
-            {data.fields.map(field => {
-              const fieldType = field.type.toLowerCase();
-              const value = cellValues[field.name] ?? getDefaultValue(fieldType);
-              const isEnum = fieldType in enumValues;
-              const isVector2 = fieldType === 'vector2';
-              const isVector3 = fieldType === 'vector3';
-              return (
-                <Box key={field.name} sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>{field.name} ({field.type})</Typography>
-                  {isVector2 ? (
-                    <Vector2Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
-                  ) : isVector3 ? (
-                    <Vector3Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
-                  ) : isEnum ? (
-                    <Autocomplete
-                      options={enumValues[fieldType]?.map(v => `${fieldType}ID.${v}`) || []}
-                      value={value}
-                      onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue || getDefaultValue(fieldType) })}
-                      renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
-                    />
-                  ) : fieldType === 'bool' ? (
-                    <Autocomplete
-                      options={[{ value: true, label: 'True' }, { value: false, label: 'False' }]}
-                      value={value}
-                      getOptionLabel={(option) => option.label}
-                      onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue ? newValue.value : getDefaultValue(fieldType) })}
-                      renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
-                    />
-                  ) : (
-                    <TextField
-                      type={fieldType === 'int' || fieldType === 'float' ? 'number' : 'text'}
-                      label={field.name}
-                      value={value}
-                      onChange={(e) => {
-                        let newValue = e.target.value;
-                        if (fieldType === 'int') newValue = parseInt(newValue) || 0;
-                        if (fieldType === 'float') newValue = parseFloat(newValue) || 0.0;
-                        setCellValues({ ...cellValues, [field.name]: newValue });
-                      }}
-                      fullWidth
-                      variant="outlined"
-                      InputProps={{ inputProps: { step: fieldType === 'float' ? 'any' : undefined } }}
-                    />
-                  )}
-                </Box>
-              );
-            })}
+{data.fields.map(field => {
+  const fieldType = field.type;
+  const value = cellValues[field.name] ?? getDefaultValue(field.type);
+  const isVector2 = fieldType.toLowerCase() === 'vector2';
+  const isVector3 = fieldType.toLowerCase() === 'vector3';
+  const isEnum = fieldType in enumValues;
+  const isBool = fieldType.toLowerCase() === 'bool';
+
+  return (
+    <Box key={field.name} sx={{ mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>{field.name} ({fieldType})</Typography>
+      
+      {isVector2 ? (
+        <Vector2Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
+      ) : isVector3 ? (
+        <Vector3Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
+      ) : isEnum ? (
+        <Autocomplete
+          options={enumOptions[field.name] || []}
+          getOptionLabel={(option) => option.label}
+          value={enumOptions[field.name]?.find(opt => opt.value === value) || null}
+          onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue?.value ?? `${fieldType}ID.None` })}
+          renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
+          isOptionEqualToValue={(option, val) => option.value === val?.value}
+        />
+      ) : isBool ? (
+        <Autocomplete
+          options={[
+            { value: true, label: 'True' },
+            { value: false, label: 'False' }
+          ]}
+          getOptionLabel={(option) => option.label}
+          value={value}
+          onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue?.value ?? false })}
+          renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
+          isOptionEqualToValue={(option, val) => option.value === val}
+        />
+      ) : (
+        <TextField
+          type={fieldType.toLowerCase() === 'int' || fieldType.toLowerCase() === 'float' ? 'number' : 'text'}
+          label={field.name}
+          value={value}
+          onChange={(e) => {
+            let newValue = e.target.value;
+            if (fieldType.toLowerCase() === 'int') newValue = parseInt(newValue) || 0;
+            if (fieldType.toLowerCase() === 'float') newValue = parseFloat(newValue) || 0.0;
+            setCellValues({ ...cellValues, [field.name]: newValue });
+          }}
+          fullWidth
+          variant="outlined"
+          InputProps={{ inputProps: { step: fieldType.toLowerCase() === 'float' ? 'any' : undefined } }}
+        />
+      )}
+    </Box>
+  );
+})}
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setOpenCellEditor(false)} color="secondary">キャンセル</Button>
