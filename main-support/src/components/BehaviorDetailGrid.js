@@ -64,6 +64,20 @@ const nodeDefinitions = {
   waittime: { label: 'WaitTime', type: 'action', children: false, config: { seconds: 1.0 } }
 };
 
+// CustomNode の外（ファイル上部 or コンポーネント外）に追加
+const resetTypeOptions = [
+  { value: 'None', label: 'None', color: '#666' },
+  { value: 'THIS_RESET', label: 'THIS_RESET', color: '#d32f2f' },
+  { value: 'THIS_CHILD_RESET_ALL', label: 'CHILD_RESET_ALL', color: '#f57c00' },
+  { value: 'CHILD_FIRST_RESET', label: 'CHILD_FIRST_RESET', color: '#388e3c' },
+];
+
+const getResetTypeColor = (type, hover = false) => {
+  const opt = resetTypeOptions.find(o => o.value === type);
+  const base = opt?.color || '#666';
+  return hover ? `${base}dd` : base;
+};
+
 // カスタムノード（props の config を表示）
 const CustomNode = ({ data, id, selected }) => {
   const { onAddChild, onDelete, customNodeOptions = [] } = data;
@@ -92,6 +106,7 @@ const CustomNode = ({ data, id, selected }) => {
 
   return (
     <>
+      {/* メインのノード本体 */}
       <div
         style={{
           background: color,
@@ -108,71 +123,226 @@ const CustomNode = ({ data, id, selected }) => {
           border: selected ? '3px solid #1976d2' : 'none',
         }}
       >
-        <Handle type="target" position={Position.Top} style={{ background: '#fff', border: '2px solid #000', width: 14, height: 14 }} />
-        <div>
-          <strong style={{ fontSize: 15, pointerEvents: 'none' }}>{data.label || def.label}</strong>
-          {data.description && (
-            <div style={{ fontSize: 11, marginTop: 6, opacity: 0.9, pointerEvents: 'none' }}>{data.description}</div>
-          )}
-          {Object.keys(config).length > 0 && (
-            <div style={{ fontSize: 10, marginTop: 4, opacity: 0.8, pointerEvents: 'none' }}>
-              {Object.entries(config).map(([k, v]) => `${k}: ${v}`).join(' | ')}
-            </div>
-          )}
-        </div>
-        <Handle type="source" position={Position.Bottom} style={{ background: '#fff', border: '2px solid #000', width: 14, height: 14 }} />
-      </div>
-
-      <div style={{ position: 'absolute', top: -40, right: -10, display: 'flex', gap: 6, zIndex: 10 }}>
-        {def.children !== false && (
-          <Button size="small" startIcon={<AddIcon />} onClick={(e) => { e.stopPropagation(); setOpenAddDialog(true); }}
-            sx={{ background: 'rgba(0,0,0,0.7)', color: 'white', fontSize: '0.7rem', minWidth: 'auto', px: 1, py: 0.5 }}>
-            追加
-          </Button>
-        )}
-        {!isRoot && (
-          <Button size="small" startIcon={<DeleteIcon />} onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-            sx={{ background: 'rgba(200,0,0,0.8)', color: 'white', fontSize: '0.7rem', minWidth: 'auto', px: 1, py: 0.5 }}>
-            削除
-          </Button>
-        )}
-      </div>
-
-      {openAddDialog && createPortal(
-        <Dialog open={openAddDialog} onClose={() => setOpenAddDialog(false)} maxWidth="xs" fullWidth>
-          <DialogTitle>子ノード追加</DialogTitle>
-          <DialogContent>
-            <FormControl fullWidth margin="dense">
-              <InputLabel>タイプ</InputLabel>
-              <Select value={newNodeType} label="タイプ" onChange={e => setNewNodeType(e.target.value)}>
-                {Object.entries(nodeDefinitions).map(([key, def]) => (
-                  <MenuItem key={key} value={key}>{def.label}</MenuItem>
-                ))}
-                <MenuItem value="custom">Custom</MenuItem>
-              </Select>
-            </FormControl>
-            {newNodeType === 'custom' ? (
-              <FormControl fullWidth margin="dense">
-                <InputLabel>カスタムノード</InputLabel>
-                <Select value={newCustomSelect} onChange={e => setNewCustomSelect(e.target.value)}>
-                  {customNodeOptions.map(cn => (
-                    <MenuItem key={cn.name} value={cn.name}>{cn.name}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            ) : (
-              <TextField label="ラベル" fullWidth margin="dense" value={newNodeLabel} onChange={e => setNewNodeLabel(e.target.value)} />
+        {/* ラベル部分：クリック無効 */}
+        <div style={{ pointerEvents: 'none' }}>
+          <Handle
+            type="target"
+            position={Position.Top}
+            style={{ background: '#fff', border: '2px solid #000', width: 14, height: 14 }}
+          />
+          <div>
+            <strong style={{ fontSize: 15 }}>{data.label || def.label}</strong>
+            {data.description && (
+              <div style={{ fontSize: 11, marginTop: 6, opacity: 0.9 }}>
+                {data.description}
+              </div>
             )}
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setOpenAddDialog(false)}>キャンセル</Button>
-            <Button onClick={handleAdd} variant="contained" disabled={newNodeType !== 'custom' ? !newNodeLabel.trim() : !newCustomSelect}>
+            {Object.keys(config).length > 0 && (
+              <div style={{ fontSize: 10, marginTop: 4, opacity: 0.8 }}>
+                {Object.entries(config).map(([k, v]) => `${k}: ${v}`).join(' | ')}
+              </div>
+            )}
+          </div>
+          <Handle
+            type="source"
+            position={Position.Bottom}
+            style={{ background: '#fff', border: '2px solid #000', width: 14, height: 14 }}
+          />
+        </div>
+
+        {/* リセットタイプ選択ドロップダウン：クリック有効 */}
+<div
+  style={{
+    position: 'absolute',
+    bottom: -25,           // 枠の下に30px飛び出す
+    left: -35,              // 左端から10px
+    zIndex: 20,
+    width: 140,            // 
+  }}
+>
+  <select
+    value={data.resetType || 'None'}
+    onChange={(e) => {
+      e.stopPropagation();
+      data.onResetTypeChange?.(id, e.target.value);
+    }}
+    onMouseDown={(e) => e.stopPropagation()}
+    style={{
+      padding: '2px 6px',
+      fontSize: '0.7rem',
+      fontWeight: 600,
+      background: getResetTypeColor(data.resetType || 'None'),
+      color: 'white',
+      border: 'none',
+      borderRadius: 6,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+      outline: 'none',
+      cursor: 'pointer',
+      appearance: 'none',
+      WebkitAppearance: 'none',
+      MozAppearance: 'none',
+    }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.background = getResetTypeColor(data.resetType || 'None', true);
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.background = getResetTypeColor(data.resetType || 'None');
+    }}
+  >
+    {resetTypeOptions.map((opt) => (
+      <option
+        key={opt.value}
+        value={opt.value}
+        style={{
+          background: opt.color,
+          color: 'white',
+        }}
+      >
+        {opt.label}
+      </option>
+    ))}
+  </select>
+
+  {/* 矢印アイコン（カスタム） */}
+  <div
+    style={{
+      position: 'absolute',
+      right: 15,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      pointerEvents: 'none',
+      fontSize: '0.6rem',
+      color: 'white',
+    }}
+  >
+    ▼
+  </div>
+</div>
+
+        {/* 追加・削除ボタン：クリック有効 */}
+        <div
+          style={{
+            position: 'absolute',
+            top: -40,
+            right: -10,
+            display: 'flex',
+            gap: 6,
+            zIndex: 10,
+            pointerEvents: 'auto',
+          }}
+        >
+          {def.children !== false && (
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenAddDialog(true);
+              }}
+              sx={{
+                background: 'rgba(0,0,0,0.7)',
+                color: 'white',
+                fontSize: '0.7rem',
+                minWidth: 'auto',
+                px: 1,
+                py: 0.5,
+                '&:hover': { background: 'rgba(0,0,0,0.9)' },
+              }}
+            >
               追加
             </Button>
-          </DialogActions>
-        </Dialog>,
-        document.body
-      )}
+          )}
+          {!isRoot && (
+            <Button
+              size="small"
+              startIcon={<DeleteIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(id);
+              }}
+              sx={{
+                background: 'rgba(200,0,0,0.8)',
+                color: 'white',
+                fontSize: '0.7rem',
+                minWidth: 'auto',
+                px: 1,
+                py: 0.5,
+                '&:hover': { background: 'rgba(220,0,0,1)' },
+              }}
+            >
+              削除
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* 子ノード追加ダイアログ */}
+      {openAddDialog &&
+        createPortal(
+          <Dialog
+            open={openAddDialog}
+            onClose={() => setOpenAddDialog(false)}
+            maxWidth="xs"
+            fullWidth
+          >
+            <DialogTitle>子ノード追加</DialogTitle>
+            <DialogContent>
+              <FormControl fullWidth margin="dense">
+                <InputLabel>タイプ</InputLabel>
+                <Select
+                  value={newNodeType}
+                  label="タイプ"
+                  onChange={(e) => setNewNodeType(e.target.value)}
+                >
+                  {Object.entries(nodeDefinitions).map(([key, def]) => (
+                    <MenuItem key={key} value={key}>
+                      {def.label}
+                    </MenuItem>
+                  ))}
+                  <MenuItem value="custom">Custom</MenuItem>
+                </Select>
+              </FormControl>
+              {newNodeType === 'custom' ? (
+                <FormControl fullWidth margin="dense">
+                  <InputLabel>カスタムノード</InputLabel>
+                  <Select
+                    value={newCustomSelect}
+                    onChange={(e) => setNewCustomSelect(e.target.value)}
+                  >
+                    {customNodeOptions.map((cn) => (
+                      <MenuItem key={cn.name} value={cn.name}>
+                        {cn.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              ) : (
+                <TextField
+                  label="ラベル"
+                  fullWidth
+                  margin="dense"
+                  value={newNodeLabel}
+                  onChange={(e) => setNewNodeLabel(e.target.value)}
+                />
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenAddDialog(false)}>キャンセル</Button>
+              <Button
+                onClick={handleAdd}
+                variant="contained"
+                disabled={
+                  newNodeType !== 'custom'
+                    ? !newNodeLabel.trim()
+                    : !newCustomSelect
+                }
+              >
+                追加
+              </Button>
+            </DialogActions>
+          </Dialog>,
+          document.body
+        )}
     </>
   );
 };
@@ -233,7 +403,8 @@ function BehaviorDetailGrid() {
         order,
         children: [],
         position: { x: 0, y: 0 },
-        config: { ...def.config }
+        config: { ...def.config },
+        resetType: 'None'  // ← ここでトップレベルに追加
       };
       prevNodes[newId] = newNode;
       prevNodes[parentId] = { ...parent, children: [...childrenArr, newId] };
@@ -382,7 +553,26 @@ function BehaviorDetailGrid() {
           onDelete: deleteNodeImmediateSafe,
           parent: node.parent,
           customNodeOptions: customNodes,
-          config: { ...node.config }
+          config: { ...node.config },
+          resetType: node.resetType || 'None',  // ← 保存された値を使う
+              onResetTypeChange: (nodeId, value) => {
+                setTreeData(prev => ({
+                  ...prev,
+                  nodes: {
+                    ...prev.nodes,
+                    [nodeId]: {
+                      ...prev.nodes[nodeId],
+                      resetType: value  // ← ここで正しく更新
+                    }
+                  }
+                }));
+                setReactFlowNodes(prev => prev.map(n =>
+                  n.id === nodeId
+                    ? { ...n, data: { ...n.data, resetType: value } }
+                    : n
+                ));
+    
+        }
         }
       });
 
@@ -432,6 +622,7 @@ function BehaviorDetailGrid() {
           if (!Array.isArray(nodes[id].children)) nodes[id].children = [];
           if (!nodes[id].order) nodes[id].order = 0;
           if (!nodes[id].config) nodes[id].config = {};
+          if (!nodes[id].resetType) nodes[id].resetType = 'None';  
         });
         if (!nodes[data.root || 'root']) {
           nodes[data.root || 'root'] = { id: data.root || 'root', type: 'sequence', label: 'Root', order: 0, children: [], config: {} };
@@ -454,6 +645,9 @@ function BehaviorDetailGrid() {
 
   const handleSave = () => {
     const data = { ...treeData, blackboard, customNodes };
+    Object.keys(data.nodes).forEach(id => {
+    if (!data.nodes[id].resetType) data.nodes[id].resetType = 'None';
+  });
     fetch(`/api/behavior-data/${name}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

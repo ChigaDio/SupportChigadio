@@ -40,20 +40,20 @@ using System;
 namespace GameCore.Behavior
 {
     public class ActionNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
 
 
-        public ActionNode(TEnum customNodeID) : base(customNodeID)
+        public ActionNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
-            
+            NodeCategory = BehaviorNodeCategory.Leaf;
+            NodeID = BehaviorNodeID.Action;   
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Leaf;
-            NodeID = BehaviorNodeID.Action;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -65,6 +65,7 @@ namespace GameCore.Behavior
         public override void OnReset(TBlackboard blackboard)
         {
         }
+        
     }
 }
         """
@@ -73,8 +74,15 @@ namespace GameCore.Behavior
 using System;
 namespace GameCore.Behavior
 {
-    public class BaseBehaviorBlackboard<T> where T : BaseBehaviorBlackboard<T>, new()
+    public class BaseBehaviorBlackboard<T, TEnum> 
+    where T : BaseBehaviorBlackboard<T,TEnum>, new()
+    where TEnum : Enum
     {
+        protected readonly FastEnumBitFlags<TFlag> Flags;
+        public BaseBehaviorBlackboard()
+        {
+            Flags = new FastEnumBitFlags<TFlag>();
+        }
         public void OnInit(Action<T> action = null)
         {
             action?.Invoke((T)this); // T にキャストして渡す
@@ -84,8 +92,20 @@ namespace GameCore.Behavior
         {
             action?.Invoke((T)this);
         }
+
+        // ================ フラグ操作（委譲） ================
+        public bool IsFlagSet(TFlag flag) => Flags.IsSet(flag);
+        public void SetFlag(TFlag flag) => Flags.Set(flag);
+        public void ClearFlag(TFlag flag) => Flags.Clear(flag);
+        public void ToggleFlag(TFlag flag) => Flags.Toggle(flag);
+        public void XORFlag(TFlag flag, bool value) => Flags.XORBit(flag, value);
+        public void ANDFlag(TFlag flag, bool value) => Flags.ANDBit(flag, value);
+        public void ORFlag(TFlag flag, bool value) => Flags.ORBit(flag, value);
+        public void ClearAllFlags() => Flags.ClearAll();
+        public void SetAllFlags() => Flags.SetAll();
     }
 }
+
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA,"BaseBehaviorBlackboard.cs"),code_str)
     code_str = """
@@ -95,7 +115,7 @@ using System.Collections.Generic;
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorNode<TBlackboard, TEnum> : OriginBehaviorNode
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public BehaviorNodeCategory NodeCategory { get; protected set; }
@@ -103,13 +123,16 @@ namespace GameCore.Behavior
         public BehaviorNodeID NodeID { get; protected set; }
         public TEnum CustomNodeID { get; protected set; }
 
+        public BehaviorResetTypeID ResetTypeID { get; protected set; }
+
         protected List<BaseBehaviorNode<TBlackboard, TEnum>> children = new();
 
         public IReadOnlyList<BaseBehaviorNode<TBlackboard, TEnum>> Children => children;
 
-        public BaseBehaviorNode(TEnum valueCustomNodeID)
+        public BaseBehaviorNode(TEnum valueCustomNodeID,BehaviorResetTypeID resetType)
         {
             CustomNodeID = valueCustomNodeID;
+            ResetTypeID = resetType;
         }
 
         public abstract void OnInit(TBlackboard blackboard);
@@ -117,6 +140,42 @@ namespace GameCore.Behavior
         public abstract BehaviorResultStatus OnTick(TBlackboard blackboard);
 
         public abstract void OnReset(TBlackboard blackboard);
+
+        public void CheckResetExecute(BaseBehaviorNode<TBlackboard, TEnum> child,TBlackboard blackboard)
+        {
+            if (child == null) return;
+            if (child.BehaviorResetTypeID == BehaviorResetTypeID.None) return;
+            
+            blackboard.XORFlag(result.CustomNodeID,true);
+            var check = blackboard.IsFlagSet(result.CustomNodeID);
+            if (check == false) return;
+            
+
+            if (child.BehaviorResetTypeID == BehaviorResetTypeID.THIS_RESET)
+            {
+                this.OnReset(blackboard);
+            }
+            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.THIS_CHILD_RESET_ALL)
+            {
+                this.OnAllReset(blackboard);
+            }
+            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            {
+                child.OnReset(blackboard);
+            }
+            else if(hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            {
+                child.OnAllReset(blackboard);
+            }
+
+            
+        }
+        public void OnAllReset(TBlackboard blackboard)
+        {
+            OnReset();
+            foreach (var child in Children)
+                child.OnAllReset();
+        }
 
         public void AddChild(BaseBehaviorNode<TBlackboard, TEnum> child)
         {
@@ -153,17 +212,18 @@ using System;
 namespace GameCore.Behavior
 {
     public class ConditionNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public ConditionNode(TEnum customNodeID) : base(customNodeID)
+        public ConditionNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
+            NodeCategory = BehaviorNodeCategory.Leaf;
+            NodeID = BehaviorNodeID.Condition;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Leaf;
-            NodeID = BehaviorNodeID.Condition;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -192,21 +252,25 @@ using System;
 namespace GameCore.Behavior
 {
     public class SequenceNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public SequenceNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public SequenceNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Composite;
             NodeID = BehaviorNodeID.Sequence;
+        }
+
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             foreach (var child in Children)
             {
+                CheckResetExecute(child,blackboard);
                 var result = child.OnTick(blackboard);
                 if (result != BehaviorResultStatus.Success)
                     return result;
@@ -216,8 +280,6 @@ namespace GameCore.Behavior
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -233,21 +295,25 @@ using System;
 namespace GameCore.Behavior
 {
     public class SelectorNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public SelectorNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public SelectorNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Composite;
             NodeID = BehaviorNodeID.Selector;
+        }
+
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             foreach (var child in Children)
             {
+                CheckResetExecute(child,blackboard);
                 var result = child.OnTick(blackboard);
                 if (result == BehaviorResultStatus.Success)
                     return BehaviorResultStatus.Success;
@@ -257,8 +323,6 @@ namespace GameCore.Behavior
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -281,27 +345,34 @@ namespace GameCore.Behavior
     }
 
     public class ParallelNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public ParallelPolicyID SuccessPolicy { get; set; } = ParallelPolicyID.ALL;
         public ParallelPolicyID FailurePolicy { get; set; } = ParallelPolicyID.ANY;
 
-        public ParallelNode(TEnum customNodeID, ParallelPolicyID valueSuccessPolicy, ParallelPolicyID valueFailurePolicy) : base(customNodeID)
+        public ParallelNode(TEnum customNodeID, ParallelPolicyID valueSuccessPolicy, ParallelPolicyID valueFailurePolicy,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             SuccessPolicy = valueSuccessPolicy;
             FailurePolicy = valueFailurePolicy;
-        }
-
-        public override void OnInit(TBlackboard blackboard)
-        {
+            
             NodeCategory = BehaviorNodeCategory.Composite;
             NodeID = BehaviorNodeID.Parallel;
         }
 
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
+        }
+
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
-            var results = Children.Select(c => c.OnTick(blackboard)).ToList();
+            var results = Children.Select(c =>
+            {
+                CheckResetExecute(c,blackboard);
+                var result = c.OnTick(blackboard);
+                return result;
+            }).ToList();
 
             bool allSuccess = results.All(r => r == BehaviorResultStatus.Success);
             bool anySuccess = results.Any(r => r == BehaviorResultStatus.Success);
@@ -318,8 +389,6 @@ namespace GameCore.Behavior
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -335,18 +404,20 @@ using System;
 namespace GameCore.Behavior
 {
     public class RaceNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         private bool _finished = false;
 
-        public RaceNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public RaceNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Composite;
             NodeID = BehaviorNodeID.Race;
-            _finished = false;
+        }
+
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -355,6 +426,7 @@ namespace GameCore.Behavior
 
             foreach (var child in Children)
             {
+                CheckResetExecute(child,blackboard);
                 var result = child.OnTick(blackboard);
                 if (result == BehaviorResultStatus.Success || result == BehaviorResultStatus.Failure)
                 {
@@ -368,8 +440,6 @@ namespace GameCore.Behavior
         public override void OnReset(TBlackboard blackboard)
         {
             _finished = false;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -385,29 +455,29 @@ using System;
 namespace GameCore.Behavior
 {
     public class RepeaterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public int Count { get; set; } = 3;
         private int _current = 0;
 
-        public RepeaterNode(TEnum customNodeID, int valueCount) : base(customNodeID)
+        public RepeaterNode(TEnum customNodeID, int valueCount,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             Count = valueCount;
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Repeater;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Repeater;
-            _current = 0;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             if (Children.Count == 0) return BehaviorResultStatus.Failure;
             if (_current >= Count) return BehaviorResultStatus.Success;
-
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             if (result == BehaviorResultStatus.Success || result == BehaviorResultStatus.Failure)
                 _current++;
@@ -418,8 +488,6 @@ namespace GameCore.Behavior
         public override void OnReset(TBlackboard blackboard)
         {
             _current = 0;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -435,24 +503,23 @@ using System;
 namespace GameCore.Behavior
 {
     public class DelayNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 1.0f;
         private float _timer = 0f;
         private bool _started = false;
 
-        public DelayNode(TEnum customNodeID, float valueSeconds) : base(customNodeID)
+        public DelayNode(TEnum customNodeID, float valueSeconds,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Delay;
             Seconds = valueSeconds;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Delay;
-            _timer = 0f;
-            _started = false;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -468,7 +535,7 @@ namespace GameCore.Behavior
             _timer += UnityEngine.Time.deltaTime;
             if (_timer < Seconds)
                 return BehaviorResultStatus.InProgress;
-
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             _started = false;
             return result;
@@ -478,8 +545,6 @@ namespace GameCore.Behavior
         {
             _timer = 0f;
             _started = false;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -495,27 +560,32 @@ using System;
 namespace GameCore.Behavior
 {
     public class FailerNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public FailerNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public FailerNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Decorator;
             NodeID = BehaviorNodeID.Failer;
         }
 
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
+        }
+
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
-            if (Children.Count > 0) Children[0].OnTick(blackboard);
+            if (Children.Count > 0)
+            {
+                CheckResetExecute(Children[0],blackboard);
+                Children[0].OnTick(blackboard);
+            }
             return BehaviorResultStatus.Failure;
         }
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -531,36 +601,36 @@ using System;
 namespace GameCore.Behavior
 {
     public class LimiterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public int Max { get; set; } = 3;
         private int _current = 0;
 
-        public LimiterNode(TEnum customNodeID, int valueMax) : base(customNodeID)
+        public LimiterNode(TEnum customNodeID, int valueMax,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             Max = valueMax;
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Limiter;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Limiter;
-            _current = 0;
+
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             if (Children.Count == 0 || _current >= Max) return BehaviorResultStatus.Failure;
             _current++;
+            CheckResetExecute(Children[0],blackboard);
             return Children[0].OnTick(blackboard);
         }
 
         public override void OnReset(TBlackboard blackboard)
         {
             _current = 0;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -576,28 +646,30 @@ using System;
 namespace GameCore.Behavior
 {
     public class RepeatUntilSuccessNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public RepeatUntilSuccessNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public RepeatUntilSuccessNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Decorator;
             NodeID = BehaviorNodeID.RepeatUntilSuccess;
         }
 
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
+        }
+
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             if (Children.Count == 0) return BehaviorResultStatus.Failure;
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             return result == BehaviorResultStatus.Success ? BehaviorResultStatus.Success : BehaviorResultStatus.InProgress;
         }
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -613,20 +685,24 @@ using System;
 namespace GameCore.Behavior
 {
     public class InverterNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public InverterNode(TEnum customNodeID) : base(customNodeID) { }
+        public InverterNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
+        {
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Inverter; 
+        }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Inverter;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
         {
             if (Children.Count == 0) return BehaviorResultStatus.Failure;
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             return result == BehaviorResultStatus.Success ? BehaviorResultStatus.Failure :
                    result == BehaviorResultStatus.Failure ? BehaviorResultStatus.Success : result;
@@ -634,8 +710,6 @@ namespace GameCore.Behavior
 
         public override void OnReset(TBlackboard blackboard)
         {
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -651,7 +725,7 @@ using System;
 namespace GameCore.Behavior
 {
     public class CooldownNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 1.0f;
@@ -659,17 +733,16 @@ namespace GameCore.Behavior
         private bool _inCooldown = false;
         private BehaviorResultStatus _lastResult = BehaviorResultStatus.Success;
 
-        public CooldownNode(TEnum customNodeID, float valueSeconds) : base(customNodeID)
+        public CooldownNode(TEnum customNodeID, float valueSeconds,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             Seconds = valueSeconds;
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Cooldown;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Cooldown;
-            _timer = 0f;
-            _inCooldown = false;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -686,7 +759,7 @@ namespace GameCore.Behavior
                 }
                 return _lastResult;
             }
-
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             if (result == BehaviorResultStatus.Success || result == BehaviorResultStatus.Failure)
             {
@@ -701,8 +774,6 @@ namespace GameCore.Behavior
         {
             _timer = 0f;
             _inCooldown = false;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
         }
     }
 }
@@ -718,24 +789,23 @@ using System;
 namespace GameCore.Behavior
 {
     public class TimeoutNode<TBlackboard, TEnum> : BaseBehaviorNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public float Seconds { get; set; } = 5.0f;
         private float _timer = 0f;
         private bool _started = false;
 
-        public TimeoutNode(TEnum customNodeID, float valueSeconds) : base(customNodeID)
+        public TimeoutNode(TEnum customNodeID, float valueSeconds,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             Seconds = valueSeconds;
+            NodeCategory = BehaviorNodeCategory.Decorator;
+            NodeID = BehaviorNodeID.Timeout;
         }
 
         public override void OnInit(TBlackboard blackboard)
         {
-            NodeCategory = BehaviorNodeCategory.Decorator;
-            NodeID = BehaviorNodeID.Timeout;
-            _timer = 0f;
-            _started = false;
+            OnReset(blackboard);
         }
 
         public override BehaviorResultStatus OnTick(TBlackboard blackboard)
@@ -749,7 +819,7 @@ namespace GameCore.Behavior
             }
 
             _timer += UnityEngine.Time.deltaTime;
-
+            CheckResetExecute(Children[0],blackboard);
             var result = Children[0].OnTick(blackboard);
             if (result != BehaviorResultStatus.InProgress)
             {
@@ -769,9 +839,7 @@ namespace GameCore.Behavior
         public override void OnReset(TBlackboard blackboard)
         {
             _timer = 0f;
-            _started = false;
-            foreach (var child in Children)
-                child.OnReset(blackboard);
+            _started = false;;
         }
     }
 }
@@ -862,22 +930,40 @@ namespace GameCore.Behavior
     # -------------------------------------------------
     code_str = """
 using System;
-
 namespace GameCore.Behavior
 {
-    public class BaseBehaviorBlackboard<T> where T : BaseBehaviorBlackboard<T>, new()
+    public class BaseBehaviorBlackboard<T, TEnum> 
+    where T : BaseBehaviorBlackboard<T,TEnum>, new()
+    where TEnum : Enum
     {
+        protected readonly FastEnumBitFlags<TFlag> Flags;
+        public BaseBehaviorBlackboard()
+        {
+            Flags = new FastEnumBitFlags<TFlag>();
+        }
         public void OnInit(Action<T> action = null)
         {
-            action?.Invoke((T)this);
+            action?.Invoke((T)this); // T にキャストして渡す
         }
 
         public void OnReset(Action<T> action = null)
         {
             action?.Invoke((T)this);
         }
+
+        // ================ フラグ操作（委譲） ================
+        public bool IsFlagSet(TFlag flag) => Flags.IsSet(flag);
+        public void SetFlag(TFlag flag) => Flags.Set(flag);
+        public void ClearFlag(TFlag flag) => Flags.Clear(flag);
+        public void ToggleFlag(TFlag flag) => Flags.Toggle(flag);
+        public void XORFlag(TFlag flag, bool value) => Flags.XORBit(flag, value);
+        public void ANDFlag(TFlag flag, bool value) => Flags.ANDBit(flag, value);
+        public void ORFlag(TFlag flag, bool value) => Flags.ORBit(flag, value);
+        public void ClearAllFlags() => Flags.ClearAll();
+        public void SetAllFlags() => Flags.SetAll();
     }
 }
+
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA, "BaseBehaviorBlackboard.cs"), code_str)
 
@@ -891,33 +977,78 @@ using System.Collections.Generic;
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorNode<TBlackboard, TEnum> : OriginBehaviorNode
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public BehaviorNodeCategory NodeCategory { get; protected set; }
+
         public BehaviorNodeID NodeID { get; protected set; }
         public TEnum CustomNodeID { get; protected set; }
 
+        public BehaviorResetTypeID ResetTypeID { get; protected set; }
+
         protected List<BaseBehaviorNode<TBlackboard, TEnum>> children = new();
+
         public IReadOnlyList<BaseBehaviorNode<TBlackboard, TEnum>> Children => children;
 
-        public BaseBehaviorNode(TEnum valueCustomNodeID)
+        public BaseBehaviorNode(TEnum valueCustomNodeID,BehaviorResetTypeID resetType)
         {
             CustomNodeID = valueCustomNodeID;
+            ResetTypeID = resetType;
         }
 
         public abstract void OnInit(TBlackboard blackboard);
+
         public abstract BehaviorResultStatus OnTick(TBlackboard blackboard);
+
         public abstract void OnReset(TBlackboard blackboard);
+
+        public void CheckResetExecute(BaseBehaviorNode<TBlackboard, TEnum> child,TBlackboard blackboard)
+        {
+            if (child == null) return;
+            if (child.BehaviorResetTypeID == BehaviorResetTypeID.None) return;
+            
+            blackboard.XORFlag(result.CustomNodeID,true);
+            var check = blackboard.IsFlagSet(result.CustomNodeID);
+            if (check == false) return;
+            
+
+            if (child.BehaviorResetTypeID == BehaviorResetTypeID.THIS_RESET)
+            {
+                this.OnReset(blackboard);
+            }
+            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.THIS_CHILD_RESET_ALL)
+            {
+                this.OnAllReset(blackboard);
+            }
+            else if (hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            {
+                child.OnReset(blackboard);
+            }
+            else if(hild.BehaviorResetTypeID == BehaviorResetTypeID.CHILD_FIRST_RESET)
+            {
+                child.OnAllReset(blackboard);
+            }
+
+            
+        }
+        public void OnAllReset(TBlackboard blackboard)
+        {
+            OnReset();
+            foreach (var child in Children)
+                child.OnAllReset();
+        }
 
         public void AddChild(BaseBehaviorNode<TBlackboard, TEnum> child)
         {
-            if (child != null) children.Add(child);
+            if (child != null)
+                children.Add(child);
         }
 
         public void AddChildren(List<BaseBehaviorNode<TBlackboard, TEnum>> valueChildren)
         {
-            if (valueChildren != null) children.AddRange(valueChildren);
+            if (valueChildren != null)
+                children.AddRange(valueChildren);
         }
 
         public void SetChildren(List<BaseBehaviorNode<TBlackboard, TEnum>> valueChildren)
@@ -931,6 +1062,7 @@ namespace GameCore.Behavior
         }
     }
 }
+
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA, "BaseBehaviorNode.cs"), code_str)
 
@@ -943,7 +1075,7 @@ using System;
 namespace GameCore.Behavior
 {
     public abstract class BaseBehaviorTree<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
         public TBlackboard Blackboard { get; private set; } = new();
@@ -969,21 +1101,42 @@ using System;
 namespace GameCore.Behavior
 {
     public class BlackboardConditionNode<TBlackboard, TEnum> : ConditionNode<TBlackboard, TEnum>
-        where TBlackboard : BaseBehaviorBlackboard<TBlackboard>, new()
+        where TBlackboard : BaseBehaviorBlackboard<TBlackboard<TEnum>>, new()
         where TEnum : struct, Enum
     {
-        public BlackboardConditionNode(TEnum customNodeID) : base(customNodeID) { }
-
-        public override void OnInit(TBlackboard blackboard)
+        public BlackboardConditionNode(TEnum customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {
             NodeCategory = BehaviorNodeCategory.Leaf;
             NodeID = BehaviorNodeID.BlackboardCondition;
+        }
+
+        public override void OnInit(TBlackboard blackboard)
+        {
+            OnReset(blackboard);
         }
     }
 }
 """
     generate_csharp(os.path.join(BEHAVIOR_DATA, "BlackboardConditionNode.cs"), code_str)
 
+
+    # -------------------------------------------------
+    # 25. BehaviorResetTypeID.cs
+    # -------------------------------------------------
+    code_str = """
+namespace GameCore.Behavior
+{
+    public enum BehaviorResetTypeID
+    {
+        None,
+        THIS_RESET,
+        THIS_CHILD_RESET_ALL,
+        CHILD_FIRST_RESET,
+        
+    }
+}
+"""
+    generate_csharp(os.path.join(BEHAVIOR_DATA, "BehaviorResetTypeID.cs"), code_str)
 
 
 
@@ -1187,13 +1340,13 @@ def generate_custom_node(data,name):
         if node['type'] == "action":
             path_add += "Action"
             class_str = f"{name}{node['name']}ActionNode"
-            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>"
             init_id = "Action"
             tick_return = "return BehaviorResultStatus.Success;"
         else:
             path_add += "Condition"
             class_str = f"{name}{node['name']}ConditionNode"
-            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>"
             init_id = "BlackboardCondition"
             tick_return = "bool result = Compare(blackboard);\n            return result ? BehaviorResultStatus.Success : BehaviorResultStatus.Failure;"
         path = os.path.join(DATA_DIR, BEHAVIOR_DATA, name, f"{name}{node['name']}")
@@ -1210,14 +1363,13 @@ namespace GameCore.Behavior
 {{
     public class {base_class}
     {{
-        public {class_str}({name}BehaviorID customNodeID) : base(customNodeID)
+        public {class_str}({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {{
-            
         }}
 
         public override void OnInit({name}BehaviorBlackboard blackboard)
         {{
-            base.OnInit(blackboard);
+            OnReset(blackboard);
         }}
 
         public override BehaviorResultStatus OnTick({name}BehaviorBlackboard blackboard)
@@ -1312,14 +1464,17 @@ using System.Collections.Generic;
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>
+    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard<{name}BehaviorID>,{name}BehaviorID>
     {{
-        public Base{name}BlackboardConditionNode({name}BehaviorID customNodeID) : base(customNodeID) {{ }}
+        public Base{name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
+        {{
+            NodeCategory = BehaviorNodeCategory.Leaf;
+            NodeID = BehaviorNodeID.BlackboardCondition;  
+        }}
 
         public override void OnInit({name}BehaviorBlackboard blackboard)
         {{
-            NodeCategory = BehaviorNodeCategory.Leaf;
-            NodeID = BehaviorNodeID.BlackboardCondition;
+            OnReset(blackboard);
         }}
 
 
@@ -1353,7 +1508,10 @@ namespace GameCore.Behavior
 {{
     public class {name}BlackboardConditionNode : Base{name}BlackboardConditionNode
     {{
-        public {name}BlackboardConditionNode({name}BehaviorID customNodeID) : base(customNodeID) {{ }}
+        public {name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
+        {{
+            
+        }}
 
         
 {code_str}
@@ -1427,7 +1585,7 @@ def generate_custom_blackboard(data,name,basic_types, unity_types, enum_list, cl
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BehaviorBlackboard<T> : BaseBehaviorBlackboard<T> where T : Base{name}BehaviorBlackboard<T>, new()
+    public class Base{name}BehaviorBlackboard<T,{name}BehaviorID> : BaseBehaviorBlackboard<T> where T : Base{name}BehaviorBlackboard<T,{name}BehaviorID>, new()
     {{
 {code_str}
     }}
@@ -1479,53 +1637,55 @@ def generate_behavior_tree(data, name):
         node_type = node.get("type", "").lower()
         label = node.get("label", node_id)
         children = node.get("children", [])
+        resetType = node.get("resetType","None")
+        resetTypeName = f"BehaviorResetTypeID.{resetType}"
         enum_id = id_map.get(node_id)
         # === ノード生成 ===
         if node_type in ["root", "sequence"]:
-            build_code.append(f"            var {var_name} = new SequenceNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new SequenceNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "selector":
-            build_code.append(f"            var {var_name} =  new SelectorNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} =  new SelectorNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "parallel":
             success_policy = node.get("config", {}).get("successPolicy", "ALL")
             failure_policy = node.get("config", {}).get("failurePolicy", "ANY")
-            build_code.append(f"            var {var_name} = new ParallelNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, ParallelPolicyID.{success_policy}, ParallelPolicyID.{failure_policy});")
+            build_code.append(f"            var {var_name} = new ParallelNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, ParallelPolicyID.{success_policy}, ParallelPolicyID.{failure_policy},{resetTypeName});")
         elif node_type == "race":
-            build_code.append(f"            var {var_name} = new RaceNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new RaceNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "repeater":
             count = node.get("config", {}).get("count", 3)
-            build_code.append(f"            var {var_name} = new RepeaterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {count});")
+            build_code.append(f"            var {var_name} = new RepeaterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {count},{resetTypeName});")
         elif node_type == "delay":
             sec = node.get("config", {}).get("seconds", 1.0)
-            build_code.append(f"            var {var_name} = new DelayNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {sec}f);")
+            build_code.append(f"            var {var_name} = new DelayNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {sec}f,{resetTypeName});")
         elif node_type == "timeout":
             sec = node.get("config", {}).get("seconds", 5.0)
-            build_code.append(f"            var {var_name} = new TimeoutNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {sec}f);")
+            build_code.append(f"            var {var_name} = new TimeoutNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {sec}f,{resetTypeName});")
         elif node_type == "inverter":
-            build_code.append(f"            var {var_name} = new InverterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new InverterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "failer":
-            build_code.append(f"            var {var_name} = new FailerNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new FailerNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "repeatuntilsuccess":
-            build_code.append(f"            var {var_name} = new RepeatUntilSuccessNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new RepeatUntilSuccessNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id},{resetTypeName});")
         elif node_type == "limiter":
             max_count = node.get("config", {}).get("max", 3)
-            build_code.append(f"            var {var_name} = new LimiterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {max_count});")
+            build_code.append(f"            var {var_name} = new LimiterNode<{name}BehaviorBlackboard, {name}BehaviorID>({name}BehaviorID.{enum_id}, {max_count},{resetTypeName});")
         elif node_type == "custom":
             if label in custom_node_map:
                 type_custom = custom_node_map[label].get("type","")
                 custom_name = custom_node_map[label].get("name","")
                 if type_custom == "action":
                     class_name = f"{name}{custom_name}ActionNode"
-                    build_code.append(f"            var {var_name} = new {class_name}({name}BehaviorID.{enum_id});")
+                    build_code.append(f"            var {var_name} = new {class_name}({name}BehaviorID.{enum_id},{resetTypeName});")
                 else:
                     class_name = f"{name}{custom_name}ConditionNode"
-                    build_code.append(f"            var {var_name} = new {class_name}({name}BehaviorID.{enum_id});")
+                    build_code.append(f"            var {var_name} = new {class_name}({name}BehaviorID.{enum_id},{resetTypeName});")
 
         elif node_type.startswith("blackboard"):
             # 2. id_map から正確な enum_id を取得
             if not enum_id:
                 build_code.append(f"        // Warning: enum_id not found for {node_id}")
                 return
-            build_code.append(f"            var {var_name} = new {name}BlackboardConditionNode({name}BehaviorID.{enum_id});")
+            build_code.append(f"            var {var_name} = new {name}BlackboardConditionNode({name}BehaviorID.{enum_id},{resetTypeName});")
         else:
             build_code.append(f"        // Unknown node type: {node_type}")
             return
