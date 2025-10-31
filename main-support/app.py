@@ -1347,8 +1347,9 @@ namespace GameCore
 if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,"FastEnumBitFlags.cs")):
         code_str = """
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
-
 namespace GameCore.Utils
 {
     public sealed class FastEnumBitFlags<TEnum> where TEnum : struct, Enum

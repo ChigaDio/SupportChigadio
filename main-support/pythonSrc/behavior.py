@@ -1349,13 +1349,13 @@ def generate_custom_node(data,name):
         if node['type'] == "action":
             path_add += "Action"
             class_str = f"{name}{node['name']}ActionNode"
-            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ActionNode : ActionNode<{name}BehaviorBlackboard,{name}BehaviorID>"
             init_id = "Action"
             tick_return = "return BehaviorResultStatus.Success;"
         else:
             path_add += "Condition"
             class_str = f"{name}{node['name']}ConditionNode"
-            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>"
+            base_class = f"{name}{node['name']}ConditionNode : ConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>"
             init_id = "BlackboardCondition"
             tick_return = "bool result = Compare(blackboard);\n            return result ? BehaviorResultStatus.Success : BehaviorResultStatus.Failure;"
         path = os.path.join(DATA_DIR, BEHAVIOR_DATA, name, f"{name}{node['name']}")
@@ -1473,7 +1473,7 @@ using System.Collections.Generic;
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>,{name}BehaviorID>
+    public class Base{name}BlackboardConditionNode : BlackboardConditionNode<{name}BehaviorBlackboard,{name}BehaviorID>>
     {{
         public Base{name}BlackboardConditionNode({name}BehaviorID customNodeID,BehaviorResetTypeID resetType) : base(customNodeID,resetType)
         {{
@@ -1594,7 +1594,8 @@ def generate_custom_blackboard(data,name,basic_types, unity_types, enum_list, cl
 
 namespace GameCore.Behavior
 {{
-    public class Base{name}BehaviorBlackboard<T,{name}BehaviorID> : BaseBehaviorBlackboard<T> where T : Base{name}BehaviorBlackboard<T,{name}BehaviorID>, new()
+    public class Base{name}BehaviorBlackboard<T>   : BaseBehaviorBlackboard<T, {name}BehaviorID>
+        where T : BaseTestNPCBehaviorBlackboard<T>, new()
     {{
 {code_str}
     }}
@@ -1609,7 +1610,7 @@ namespace GameCore.Behavior
 
 namespace GameCore.Behavior
 {{
-    public class {name}BehaviorBlackboard :  Base{name}BehaviorBlackboard<{name}BehaviorBlackboard>
+    public class {name}BehaviorBlackboard :  Base{name}BehaviorBlackboard
     {{
     }}
 }}
