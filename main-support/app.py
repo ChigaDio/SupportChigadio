@@ -952,7 +952,7 @@ namespace GameCore
             absolutePath = Path.GetFullPath(absolutePath).Replace("\\\\", "/");
             if (absolutePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
-                string rel = absolutePath.Substring(projectRoot.Length).TrimStart('/', '\\');
+                string rel = absolutePath.Substring(projectRoot.Length).TrimStart('/', '\\\\');
                 return rel;
             }
             return null;

@@ -1890,7 +1890,7 @@ def generate_gameobject_csharp():
     data = load_gameobject_data()
     # GameObjectEnums.cs
     with open(os.path.join(GAMEOBJECT_DATA, 'GameObjectEnums.cs'), 'w', encoding='utf-8') as f:
-        f.write('namespace GameCore.GameObject {\n')
+        f.write('namespace GameCore.Gameobject {\n')
         f.write('    public enum GameObjectGroup { None')
         for group in data['groups']:
             f.write(f', {group}')
@@ -1908,6 +1908,7 @@ def generate_gameobject_csharp():
     # GameObjectCore.cs
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1916,13 +1917,13 @@ using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
 using GameCore.Enums;
-namespace GameCore.GameObject
+namespace GameCore.Gameobject
 {
     public class GameObjectCore : BaseSingleton<GameObjectCore>
     {
         private GameObjectDatabase database;
-        private Dictionary<GameObjectGroup, Dictionary<GameObjectID, AddressableData<GameObject>>> loadedGameObjects =
-            new Dictionary<GameObjectGroup, Dictionary<GameObjectID, AddressableData<GameObject>>>();
+        private Dictionary<GameObjectGroup, Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>> loadedGameObjects =
+            new Dictionary<GameObjectGroup, Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>>();
         private bool isLoadDatabase = false;
         public bool IsLoadDatabase => isLoadDatabase;
         private CancellationToken destroyToken;
@@ -1962,12 +1963,12 @@ namespace GameCore.GameObject
             var gameObjects = database.GroupedGameObjectsList.FirstOrDefault(data => data.Group == group);
             if (gameObjects == null) return;
 
-            loadedGameObjects[group] = new Dictionary<GameObjectID, AddressableData<GameObject>>();
+            loadedGameObjects[group] = new Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>();
             var tasks = new List<UniTask>();
 
             foreach (var go in gameObjects.GameObjects)
             {
-                var addressable = new AddressableData<GameObject>(groupCategory, AssetCategory.GameObject,go.AddressablePath);
+                var addressable = new AddressableData<UnityEngine.GameObject>(groupCategory, AssetCategory.Prefab, go.AddressablePath);
                 tasks.Add(addressable.LoadAsync( obj =>
                 {
                     if (addressable.IsLoadedAndSetup)
@@ -1998,12 +1999,12 @@ namespace GameCore.GameObject
                 addressable.Release();
             }
             loadedGameObjects.Remove(group);
-            AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.GameObject);
+            AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Prefab);
             action?.Invoke();
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
 
-        public GameObject GetGameObject(GameObjectGroup group, GameObjectID id)
+        public UnityEngine.GameObject GetGameObject(GameObjectGroup group, GameObjectID id)
         {
             if (loadedGameObjects.TryGetValue(group, out var groupGameObjects) && groupGameObjects.TryGetValue(id, out var addressable))
             {
@@ -2025,6 +2026,7 @@ namespace GameCore.GameObject
         }
     }
 }
+
 """
         with open(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -2034,7 +2036,7 @@ namespace GameCore.GameObject
         code_str = """
 using System.Collections.Generic;
 using GameCore.Enums;
-namespace GameCore.GameObject
+namespace GameCore.Gameobject
 {
     public class GameObjectDatabase
     {
@@ -2089,7 +2091,7 @@ using System.IO;
 using UnityEngine;
 using GameCore.Enums;
 
-namespace GameCore.GameObject
+namespace GameCore.Gameobject
 {
     public class GameObjectBinaryReader
     {
@@ -2215,6 +2217,8 @@ def generate_gameobject_bin():
             for go in gameobjects:
                 go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
                 f.write(struct.pack('i', go_id))
+                id_name = go['name'].encode('utf-8')
+                f.write(struct.pack('i', id_name))
                 path_bytes = go['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
             current_offset = f.tell()
