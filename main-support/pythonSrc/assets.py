@@ -2217,8 +2217,8 @@ def generate_gameobject_bin():
             for go in gameobjects:
                 go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
                 f.write(struct.pack('i', go_id))
-                id_name = go['name'].encode('utf-8')
-                f.write(struct.pack('i', id_name))
+                id_name = go['name'].encode('utf-8') + b'\0'
+                f.write(id_name)
                 path_bytes = go['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
             current_offset = f.tell()
