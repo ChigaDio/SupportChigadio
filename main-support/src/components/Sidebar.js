@@ -21,12 +21,13 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         {name: 'Behavior' , key: 'behavior'}
       ],
     },
-            {
+    {
       name: 'Assets',
       subItems: [
         { name: 'Sound', key: 'sound' },
         { name: 'Texture', key: 'texture' },
         { name: 'GameObject', key: 'gameobject' },
+        { name: 'Animator', key: 'animator' },
       ],
     },
     {

@@ -15,6 +15,7 @@ import pythonSrc.assets as assets
 import pythonSrc.dbgServer as dbgServer
 import pythonSrc.addressableInit
 import pythonSrc.behavior
+import pythonSrc.animation
 import threading
 from pathlib import Path
 
@@ -117,6 +118,7 @@ assets.generate_base()
 
 pythonSrc.addressableInit.generate_base()
 pythonSrc.behavior.generate_base()
+pythonSrc.animation.generate_base()
 
 
 # 型マッピング（Vector2, Vector3追加）
@@ -4810,6 +4812,110 @@ def generate_behavior_code(name):
     basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
     return pythonSrc.behavior.generate_behavior_code(name,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
 
+#======================================================--
+#animator
+# ========================================
+# 1. 全データ取得（Grid表示用）
+# ========================================
+@app.route('/api/animator-data', methods=['GET'])
+def api_animator_data():
+    data = pythonSrc.animation.load_anim_data()
+    rows = []
+    id_counter = 0
+    
+    for group_name, controllers in data.get('groups', {}).items():
+        for ctrl in controllers:
+            id_counter += 1
+            rows.append({
+                'id': id_counter,
+                'name': ctrl['name'],
+                'group': group_name,
+                'desc': ctrl.get('desc', ''),
+                'path': ctrl.get('path', ''),
+                'controller': os.path.basename(ctrl.get('absolute_path', ''))
+            })
+    
+    return jsonify(rows)
+
+# ========================================
+# 2. 新規作成（Gridの「作成」ボタン）
+# ========================================
+@app.route('/api/animator-create', methods=['POST'])
+def api_animator_create():
+    try:
+        payload = request.get_json(silent=True) or {}
+        group = payload.get('group', 'Default').strip()
+        name = payload.get('name', '').strip()
+        
+        if not name:
+            return jsonify({"error": "名前は必須です"}), 400
+        if ':' in name:
+            return jsonify({"error": ": は使用できません"}), 400
+            
+        # 重複チェック
+        current_data = pythonSrc.animation.load_anim_data()
+        for controllers in current_data.get('groups', {}).values():
+            if any(c['name'] == name for c in controllers):
+                return jsonify({"error": f"{name} は既に存在します"}), 400
+        
+        # assets.py の関数をそのまま呼び出し
+        pythonSrc.animation.add_animator(group, name, f"Created via Grid")
+        
+        return jsonify({"message": f"{name} 作成＆自動生成完了！"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========================================
+# 3. 削除（Gridの削除ボタン → PATCH）
+# ========================================
+@app.route('/api/animator-data', methods=['PATCH'])
+def api_animator_delete():
+    try:
+        payload = request.get_json(silent=True) or {}
+        target_name = payload.get('name')
+        if not target_name:
+            return jsonify({"error": "name 必須"}), 400
+            
+        data = pythonSrc.animation.load_anim_data()
+        found = False
+        
+        # JSONから削除
+        for group in list(data.get('groups', {}).keys()):
+            original_len = len(data['groups'][group])
+            data['groups'][group] = [
+                c for c in data['groups'][group] if c['name'] != target_name
+            ]
+            if len(data['groups'][group]) < original_len:
+                found = True
+                
+        if not found:
+            return jsonify({"error": f"{target_name} が見つかりません"}), 404
+            
+        # JSON保存
+        with open(os.path.join(os.path.dirname(__file__), 'data', 'animator', 'assets_animator.json'), 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+            
+        # 生成済み.cs削除
+        file_path = os.path.join(pythonSrc.animation.ANIM_DATA,f"{target_name}",f"{target_name}AnimationManager.g.cs")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            
+        return jsonify({"message": f"{target_name} 削除完了"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========================================
+# 4. 全自動生成（Gridの「全Animator自動生成」ボタン）
+# ========================================
+@app.route('/api/generate-all-animator', methods=['POST'])
+def api_generate_all_animator():
+    try:
+        pythonSrc.animation.generate_all_animator_csharp()
+        return jsonify({"message": "全Animator自動生成完了！\nUnityでリフレッシュしてね"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})

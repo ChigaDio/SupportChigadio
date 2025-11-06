@@ -383,6 +383,33 @@ public class EditorCommunication : EditorWindow
 
             return JsonUtility.ToJson(new Wrapper<string> { items = spriteNames });
         }
+        else if (command == "get_animator_controller_info")
+        {
+            string filePath = data.file_path;
+            string assetPath = NormalizeAssetPath(filePath);
+
+            var controller = AssetDatabase.LoadAssetAtPath<UnityEditor.Animations.AnimatorController>(assetPath);
+            if (controller == null) return "[]";
+
+            var info = new AnimatorFullInfo
+            {
+                parameters = controller.parameters.Select(p => new ParamInfo
+                {
+                    name = p.name,
+                    type = p.type.ToString(),
+                    defaultFloat = p.defaultFloat,
+                    defaultInt = p.defaultInt,
+                    defaultBool = p.defaultBool
+                }).ToList(),
+                layers = controller.layers.Select(l => new LayerFullInfo
+                {
+                    name = l.name ?? "BaseLayer",
+                    states = GetAllStatesInLayer(l.stateMachine).ToList()
+                }).ToList()
+            };
+
+            return JsonUtility.ToJson(info);
+        }
         return null;
     }
 
@@ -399,6 +426,86 @@ public class EditorCommunication : EditorWindow
     {
         public string file_path;
     }
+    
+    private static string NormalizeAssetPath(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return "";
+
+        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
+            .Replace("\\\\", "/").TrimEnd('/');
+
+        string normalized = filePath.Replace("\\\\", "/").Trim();
+
+        if (normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized.Substring(projectRoot.Length).TrimStart('/');
+        }
+
+        if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = "Assets/" + normalized.TrimStart('/');
+        }
+
+        return normalized;
+    }
+
+    private static IEnumerable<StateFullInfo> GetAllStatesInLayer(AnimatorStateMachine sm)
+    {
+        foreach (var child in sm.stateMachines)
+            foreach (var s in GetAllStatesInLayer(child.stateMachine))
+                yield return s;
+
+        foreach (var childState in sm.states)
+        {
+            var state = childState.state;
+            var stateInfo = new StateFullInfo
+            {
+                name = state.name,
+                isBlendTree = state.motion is UnityEditor.Animations.BlendTree,
+                blendTree = state.motion is UnityEditor.Animations.BlendTree bt ? GetBlendTreeInfo(bt) : null,
+                motions = state.motion is UnityEditor.Animations.BlendTree ? null : new List<string> { state.motion ? state.motion.name : "None" }
+            };
+            yield return stateInfo;
+        }
+    }
+
+    private static BlendTreeInfo GetBlendTreeInfo(UnityEditor.Animations.BlendTree bt)
+    {
+        return new BlendTreeInfo
+        {
+            blendType = bt.blendType.ToString(),
+            blendParameter = bt.blendParameter,
+            blendParameterY = bt.blendParameterY,
+            children = bt.children.Select(c => new BlendTreeChildInfo
+            {
+                motionName = c.motion ? c.motion.name : "None",
+                threshold = c.threshold,
+                timeScale = c.timeScale,
+                directBlendParameter = c.directBlendParameter
+            }).ToList()
+        };
+    }
+
+    // シリアライズ用クラス
+    [Serializable]
+    private class AnimatorFullInfo
+    {
+        public List<ParamInfo> parameters = new List<ParamInfo>();
+        public List<LayerFullInfo> layers = new List<LayerFullInfo>();
+    }
+    [Serializable]
+    private class ParamInfo
+    {
+        public string name;
+        public string type;         // "Float", "Int", "Bool", "Trigger"
+        public float defaultFloat;
+        public int defaultInt;
+        public bool defaultBool;
+    }
+    [Serializable] private class LayerFullInfo { public string name; public List<StateFullInfo> states; }
+    [Serializable] private class StateFullInfo { public string name; public bool isBlendTree; public List<string> motions; public BlendTreeInfo blendTree; }
+    [Serializable] private class BlendTreeInfo { public string blendType; public string blendParameter; public string blendParameterY; public List<BlendTreeChildInfo> children; }
+    [Serializable] private class BlendTreeChildInfo { public string motionName; public float threshold; public float timeScale; public string directBlendParameter; }
 }
 """
         with open(os.path.join(EDITOR_DATA, "EditorCommunication.cs"), 'w', encoding='utf-8') as f:

@@ -21,6 +21,8 @@ import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 import BehaviorGrid from './components/BehaviorGrid';
 import BehaviorDetailGrid from './components/BehaviorDetailGrid';
 
+import AnimatorGrid from './components/AnimatorDataGrid'
+
 import Sound from './assets/sound';
 import Texture from './assets/texture';
 import GameObject from './assets/gameobject';
@@ -83,6 +85,9 @@ function AppContent() {
         case 'gameobject':
           navigate('gameobject');
           break;
+        case 'animator':
+          navigate('animator');
+          break;
         default:
           navigate('sound'); // Assets default
       }
@@ -128,6 +133,7 @@ function AppContent() {
           <Route path="/sound" element={<Sound />} />
           <Route path="/texture" element={<Texture />} />
           <Route path="/gameobject" element={<GameObject />} />
+          <Route path="/animator" element={<AnimatorGrid />} />
           <Route path="/log" element={<DbgLog />} />
 
         </Routes>
