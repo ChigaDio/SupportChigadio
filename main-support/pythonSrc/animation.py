@@ -446,7 +446,7 @@ namespace GameCore.GameAnimation
                             child_safe = to_valid_identifier(child_name)
                             child_full = f"{layer_safe}_{state_safe}_{child_safe}"
                             code += f"                    [State.{child_full}] = \"{child_name}\",\n"
-                code += "                }}\n"
+                code += "                }\n"
             code += "            };\n        }\n\n"
 
             # === Paramクラス ===
