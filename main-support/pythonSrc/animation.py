@@ -31,17 +31,39 @@ def generate_base():
             
     if not os.path.exists(os.path.join(ANIM_DATA,"BaseAnimationManager.cs")):
         code_str = """
-using Cysharp.Threading.Tasks;
+// ========================================
+// GameCore/Animator/AnimationManager.cs
+// ========================================
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
-namespace GameCore.GameAnimation
+namespace GameCore.GameAnimator
 {
-    public class BaseAnimationManager<TLayerEnum, TStateEnum> where TLayerEnum : Enum where TStateEnum : Enum
+    public abstract class BaseAnimationManager<TLayerEnum, TStateEnum>
+        where TLayerEnum : Enum
+        where TStateEnum : Enum
     {
-        protected static Dictionary<TLayerEnum, Dictionary<TStateEnum, string>> animationKey;
+        // ─────────────────────────────────────
+        // 内部クラス：レイヤーごとのステート管理
+        // ─────────────────────────────────────
+        public class BaseTLayer
+        {
+            protected int index = -1;
+            protected readonly Dictionary<TStateEnum, string> stateDict = new();
+
+            public int Index => index;
+            public IReadOnlyDictionary<TStateEnum, string> States => stateDict;
+
+            internal void SetIndex(int idx) => index = idx;
+        }
+
+        // ─────────────────────────────────────
+        // フィールド
+        // ─────────────────────────────────────
+        protected readonly Dictionary<TLayerEnum, BaseTLayer> animationKey = new();
         protected Animator animator;
 
         private struct PlayRecord
@@ -56,6 +78,9 @@ namespace GameCore.GameAnimation
 
         private PlayRecord? current;
 
+        // ─────────────────────────────────────
+        // SetUp
+        // ─────────────────────────────────────
         public void SetUp(GameObject gameObject)
         {
             animator = gameObject.GetComponent<Animator>();
@@ -63,49 +88,41 @@ namespace GameCore.GameAnimation
                 throw new Exception($"Animator not found on {gameObject.name}");
 
             KeySetUp();
+
+            int idx = 0;
+            foreach (var kvp in animationKey)
+                kvp.Value.SetIndex(idx++);
         }
 
-        public virtual void KeySetUp()
+        public abstract void KeySetUp();
+
+        // ─────────────────────────────────────
+        // Play
+        // ─────────────────────────────────────
+        public void PlayAnimation(TStateEnum state, float crossFade = 0.2f, Action onFinish = null, bool reverse = false)
+            => PlayAnimationAsync(state, crossFade, onFinish, reverse).Forget();
+
+        public async UniTask PlayAnimationAsync(TStateEnum state, float crossFade = 0.2f,
+            Action onFinish = null, bool reverse = false, CancellationTokenSource customCts = null)
         {
-            if (animationKey != null) return;
-
-            animationKey = new Dictionary<TLayerEnum, Dictionary<TStateEnum, string>>();
-
-            throw new NotImplementedException(
-                "継承先で partial void KeySetUp() を実装し、animationKey を初期化してください。"
-            );
-        }
-
-        public void PlayAnimation(TStateEnum animationID, float crossFade = 0.2f, Action onFinish = null, bool reverse = false)
-            => PlayAnimationAsync(animationID, crossFade, onFinish, reverse).Forget();
-
-        public async UniTask PlayAnimationAsync(TStateEnum animationID, float crossFade = 0.2f, Action onFinish = null, bool reverse = false, CancellationTokenSource customCts = null)
-        {
-            if (!TryGetLayerAndClip(animationID, out TLayerEnum layer, out string clipName, out int layerIndex))
+            if (!TryGetLayerAndClip(state, out TLayerEnum layer, out string clipName, out int layerIndex))
             {
-                Debug.LogError($"[BaseAnimationManager] AnimationID not registered: {animationID}");
+                Debug.LogError($"[BaseAnimationManager] AnimationID not registered: {state}");
                 onFinish?.Invoke();
                 return;
             }
 
-
             current?.Cts?.Cancel();
             current?.Cts?.Dispose();
-            CancellationTokenSource cts = null;
 
-            if (customCts != null)
-            {
-                cts = CancellationTokenSource.CreateLinkedTokenSource(customCts.Token, animator.gameObject.GetCancellationTokenOnDestroy());
-            }
-            else
-            {
-                cts =   CancellationTokenSource.CreateLinkedTokenSource(animator.gameObject.GetCancellationTokenOnDestroy());
-            }
+            var cts = customCts != null
+                ? CancellationTokenSource.CreateLinkedTokenSource(customCts.Token, animator.gameObject.GetCancellationTokenOnDestroy())
+                : CancellationTokenSource.CreateLinkedTokenSource(animator.gameObject.GetCancellationTokenOnDestroy());
 
             current = new PlayRecord
             {
                 Layer = layer,
-                State = animationID,
+                State = state,
                 Reverse = reverse,
                 StartNormalizedTime = reverse ? 1f : 0f,
                 Cts = cts,
@@ -133,7 +150,6 @@ namespace GameCore.GameAnimation
 
                     float norm = info.normalizedTime % 1f;
                     if (reverse) norm = 1f - norm;
-
                     if ((reverse && norm <= 0f) || (!reverse && norm >= 1f)) break;
 
                     await UniTask.Yield(PlayerLoopTiming.Update, ct);
@@ -148,27 +164,27 @@ namespace GameCore.GameAnimation
             }
         }
 
-        public TStateEnum IsAnimation(TLayerEnum layerID)
+        // ─────────────────────────────────────
+        // 状態取得
+        // ─────────────────────────────────────
+        public TStateEnum GetCurrentState(TLayerEnum layer)
         {
-            int layerIndex = animator.GetLayerIndex(layerID.ToString());
-            if (layerIndex < 0) return default;
+            if (!animationKey.TryGetValue(layer, out var layerData)) return default;
+            if (layerData.Index < 0) return default;
 
-            var info = animator.GetCurrentAnimatorStateInfo(layerIndex);
-            if (!animationKey.TryGetValue(layerID, out var dict)) return default;
-
-            foreach (var kvp in dict)
+            var info = animator.GetCurrentAnimatorStateInfo(layerData.Index);
+            foreach (var kvp in layerData.States)
                 if (Animator.StringToHash(kvp.Value) == info.shortNameHash)
                     return kvp.Key;
-
             return default;
         }
 
-        public bool IsPlaying(TLayerEnum layerID)
+        public bool IsPlaying(TLayerEnum layer)
         {
-            int layerIndex = animator.GetLayerIndex(layerID.ToString());
-            if (layerIndex < 0) return false;
+            if (!animationKey.TryGetValue(layer, out var layerData)) return false;
+            if (layerData.Index < 0) return false;
 
-            var info = animator.GetCurrentAnimatorStateInfo(layerIndex);
+            var info = animator.GetCurrentAnimatorStateInfo(layerData.Index);
             float norm = info.normalizedTime % 1f;
             if (current?.Reverse == true) norm = 1f - norm;
             return norm < 1f;
@@ -180,19 +196,24 @@ namespace GameCore.GameAnimation
             animator.speed = 1f;
         }
 
+        // ─────────────────────────────────────
+        // 内部検索
+        // ─────────────────────────────────────
         private bool TryGetLayerAndClip(TStateEnum state, out TLayerEnum layer, out string clipName, out int layerIndex)
         {
             layer = default; clipName = null; layerIndex = -1;
+
             foreach (var kvp in animationKey)
-                if (kvp.Value.TryGetValue(state, out clipName))
+            {
+                if (kvp.Value.States.TryGetValue(state, out clipName))
                 {
                     layer = kvp.Key;
-                    layerIndex = animator.GetLayerIndex(layer.ToString());
-                    return layerIndex >= 0;
+                    layerIndex = kvp.Value.Index;
+                    return true;
                 }
+            }
             return false;
         }
-
     }
 }
 
@@ -373,15 +394,15 @@ def generate_all_animator_csharp():
             ctrl_name = ctrl['name']
             class_name = f"{ctrl_name}AnimationManager"
             
-            # レイヤーとステートのマッピング用辞書（表示名 → 識別子）
             layer_map = {}
-            state_map = {}  # "Layer_State" → 識別子
+            state_map = {}
             
             code = f"""// <auto-generated by Python - Full Generic + Param Support>
 using System;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using GameCore.GameAnimator;
 
 namespace GameCore.GameAnimation
 {{
@@ -408,48 +429,54 @@ namespace GameCore.GameAnimation
                     state_orig = state['name']
                     state_safe = to_valid_identifier(state_orig)
                     full_safe = f"{layer_safe}_{state_safe}"
-                    state_map[f"{layer_orig}_{state_orig}"] = full_safe
                     code += f"            {full_safe},\n"
                     
-                    # BlendTreeの子ステート
                     if state.get('isBlendTree') and state.get('blendTree'):
                         for child in state['blendTree']['children']:
                             child_name = child['motionName']
-                            if child_name == "None":
-                                continue
+                            if child_name == "None": continue
                             child_safe = to_valid_identifier(child_name)
                             child_full = f"{layer_safe}_{state_safe}_{child_safe}"
-                            state_map[f"{layer_orig}_{state_orig}_{child_name}"] = child_full
                             code += f"            {child_full},\n"
             code += "        }\n\n"
 
-            # === KeySetUp ===
+            # === KeySetUp + layer['index'] で SetIndex ===
             code += "        public override void KeySetUp()\n        {\n"
-            code += "             if (animationKey != null) return;\n"
-            code += "            animationKey = new()\n            {\n"
+            code += "            if (animationKey != null) return;\n"
+            code += "            animationKey = new();\n\n"
+            
             for layer in ctrl['layers']:
                 layer_orig = layer['name'] if layer['name'] else "Base Layer"
                 layer_safe = layer_map[layer_orig]
-                code += f"                [Layer.{layer_safe}] = new()\n                {{\n"
+                layer_index = layer.get('index', 0)  # ← ここで明示的に取得（デフォルト0）
+                
+                code += f"            animationKey[Layer.{layer_safe}] = new BaseTLayer\n"
+                code += "            {\n"
+                code += "                stateDict = new()\n"
+                code += "                {\n"
+                
                 for state in layer['states']:
                     state_orig = state['name']
                     state_safe = to_valid_identifier(state_orig)
                     clip_name = state['motions'][0] if state['motions'] and state['motions'][0] != "None" else state_orig
                     full_safe = f"{layer_safe}_{state_safe}"
-                    code += f"                    [State.{full_safe}] = \"{clip_name}\",\n"
+                    code += f"                    [State.{full_safe}] = \"{state_safe}\",\n"
                     
                     if state.get('isBlendTree') and state.get('blendTree'):
                         for child in state['blendTree']['children']:
                             child_name = child['motionName']
-                            if child_name == "None":
-                                continue
+                            if child_name == "None": continue
                             child_safe = to_valid_identifier(child_name)
                             child_full = f"{layer_safe}_{state_safe}_{child_safe}"
-                            code += f"                    [State.{child_full}] = \"{child_name}\",\n"
+                            code += f"                    [State.{child_full}] = \"{state_safe}\",\n"
+                
                 code += "                }\n"
-            code += "            };\n        }\n\n"
+                code += "            };\n"
+                code += f"            animationKey[Layer.{layer_safe}].SetIndex({layer_index});\n\n"  # ← layer['index'] を使用
+            
+            code += "        }\n\n"
 
-            # === Paramクラス ===
+            # === Paramクラス（名前衝突完全回避）===
             float_params = [p['name'] for p in ctrl['parameters'] if p['type'] == "Float"]
             int_params   = [p['name'] for p in ctrl['parameters'] if p['type'] == "Int"]
             bool_params  = [p['name'] for p in ctrl['parameters'] if p['type'] == "Bool"]
@@ -458,21 +485,20 @@ namespace GameCore.GameAnimation
             code += "        public sealed class Param\n        {\n"
             if float_params:
                 safe_floats = [to_valid_identifier(p) for p in float_params]
-
-                code += "            public enum FloatParams { " + ", ".join(safe_floats) + " }\n"
+                code += f"            public enum FloatParams {{ {', '.join(safe_floats)} }}\n"
                 code += "            public readonly FloatParam<FloatParams> Float = new();\n"
             if int_params:
                 safe_ints = [to_valid_identifier(p) for p in int_params]
                 code += f"            public enum IntParams {{ {', '.join(safe_ints)} }}\n"
-                code += "             public readonly IntParam<IntParams> Int = new();\n"
+                code += "            public readonly IntParam<IntParams> Int = new();\n"
             if bool_params:
                 safe_bools = [to_valid_identifier(p) for p in bool_params]
-                code += f"            public enum BoolIntParams {{ {', '.join(safe_bools)} }}\n"
-                code += "             public readonly BoolParam<BoolIntParams> Bool = new();\n"
+                code += f"            public enum BoolParams {{ {', '.join(safe_bools)} }}\n"
+                code += "            public readonly BoolParam<BoolParams> Bool = new();\n"
             if trigger_params:
                 safe_triggers = [to_valid_identifier(p) for p in trigger_params]
-                code += f"            public enum TriggerIntParams {{ {', '.join(safe_triggers)} }}\n"
-                code += "             public readonly TriggerParam<TriggerIntParams> Trigger = new();\n"
+                code += f"            public enum TriggerParams {{ {', '.join(safe_triggers)} }}\n"
+                code += "            public readonly TriggerParam<TriggerParams> Trigger = new();\n"
 
             code += "\n            public void Init(Animator anim)\n            {\n"
             if float_params:   code += "                Float.SetAnimator(anim);\n"
@@ -486,28 +512,30 @@ namespace GameCore.GameAnimation
             code += "            base.SetUp(go);\n"
             code += "            param.Init(animator);\n"
             code += "        }\n\n"
+            code += f"        public {class_name}(GameObject go) : base()\n        {{\n"
+            code += "            base.SetUp(go);\n"
+            code += "            param.Init(animator);\n"
+            code += "        }\n\n"
 
-            # === BlendTree専用Playメソッド ===
+            # === BlendTree専用Play ===
             code += "        // === BlendTree子ステート専用Play ===\n"
             for layer in ctrl['layers']:
                 layer_orig = layer['name'] if layer['name'] else "Base Layer"
                 layer_safe = layer_map[layer_orig]
                 for state in layer['states']:
-                    if not (state.get('isBlendTree') and state.get('blendTree')):
-                        continue
+                    if not (state.get('isBlendTree') and state.get('blendTree')): continue
                     state_safe = to_valid_identifier(state['name'])
                     param_name = to_valid_identifier(state['blendTree']['blendParameter'])
                     for child in state['blendTree']['children']:
                         child_name = child['motionName']
-                        if child_name == "None":
-                            continue
+                        if child_name == "None": continue
                         child_safe = to_valid_identifier(child_name)
                         method_name = f"Play_{layer_safe}_{state_safe}_{child_safe}"
                         threshold = child['threshold']
                         state_full = f"{layer_safe}_{state_safe}_{child_safe}"
                         code += f"        public UniTask {method_name}(float crossFade = 0.2f, Action onFinish = null)\n"
                         code += f"        {{\n"
-                        code += f"            Param.Float.Set(Param.Float.{param_name}, {threshold}f);\n"
+                        code += f"            Param.Float.Set(Param.FloatParams.{param_name}, {threshold}f);\n"
                         code += f"            return PlayAnimation(State.{state_full}, crossFade, onFinish);\n"
                         code += f"        }}\n\n"
 
@@ -520,4 +548,4 @@ namespace GameCore.GameAnimation
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(code)
 
-    print("全Animator自動生成完了！（完全修正版・コンパイルエラーゼロ）")
+    print("全Animator自動生成完了！（layer['index'] 完全対応・SetIndex明示割り当て）")

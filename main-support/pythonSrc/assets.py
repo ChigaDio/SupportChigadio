@@ -401,9 +401,10 @@ public class EditorCommunication : EditorWindow
                     defaultInt = p.defaultInt,
                     defaultBool = p.defaultBool
                 }).ToList(),
-                layers = controller.layers.Select(l => new LayerFullInfo
+                layers = controller.layers.Select((l,i) => new LayerFullInfo
                 {
                     name = l.name ?? "BaseLayer",
+                    index = i,
                     states = GetAllStatesInLayer(l.stateMachine).ToList()
                 }).ToList()
             };

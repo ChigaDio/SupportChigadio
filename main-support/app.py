@@ -4893,7 +4893,7 @@ def api_animator_delete():
             return jsonify({"error": f"{target_name} が見つかりません"}), 404
             
         # JSON保存
-        with open(os.path.join(os.path.dirname(__file__), 'data', 'animator', 'assets_animator.json'), 'w', encoding='utf-8') as f:
+        with open(pythonSrc.animation.ANIM_JSON, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
             
         # 生成済み.cs削除
