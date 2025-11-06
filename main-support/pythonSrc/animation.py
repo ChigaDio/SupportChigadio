@@ -382,7 +382,6 @@ using System;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using GameCore.Animator;
 
 namespace GameCore.GameAnimation
 {{
@@ -425,7 +424,7 @@ namespace GameCore.GameAnimation
             code += "        }\n\n"
 
             # === KeySetUp ===
-            code += "        partial void KeySetUp()\n        {\n"
+            code += "        public override void KeySetUp()\n        {\n"
             code += "             if (animationKey != null) return;\n"
             code += "            animationKey = new()\n            {\n"
             for layer in ctrl['layers']:
@@ -447,7 +446,7 @@ namespace GameCore.GameAnimation
                             child_safe = to_valid_identifier(child_name)
                             child_full = f"{layer_safe}_{state_safe}_{child_safe}"
                             code += f"                    [State.{child_full}] = \"{child_name}\",\n"
-                code += "                }},\n"
+                code += "                }}\n"
             code += "            };\n        }\n\n"
 
             # === Paramクラス ===
@@ -459,20 +458,21 @@ namespace GameCore.GameAnimation
             code += "        public sealed class Param\n        {\n"
             if float_params:
                 safe_floats = [to_valid_identifier(p) for p in float_params]
-                code += f"            public enum Float {{ {', '.join(safe_floats)} }}\n"
-                code += "            public readonly FloatParam<Float> Float = new();\n"
+
+                code += "            public enum FloatParams { " + ", ".join(safe_floats) + " }\n"
+                code += "            public readonly FloatParam<FloatParams> Float = new();\n"
             if int_params:
                 safe_ints = [to_valid_identifier(p) for p in int_params]
-                code += f"            public enum Int {{ {', '.join(safe_ints)} }}\n"
-                code += "            public readonly IntParam<Int> Int = new();\n"
+                code += f"            public enum IntParams {{ {', '.join(safe_ints)} }}\n"
+                code += "             public readonly IntParam<IntParams> Int = new();\n"
             if bool_params:
                 safe_bools = [to_valid_identifier(p) for p in bool_params]
-                code += f"            public enum Bool {{ {', '.join(safe_bools)} }}\n"
-                code += "            public readonly BoolParam<Bool> Bool = new();\n"
+                code += f"            public enum BoolIntParams {{ {', '.join(safe_bools)} }}\n"
+                code += "             public readonly BoolParam<BoolIntParams> Bool = new();\n"
             if trigger_params:
                 safe_triggers = [to_valid_identifier(p) for p in trigger_params]
-                code += f"            public enum Trigger {{ {', '.join(safe_triggers)} }}\n"
-                code += "            public readonly TriggerParam<Trigger> Trigger = new();\n"
+                code += f"            public enum TriggerIntParams {{ {', '.join(safe_triggers)} }}\n"
+                code += "             public readonly TriggerParam<TriggerIntParams> Trigger = new();\n"
 
             code += "\n            public void Init(Animator anim)\n            {\n"
             if float_params:   code += "                Float.SetAnimator(anim);\n"
@@ -481,10 +481,10 @@ namespace GameCore.GameAnimation
             if trigger_params: code += "                Trigger.SetAnimator(anim);\n"
             code += "            }\n        }\n\n"
 
-            code += "        public readonly Param Param = new();\n\n"
+            code += "        public readonly Param param = new();\n\n"
             code += "        public new void SetUp(GameObject go)\n        {\n"
             code += "            base.SetUp(go);\n"
-            code += "            Param.Init(animator);\n"
+            code += "            param.Init(animator);\n"
             code += "        }\n\n"
 
             # === BlendTree専用Playメソッド ===
