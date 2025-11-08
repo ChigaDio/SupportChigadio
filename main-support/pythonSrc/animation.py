@@ -61,9 +61,10 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {
-    public abstract class BaseAnimatorManager<TLayerEnum, TStateEnum> : OriginAnimatorManager
+    public abstract class BaseAnimatorManager<TLayerEnum, TStateEnum,TParam> : OriginAnimatorManager
         where TLayerEnum : Enum
         where TStateEnum : Enum 
+        where TParam : class,new()
     {
         // ─────────────────────────────────────
         // 内部クラス：レイヤーごとのステート管理
@@ -84,7 +85,7 @@ namespace GameCore.GameAnimator
         // ─────────────────────────────────────
         protected static Dictionary<TLayerEnum, BaseTLayer> animationKey = new();
         protected Animator animator;
-
+        public readonly TParam param = new();
         private struct PlayRecord
         {
             public TLayerEnum Layer;
@@ -264,12 +265,6 @@ namespace GameCore.GameAnimator
 }
 
 
-        
-
-
-        
-
-
         """
         with open(os.path.join(ANIM_DATA,"BaseAnimatorManager.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
@@ -347,10 +342,11 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {
-    public class BaseAnimatorHub<TAnimatorManager, TLayerEnum, TStateEnum> : OriginAnimatorHub
-        where TAnimatorManager : BaseAnimatorManager<TLayerEnum, TStateEnum>, new()
+    public class BaseAnimatorHub<TAnimatorManager, TLayerEnum, TStateEnum,TParam> : OriginAnimatorHub
+        where TAnimatorManager : BaseAnimatorManager<TLayerEnum, TStateEnum,TParam>, new()
         where TLayerEnum : struct, Enum
         where TStateEnum : struct, Enum
+        where TParam : class,new()
     {
         protected Animator animator;
         protected TAnimatorManager animationManager;
@@ -372,6 +368,11 @@ namespace GameCore.GameAnimator
             animationManager?.Stop();
         }
 
+        public TParam Param()
+        {
+            return animationManager.param;
+        }
+
         public void PlayAnimation(TStateEnum state, float crossFade = 0.2f, Action onFinish = null, bool reverse = false)
          => animationManager.PlayAnimation(state, crossFade, onFinish, reverse);
 
@@ -388,6 +389,8 @@ namespace GameCore.GameAnimator
 
 
 }
+
+        
 
         """
         with open(os.path.join(ANIM_DATA,"BaseAnimatorHub.cs"),"w",encoding="utf-8") as f:
@@ -581,7 +584,7 @@ using GameCore.GameAnimator;
 
 namespace GameCore.GameAnimator
 {{
-    public class {class_name} : BaseAnimatorManager<{class_name}.Layer, {class_name}.State>
+    public class {class_name} : BaseAnimatorManager<{class_name}.Layer, {class_name}.State,{class_name}.Param>
     {{
         public enum Layer
         {{
@@ -773,7 +776,7 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {{
-    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}AnimatorManager.Layer,{name}AnimatorManager.State>
+    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}AnimatorManager.Layer,{name}AnimatorManager.Stat, {name}AnimatorManager.Param>
     {{
 {method_str}
         public void Awake()
