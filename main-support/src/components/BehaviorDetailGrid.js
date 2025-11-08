@@ -800,7 +800,7 @@ function BehaviorDetailGrid() {
         <DialogContent>
           <TextField label="変数名" fullWidth margin="dense" value={newVarName} onChange={e => setNewVarName(e.target.value)} />
           <Autocomplete
-            options={['int', 'float', 'bool', 'string', 'Vector3']}
+            options={['void','int', 'float', 'bool', 'string', 'Vector3']}
             value={newVarType}
             onChange={(e, v) => v && setNewVarType(v)}
             renderInput={p => <TextField {...p} label="型" margin="dense" />}

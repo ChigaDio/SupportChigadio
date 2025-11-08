@@ -581,7 +581,7 @@ using GameCore.GameAnimator;
 
 namespace GameCore.GameAnimator
 {{
-    public public class {class_name} : BaseAnimatorManager<{class_name}.Layer, {class_name}.State>
+    public class {class_name} : BaseAnimatorManager<{class_name}.Layer, {class_name}.State>
     {{
         public enum Layer
         {{
@@ -749,12 +749,19 @@ def _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list,
             
         s_cap = event['name'].capitalize()
         s_lower = lower_first(event['name'])
-        method_str += f"        //{event['description']}\n"        
-        method_str += f"        private Action<{type_str},{name}AnimatorManager> {s_lower};\n"
-        method_str += f"        private void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
-        method_str += f"        private void Remove{s_cap}(Action<{type_str},{name}AnimatorManager> remove) => {s_lower} -= add;\n"    
-        method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
-        method_str += f"        public On{s_cap}({type_str} parameter) => {s_lower}?.Invoke(parameter,animationManager);\n\n"
+        method_str += f"        //{event['description']}\n"
+        if type_str == "void" or type_str == "Void":
+            method_str += f"        private Action<{name}AnimatorManager> {s_lower};\n"
+            method_str += f"        private void Add{s_cap}(Action<{name}AnimatorManager> add) => {s_lower} += add;\n"
+            method_str += f"        private void Remove{s_cap}(Action<{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
+            method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
+            method_str += f"        public On{s_cap}() => {s_lower}?.Invoke(animationManager);\n\n"
+        else:
+            method_str += f"        private Action<{type_str},{name}AnimatorManager> {s_lower};\n"
+            method_str += f"        private void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
+            method_str += f"        private void Remove{s_cap}(Action<{type_str},{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
+            method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
+            method_str += f"        public On{s_cap}({type_str} parameter) => {s_lower}?.Invoke(parameter,animationManager);\n\n"
         release_str += f"            {s_lower} = null;\n"
         
     code_str = f"""
@@ -766,7 +773,7 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {{
-    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}.Layer,{name}.State>
+    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}AnimatorManager.Layer,{name}AnimatorManager.State>
     {{
 {method_str}
         public void Awake()
