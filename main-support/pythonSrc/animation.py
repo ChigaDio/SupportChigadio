@@ -49,7 +49,6 @@ namespace GameCore.GameAnimator
         code_str = """
 
 
-
 // ========================================
 // GameCore/Animator/AnimatorManager.cs
 // ========================================
@@ -58,6 +57,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using static GameCore.GameAnimator.HoloListenerAnimatorManager;
 
 namespace GameCore.GameAnimator
 {
@@ -83,7 +83,7 @@ namespace GameCore.GameAnimator
         // ─────────────────────────────────────
         // フィールド
         // ─────────────────────────────────────
-        protected static Dictionary<TLayerEnum, BaseTLayer> animationKey = new();
+        protected static Dictionary<TLayerEnum, BaseTLayer> animationKey;
         protected Animator animator;
         public readonly TParam param = new();
         private struct PlayRecord
@@ -265,6 +265,8 @@ namespace GameCore.GameAnimator
 }
 
 
+        
+
         """
         with open(os.path.join(ANIM_DATA,"BaseAnimatorManager.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
@@ -390,6 +392,7 @@ namespace GameCore.GameAnimator
 
 }
 
+        
         
 
         """
@@ -620,7 +623,7 @@ namespace GameCore.GameAnimator
 
     # === KeySetUp ===
     code += "        public override void KeySetUp()\n        {\n"
-    code += "            if (animationKey != null) return;\n"
+    code += "            if (animationKey != null){param.Init(animator); return;}\n"
     code += "            animationKey = new();\n\n"
     
     for layer in ctrl['layers']:
@@ -650,6 +653,7 @@ namespace GameCore.GameAnimator
         code += "                }\n"
         code += "            };\n"
         code += f"            animationKey[Layer.{layer_safe}].SetIndex({layer_index});\n\n"
+        code += f"            param.Init(animator);\n\n"
     
     code += "        }\n\n"
 
@@ -687,11 +691,9 @@ namespace GameCore.GameAnimator
     code += "        public readonly Param param = new();\n\n"
     code += "        public new void SetUp(GameObject go)\n        {\n"
     code += "            base.SetUp(go);\n"
-    code += "            param.Init(animator);\n"
     code += "        }\n\n"
     code += f"        public {class_name}(GameObject go) : base()\n        {{\n"
     code += "            base.SetUp(go);\n"
-    code += "            param.Init(animator);\n"
     code += "        }\n\n"
     code += f"        public {class_name}() : base()\n        {{\n"
     code += "        }\n\n"
