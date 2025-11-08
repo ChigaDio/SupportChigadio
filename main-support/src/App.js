@@ -22,6 +22,7 @@ import BehaviorGrid from './components/BehaviorGrid';
 import BehaviorDetailGrid from './components/BehaviorDetailGrid';
 
 import AnimatorGrid from './components/AnimatorDataGrid'
+import AnimatorDataDetailGrid from './components/AnimatorDataDetailGrid';
 
 import Sound from './assets/sound';
 import Texture from './assets/texture';
@@ -134,6 +135,7 @@ function AppContent() {
           <Route path="/texture" element={<Texture />} />
           <Route path="/gameobject" element={<GameObject />} />
           <Route path="/animator" element={<AnimatorGrid />} />
+          <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
           <Route path="/log" element={<DbgLog />} />
 
         </Routes>

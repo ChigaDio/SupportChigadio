@@ -51,7 +51,7 @@ function AnimatorDataGrid() {
     { field: 'name', headerName: '名前', width: 200,
       renderCell: (params) => (
         <div style={{ cursor: 'pointer', color: '#1976d2' }}
-             onClick={() => navigate(`/animator-data/${encodeURIComponent(params.value)}`)}>
+             onClick={() => navigate(`/animator/${encodeURIComponent(params.value)}`)}>
           {params.value}
         </div>
       )

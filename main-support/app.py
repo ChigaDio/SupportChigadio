@@ -4819,22 +4819,30 @@ def generate_behavior_code(name):
 # ========================================
 @app.route('/api/animator-data', methods=['GET'])
 def api_animator_data():
-    data = pythonSrc.animation.load_anim_data()
+    registered = pythonSrc.animation.load_index()               # ["Player", "Enemy", ...]
     rows = []
     id_counter = 0
-    
-    for group_name, controllers in data.get('groups', {}).items():
-        for ctrl in controllers:
-            id_counter += 1
-            rows.append({
-                'id': id_counter,
-                'name': ctrl['name'],
-                'group': group_name,
-                'desc': ctrl.get('desc', ''),
-                'path': ctrl.get('path', ''),
-                'controller': os.path.basename(ctrl.get('absolute_path', ''))
-            })
-    
+
+    for name in registered:
+        try:
+            meta = pythonSrc.animation.load_individual(name)
+            group = meta.get("group", "Default")
+            desc  = meta.get("desc", "")
+            path  = meta.get("absolute_path", "")
+            ctrl  = os.path.basename(path) if path else ""
+        except Exception:
+            group = desc = path = ctrl = ""
+
+        id_counter += 1
+        rows.append({
+            "id": id_counter,
+            "name": name,
+            "group": group,
+            "desc": desc,
+            "path": path,
+            "controller": ctrl
+        })
+
     return jsonify(rows)
 
 # ========================================
@@ -4845,24 +4853,20 @@ def api_animator_create():
     try:
         payload = request.get_json(silent=True) or {}
         group = payload.get('group', 'Default').strip()
-        name = payload.get('name', '').strip()
-        
+        name  = payload.get('name', '').strip()
+
         if not name:
             return jsonify({"error": "名前は必須です"}), 400
         if ':' in name:
             return jsonify({"error": ": は使用できません"}), 400
-            
-        # 重複チェック
-        current_data = pythonSrc.animation.load_anim_data()
-        for controllers in current_data.get('groups', {}).values():
-            if any(c['name'] == name for c in controllers):
-                return jsonify({"error": f"{name} は既に存在します"}), 400
-        
-        # assets.py の関数をそのまま呼び出し
-        pythonSrc.animation.add_animator(group, name, f"Created via Grid")
-        
+
+        # 重複チェック（indexにあればNG）
+        if name in pythonSrc.animation.load_index():
+            return jsonify({"error": f"{name} は既に存在します"}), 400
+
+        # assets.py の関数呼び出し（内部で個別保存＋index登録）
+        pythonSrc.animation.add_animator(group, name, "Created via Grid")
         return jsonify({"message": f"{name} 作成＆自動生成完了！"})
-        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4876,33 +4880,28 @@ def api_animator_delete():
         target_name = payload.get('name')
         if not target_name:
             return jsonify({"error": "name 必須"}), 400
-            
-        data = pythonSrc.animation.load_anim_data()
-        found = False
-        
-        # JSONから削除
-        for group in list(data.get('groups', {}).keys()):
-            original_len = len(data['groups'][group])
-            data['groups'][group] = [
-                c for c in data['groups'][group] if c['name'] != target_name
-            ]
-            if len(data['groups'][group]) < original_len:
-                found = True
-                
-        if not found:
+
+        index = pythonSrc.animation.load_index()
+        if target_name not in index:
             return jsonify({"error": f"{target_name} が見つかりません"}), 404
-            
-        # JSON保存
-        with open(pythonSrc.animation.ANIM_JSON, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-            
-        # 生成済み.cs削除
-        file_path = os.path.join(pythonSrc.animation.ANIM_DATA,f"{target_name}",f"{target_name}AnimationManager.g.cs")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            
+
+        # 1. 個別フォルダごと削除
+        individual_dir = os.path.dirname(pythonSrc.animation.get_individual_path(target_name))
+        if os.path.exists(individual_dir):
+            import shutil
+            shutil.rmtree(individual_dir)
+
+        # 2. 生成済み.cs削除（従来通り）
+        cs_path = os.path.join(pythonSrc.animation.ANIM_DATA, f"{target_name}", 
+                               f"{target_name}AnimationManager.g.cs")
+        if os.path.exists(cs_path):
+            os.remove(cs_path)
+
+        # 3. indexから除去
+        index.remove(target_name)
+        pythonSrc.animation.save_index(index)
+
         return jsonify({"message": f"{target_name} 削除完了"})
-        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4912,8 +4911,39 @@ def api_animator_delete():
 @app.route('/api/generate-all-animator', methods=['POST'])
 def api_generate_all_animator():
     try:
-        pythonSrc.animation.generate_all_animator_csharp()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+        pythonSrc.animation.generate_all_animator_csharp(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
         return jsonify({"message": "全Animator自動生成完了！\nUnityでリフレッシュしてね"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    # /api/animator-data/{name} (GET) - 個別取得
+@app.route('/api/animator-data/<name>', methods=['GET'])
+def api_get_animator_detail(name):
+    try:
+        data = pythonSrc.animation.load_individual(name)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+
+# /api/animator-data/{name} (POST) - 保存
+@app.route('/api/animator-data/<name>', methods=['POST'])
+def api_save_animator_detail(name):
+    try:
+        payload = request.get_json()
+        pythonSrc.animation.save_individual(name, payload)
+        return jsonify({"message": f"{name} 保存完了"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# /api/generate-animator/{name} (POST) - 個別生成
+@app.route('/api/generate-animator/<name>', methods=['POST'])
+def api_generate_single_animator(name):
+    try:
+        ctrl = pythonSrc.animation.load_individual(name)
+        basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+        pythonSrc.animation.generate_single_animator_csharp(ctrl,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)  # ← 新規関数
+        return jsonify({"message": f"{name}AnimationManager.g.cs 生成完了！"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

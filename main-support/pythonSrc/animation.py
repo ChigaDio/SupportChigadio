@@ -29,10 +29,29 @@ def generate_base():
         with open(ANIM_JSON,"w",encoding="utf-8") as f:
             json.dump({}, f,ensure_ascii=False, indent=4)
             
-    if not os.path.exists(os.path.join(ANIM_DATA,"BaseAnimationManager.cs")):
+    if not os.path.exists(os.path.join(ANIM_DATA,"OriginAnimatorManager.cs")):
         code_str = """
+using UnityEngine;
+
+namespace GameCore.GameAnimator
+{
+    public class OriginAnimatorManager
+    {
+
+    }
+}
+
+        """
+        with open(os.path.join(ANIM_DATA,"OriginAnimatorManager.cs"),"w",encoding="utf-8") as f:
+            f.write(code_str)
+            
+    if not os.path.exists(os.path.join(ANIM_DATA,"BaseAnimatorManager.cs")):
+        code_str = """
+
+
+
 // ========================================
-// GameCore/Animator/AnimationManager.cs
+// GameCore/Animator/AnimatorManager.cs
 // ========================================
 using System;
 using System.Collections.Generic;
@@ -42,9 +61,9 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {
-    public abstract class BaseAnimationManager<TLayerEnum, TStateEnum>
+    public abstract class BaseAnimatorManager<TLayerEnum, TStateEnum> : OriginAnimatorManager
         where TLayerEnum : Enum
-        where TStateEnum : Enum
+        where TStateEnum : Enum 
     {
         // ─────────────────────────────────────
         // 内部クラス：レイヤーごとのステート管理
@@ -52,7 +71,7 @@ namespace GameCore.GameAnimator
         public class BaseTLayer
         {
             protected int index = -1;
-            protected readonly Dictionary<TStateEnum, string> stateDict = new();
+            public Dictionary<TStateEnum, string> stateDict = new();
 
             public int Index => index;
             public IReadOnlyDictionary<TStateEnum, string> States => stateDict;
@@ -63,7 +82,7 @@ namespace GameCore.GameAnimator
         // ─────────────────────────────────────
         // フィールド
         // ─────────────────────────────────────
-        protected readonly Dictionary<TLayerEnum, BaseTLayer> animationKey = new();
+        protected static Dictionary<TLayerEnum, BaseTLayer> animationKey = new();
         protected Animator animator;
 
         private struct PlayRecord
@@ -77,16 +96,42 @@ namespace GameCore.GameAnimator
         }
 
         private PlayRecord? current;
-
+        public void CancelUnitasl()
+        {
+            current?.Cts?.Cancel();
+            current?.Cts.Dispose();
+        }
         // ─────────────────────────────────────
         // SetUp
         // ─────────────────────────────────────
         public void SetUp(GameObject gameObject)
         {
+            if (animator != null)
+            {
+                return;
+            }
             animator = gameObject.GetComponent<Animator>();
+            if (animator == null)
+            {
+                animator = gameObject.GetComponentInChildren<Animator>();
+            }
             if (animator == null)
                 throw new Exception($"Animator not found on {gameObject.name}");
 
+            KeySetUp();
+
+            int idx = 0;
+            foreach (var kvp in animationKey)
+                kvp.Value.SetIndex(idx++);
+        }
+
+        public void SetUp(Animator value)
+        {
+            if (animator != null)
+            {
+                return;
+            }
+            animator = value;
             KeySetUp();
 
             int idx = 0;
@@ -107,7 +152,7 @@ namespace GameCore.GameAnimator
         {
             if (!TryGetLayerAndClip(state, out TLayerEnum layer, out string clipName, out int layerIndex))
             {
-                Debug.LogError($"[BaseAnimationManager] AnimationID not registered: {state}");
+                Debug.LogError($"[BaseAnimatorManager] AnimationID not registered: {state}");
                 onFinish?.Invoke();
                 return;
             }
@@ -193,6 +238,7 @@ namespace GameCore.GameAnimator
         public void Stop()
         {
             current?.Cts?.Cancel();
+            current?.Cts?.Dispose();
             animator.speed = 1f;
         }
 
@@ -218,8 +264,14 @@ namespace GameCore.GameAnimator
 }
 
 
+        
+
+
+        
+
+
         """
-        with open(os.path.join(ANIM_DATA,"BaseAnimationManager.cs"),"w",encoding="utf-8") as f:
+        with open(os.path.join(ANIM_DATA,"BaseAnimatorManager.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
             
     
@@ -227,7 +279,7 @@ namespace GameCore.GameAnimator
         code_str = """
 using System;
 using UnityEngine;
-namespace GameCore.GameAnimation
+namespace GameCore.GameAnimator
 {
     public abstract class AnimationParam<TType, TParamEnum>
         where TType : struct
@@ -269,13 +321,113 @@ namespace GameCore.GameAnimation
         with open(os.path.join(ANIM_DATA,"AnimationParam.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
             
-def load_anim_json():
+    if not os.path.exists(os.path.join(ANIM_DATA,"OriginAnimatorHub.cs")):
+        code_str = """
+using UnityEngine;
+namespace GameCore.GameAnimator
+{
+    public class OriginAnimatorHub : MonoBehaviour
+    {
+        public virtual void SetUp() { }
+
+        public virtual void ReleaseHub() { }
+    }
+}
+
+        """
+        with open(os.path.join(ANIM_DATA,"OriginAnimatorHub.cs"),"w",encoding="utf-8") as f:
+            f.write(code_str)
+            
+    if not os.path.exists(os.path.join(ANIM_DATA,"BaseAnimatorHub.cs")):
+        code_str = """
+using Cysharp.Threading.Tasks;
+using System;
+using System.Threading;
+using UnityEngine;
+
+namespace GameCore.GameAnimator
+{
+    public class BaseAnimatorHub<TAnimatorManager, TLayerEnum, TStateEnum> : OriginAnimatorHub
+        where TAnimatorManager : BaseAnimatorManager<TLayerEnum, TStateEnum>, new()
+        where TLayerEnum : struct, Enum
+        where TStateEnum : struct, Enum
+    {
+        protected Animator animator;
+        protected TAnimatorManager animationManager;
+
+        public override void SetUp()
+        {
+            animator = GetComponent<Animator>();
+            if (animator.Equals(null))
+            {
+                animator = GetComponentInChildren<Animator>();
+            }
+
+            animationManager = new TAnimatorManager();
+            animationManager.SetUp(animator);
+        }
+
+        public override void ReleaseHub()
+        {
+            animationManager?.Stop();
+        }
+
+        public void PlayAnimation(TStateEnum state, float crossFade = 0.2f, Action onFinish = null, bool reverse = false)
+         => animationManager.PlayAnimation(state, crossFade, onFinish, reverse);
+
+        public async UniTask PlayAnimationAsync(TStateEnum state, float crossFade = 0.2f,
+            Action onFinish = null, bool reverse = false, CancellationTokenSource customCts = null)
+            => await animationManager.PlayAnimationAsync(state, crossFade, onFinish, reverse);
+
+        public TStateEnum GetCurrentState(TLayerEnum layer) => animationManager.GetCurrentState(layer);
+
+        public bool IsPlaying(TLayerEnum layer) => animationManager.IsPlaying(layer);
+
+        public void Stop() => animationManager.Stop();
+    }
+
+
+}
+
+        """
+        with open(os.path.join(ANIM_DATA,"BaseAnimatorHub.cs"),"w",encoding="utf-8") as f:
+            f.write(code_str)
+        
+# -------------------------------------------------
+# インデックス（登録名だけのリスト）管理
+# -------------------------------------------------
+def load_index() -> list[str]:
     if not os.path.exists(ANIM_JSON):
-        return {}
-    
-    data = {}
-    with open(ANIM_JSON,"r",encoding="utf-8") as f:
+        return []
+    with open(ANIM_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        return data.get("registered", []) if isinstance(data, dict) else data
+
+def save_index(names: list[str]):
+    os.makedirs(ANIM_DATA, exist_ok=True)
+    with open(ANIM_JSON, "w", encoding="utf-8") as f:
+        json.dump({"registered": sorted(names)}, f, ensure_ascii=False, indent=4)
+# -------------------------------------------------
+# 個別JSONの保存・読み込み
+# -------------------------------------------------
+def get_individual_path(name: str) -> str:
+    """ ANIM_DATA/{name}/{name}.json """
+    safe_name = to_valid_identifier(name)  # ファイルシステム的に安全にする
+    dir_path  = os.path.join(ANIM_DATA, safe_name)
+    return os.path.join(dir_path, f"{safe_name}.json")
+
+def load_individual(name: str) -> dict:
+    path = get_individual_path(name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{name} の個別JSONが見つかりません")
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+def save_individual(name: str, data: dict):
+    path = get_individual_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
     
 def connect_to_unity():
     """
@@ -327,13 +479,7 @@ def get_animator_controller_info(file_path):
 # 新規追加（Gridから呼び出し）
 # ========================================
 def add_animator(group_name, name, desc=""):
-    data = load_anim_json()
-    
-    if data.get("groups") == None:
-        data["groups"] = {}
-    if group_name not in data.get('groups',[]):
-        data['groups'][group_name] = []
-
+    # ---- 1. Unityからコントローラー選択＆情報取得（従来と同じ） ----
     project_path = get_unity_project_path()
     file_path = select_file(project_path, [("Animator Controller", "*.controller")])
     if not file_path:
@@ -343,33 +489,31 @@ def add_animator(group_name, name, desc=""):
     if not info:
         raise Exception("AnimatorController解析失敗")
 
-
+    # ---- 2. 個別JSONに保存するデータ ----
     entry = {
-        'name': name,
-        'desc': desc,
-        'absolute_path': os.path.abspath(file_path),
-        'parameters': info['parameters'],
-        'layers': info['layers']
+        "name": name,
+        "group": group_name,
+        "desc": desc,
+        "absolute_path": os.path.abspath(file_path),
+        "parameters": info['parameters'],
+        "layers": info['layers'],
+        "events" : []
     }
-    data['groups'][group_name].append(entry)
-    save_anim_data(data)
+    save_individual(name, entry)
 
-    # 自動生成実行
+    # ---- 3. インデックスに登録 ----
+    index = load_index()
+    if name not in index:
+        index.append(name)
+        save_index(index)
+
+    # ---- 4. 自動生成（全件走査に変更になるので後述）----
     generate_all_animator_csharp()
     print(f"[{name}] 追加＆自動生成完了！")
     
-def load_anim_data():
-    if os.path.exists(ANIM_JSON):
-        with open(ANIM_JSON, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {'groups': {}}
 
-def save_anim_data(data):
-    with open(ANIM_JSON, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-        
 # ========================================
-# Pythonだけで全自動生成（BaseAnimationManager + Param継承クラス対応）
+# Pythonだけで全自動生成（BaseAnimatorManager + Param継承クラス対応）
 # ========================================
 def to_valid_identifier(name: str) -> str:
     """C#で有効な識別子に変換（スペース・ドット・ハイフンなどを除去）"""
@@ -386,166 +530,263 @@ def to_valid_identifier(name: str) -> str:
         s += '_'
     return s
 
-def generate_all_animator_csharp():
-    data = load_anim_data()
+# ========================================
+# 1. 個別生成（DetailGrid用）
+# ========================================
+def generate_single_animator_csharp(ctrl,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data):
+    """DetailGridの「このAnimatorだけC#生成」用"""
+    _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
+    return _generate_animator_csharp_core(ctrl)
+
+# ========================================
+# 2. 全件生成（Gridの「全Animator自動生成」用） ← 完全に共通化！
+# ========================================
+def generate_all_animator_csharp(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data):
+    registered = load_index()
+    if not registered:
+        print("登録Animatorなし")
+        return
+
+    generated = []
+    for name in registered:
+        try:
+            ctrl = load_individual(name)
+            _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data)
+            path = _generate_animator_csharp_core(ctrl)
+            generated.append(path)
+        except Exception as e:
+            print(f"[{name}] 生成失敗: {e}")
+
+    print(f"全Animator自動生成完了！（{len(generated)}件）")
+    print("Unityでリフレッシュしてね")
     
-    for group, controllers in data['groups'].items():
-        for ctrl in controllers:
-            ctrl_name = ctrl['name']
-            class_name = f"{ctrl_name}AnimationManager"
-            
-            layer_map = {}
-            state_map = {}
-            
-            code = f"""// <auto-generated by Python - Full Generic + Param Support>
+# ========================================
+# 共通：1件分のC#生成ロジック（all / single 両方で使用）
+# ========================================
+def _generate_animator_csharp_core(ctrl):
+    """
+    内部関数：実際にコード生成してファイル書き出し
+    ctrl = load_individual(name) の戻り値
+    """
+    name = ctrl['name']
+    class_name = f"{name}AnimatorManager"
+    layer_map = {}
+
+    code = f"""// <auto-generated by Python - Full Generic + Param Support>
 using System;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using GameCore.GameAnimator;
 
-namespace GameCore.GameAnimation
+namespace GameCore.GameAnimator
 {{
-    public partial class {class_name} : BaseAnimationManager<{class_name}.Layer, {class_name}.State>
+    public public class {class_name} : BaseAnimatorManager<{class_name}.Layer, {class_name}.State>
     {{
         public enum Layer
         {{
 """
 
-            # === Layer enum ===
-            for layer in ctrl['layers']:
-                orig_name = layer['name'] if layer['name'] else "Base Layer"
-                safe_name = to_valid_identifier(orig_name)
-                layer_map[orig_name] = safe_name
-                code += f"            {safe_name},\n"
-            code += "        }\n\n"
+    # === Layer enum ===
+    for layer in ctrl['layers']:
+        orig_name = layer['name'] if layer['name'] else "Base Layer"
+        safe_name = to_valid_identifier(orig_name)
+        layer_map[orig_name] = safe_name
+        code += f"            {safe_name},\n"
+    code += "        }\n\n"
 
-            # === State enum ===
-            code += "        public enum State\n        {\n"
-            for layer in ctrl['layers']:
-                layer_orig = layer['name'] if layer['name'] else "Base Layer"
-                layer_safe = layer_map[layer_orig]
-                for state in layer['states']:
-                    state_orig = state['name']
-                    state_safe = to_valid_identifier(state_orig)
-                    full_safe = f"{layer_safe}_{state_safe}"
-                    code += f"            {full_safe},\n"
-                    
-                    if state.get('isBlendTree') and state.get('blendTree'):
-                        for child in state['blendTree']['children']:
-                            child_name = child['motionName']
-                            if child_name == "None": continue
-                            child_safe = to_valid_identifier(child_name)
-                            child_full = f"{layer_safe}_{state_safe}_{child_safe}"
-                            code += f"            {child_full},\n"
-            code += "        }\n\n"
-
-            # === KeySetUp + layer['index'] で SetIndex ===
-            code += "        public override void KeySetUp()\n        {\n"
-            code += "            if (animationKey != null) return;\n"
-            code += "            animationKey = new();\n\n"
+    # === State enum ===
+    code += "        public enum State\n        {\n"
+    for layer in ctrl['layers']:
+        layer_orig = layer['name'] if layer['name'] else "Base Layer"
+        layer_safe = layer_map[layer_orig]
+        for state in layer['states']:
+            state_orig = state['name']
+            state_safe = to_valid_identifier(state_orig)
+            full_safe = f"{layer_safe}_{state_safe}"
+            code += f"            {full_safe},\n"
             
-            for layer in ctrl['layers']:
-                layer_orig = layer['name'] if layer['name'] else "Base Layer"
-                layer_safe = layer_map[layer_orig]
-                layer_index = layer.get('index', 0)  # ← ここで明示的に取得（デフォルト0）
-                
-                code += f"            animationKey[Layer.{layer_safe}] = new BaseTLayer\n"
-                code += "            {\n"
-                code += "                stateDict = new()\n"
-                code += "                {\n"
-                
-                for state in layer['states']:
-                    state_orig = state['name']
-                    state_safe = to_valid_identifier(state_orig)
-                    clip_name = state['motions'][0] if state['motions'] and state['motions'][0] != "None" else state_orig
-                    full_safe = f"{layer_safe}_{state_safe}"
-                    code += f"                    [State.{full_safe}] = \"{state_safe}\",\n"
-                    
-                    if state.get('isBlendTree') and state.get('blendTree'):
-                        for child in state['blendTree']['children']:
-                            child_name = child['motionName']
-                            if child_name == "None": continue
-                            child_safe = to_valid_identifier(child_name)
-                            child_full = f"{layer_safe}_{state_safe}_{child_safe}"
-                            code += f"                    [State.{child_full}] = \"{state_safe}\",\n"
-                
-                code += "                }\n"
-                code += "            };\n"
-                code += f"            animationKey[Layer.{layer_safe}].SetIndex({layer_index});\n\n"  # ← layer['index'] を使用
+            if state.get('isBlendTree') and state.get('blendTree'):
+                for child in state['blendTree']['children']:
+                    child_name = child['motionName']
+                    if child_name == "None": continue
+                    child_safe = to_valid_identifier(child_name)
+                    child_full = f"{layer_safe}_{state_safe}_{child_safe}"
+                    code += f"            {child_full},\n"
+    code += "        }\n\n"
+
+    # === KeySetUp ===
+    code += "        public override void KeySetUp()\n        {\n"
+    code += "            if (animationKey != null) return;\n"
+    code += "            animationKey = new();\n\n"
+    
+    for layer in ctrl['layers']:
+        layer_orig = layer['name'] if layer['name'] else "Base Layer"
+        layer_safe = layer_map[layer_orig]
+        layer_index = layer.get('index', 0)
+        
+        code += f"            animationKey[Layer.{layer_safe}] = new BaseTLayer\n"
+        code += "            {\n"
+        code += "                stateDict = new()\n"
+        code += "                {\n"
+        
+        for state in layer['states']:
+            state_orig = state['name']
+            state_safe = to_valid_identifier(state_orig)
+            full_safe = f"{layer_safe}_{state_safe}"
+            code += f"                    [State.{full_safe}] = \"{state_safe}\",\n"
             
-            code += "        }\n\n"
+            if state.get('isBlendTree') and state.get('blendTree'):
+                for child in state['blendTree']['children']:
+                    child_name = child['motionName']
+                    if child_name == "None": continue
+                    child_safe = to_valid_identifier(child_name)
+                    child_full = f"{layer_safe}_{state_safe}_{child_safe}"
+                    code += f"                    [State.{child_full}] = \"{state_safe}\",\n"
+        
+        code += "                }\n"
+        code += "            };\n"
+        code += f"            animationKey[Layer.{layer_safe}].SetIndex({layer_index});\n\n"
+    
+    code += "        }\n\n"
 
-            # === Paramクラス（名前衝突完全回避）===
-            float_params = [p['name'] for p in ctrl['parameters'] if p['type'] == "Float"]
-            int_params   = [p['name'] for p in ctrl['parameters'] if p['type'] == "Int"]
-            bool_params  = [p['name'] for p in ctrl['parameters'] if p['type'] == "Bool"]
-            trigger_params = [p['name'] for p in ctrl['parameters'] if p['type'] == "Trigger"]
+    # === Paramクラス ===
+    float_params = [p['name'] for p in ctrl['parameters'] if p['type'] == "Float"]
+    int_params   = [p['name'] for p in ctrl['parameters'] if p['type'] == "Int"]
+    bool_params  = [p['name'] for p in ctrl['parameters'] if p['type'] == "Bool"]
+    trigger_params = [p['name'] for p in ctrl['parameters'] if p['type'] == "Trigger"]
 
-            code += "        public sealed class Param\n        {\n"
-            if float_params:
-                safe_floats = [to_valid_identifier(p) for p in float_params]
-                code += f"            public enum FloatParams {{ {', '.join(safe_floats)} }}\n"
-                code += "            public readonly FloatParam<FloatParams> Float = new();\n"
-            if int_params:
-                safe_ints = [to_valid_identifier(p) for p in int_params]
-                code += f"            public enum IntParams {{ {', '.join(safe_ints)} }}\n"
-                code += "            public readonly IntParam<IntParams> Int = new();\n"
-            if bool_params:
-                safe_bools = [to_valid_identifier(p) for p in bool_params]
-                code += f"            public enum BoolParams {{ {', '.join(safe_bools)} }}\n"
-                code += "            public readonly BoolParam<BoolParams> Bool = new();\n"
-            if trigger_params:
-                safe_triggers = [to_valid_identifier(p) for p in trigger_params]
-                code += f"            public enum TriggerParams {{ {', '.join(safe_triggers)} }}\n"
-                code += "            public readonly TriggerParam<TriggerParams> Trigger = new();\n"
+    code += "        public sealed class Param\n        {\n"
+    if float_params:
+        safe_floats = [to_valid_identifier(p) for p in float_params]
+        code += f"            public enum FloatParams {{ {', '.join(safe_floats)} }}\n"
+        code += "            public readonly FloatParam<FloatParams> Float = new();\n"
+    if int_params:
+        safe_ints = [to_valid_identifier(p) for p in int_params]
+        code += f"            public enum IntParams {{ {', '.join(safe_ints)} }}\n"
+        code += "            public readonly IntParam<IntParams> Int = new();\n"
+    if bool_params:
+        safe_bools = [to_valid_identifier(p) for p in bool_params]
+        code += f"            public enum BoolParams {{ {', '.join(safe_bools)} }}\n"
+        code += "            public readonly BoolParam<BoolParams> Bool = new();\n"
+    if trigger_params:
+        safe_triggers = [to_valid_identifier(p) for p in trigger_params]
+        code += f"            public enum TriggerParams {{ {', '.join(safe_triggers)} }}\n"
+        code += "            public readonly TriggerParam<TriggerParams> Trigger = new();\n"
 
-            code += "\n            public void Init(Animator anim)\n            {\n"
-            if float_params:   code += "                Float.SetAnimator(anim);\n"
-            if int_params:     code += "                Int.SetAnimator(anim);\n"
-            if bool_params:    code += "                Bool.SetAnimator(anim);\n"
-            if trigger_params: code += "                Trigger.SetAnimator(anim);\n"
-            code += "            }\n        }\n\n"
+    code += "\n            public void Init(Animator anim)\n            {\n"
+    if float_params:   code += "                Float.SetAnimator(anim);\n"
+    if int_params:     code += "                Int.SetAnimator(anim);\n"
+    if bool_params:    code += "                Bool.SetAnimator(anim);\n"
+    if trigger_params: code += "                Trigger.SetAnimator(anim);\n"
+    code += "            }\n        }\n\n"
 
-            code += "        public readonly Param param = new();\n\n"
-            code += "        public new void SetUp(GameObject go)\n        {\n"
-            code += "            base.SetUp(go);\n"
-            code += "            param.Init(animator);\n"
-            code += "        }\n\n"
-            code += f"        public {class_name}(GameObject go) : base()\n        {{\n"
-            code += "            base.SetUp(go);\n"
-            code += "            param.Init(animator);\n"
-            code += "        }\n\n"
+    code += "        public readonly Param param = new();\n\n"
+    code += "        public new void SetUp(GameObject go)\n        {\n"
+    code += "            base.SetUp(go);\n"
+    code += "            param.Init(animator);\n"
+    code += "        }\n\n"
+    code += f"        public {class_name}(GameObject go) : base()\n        {{\n"
+    code += "            base.SetUp(go);\n"
+    code += "            param.Init(animator);\n"
+    code += "        }\n\n"
+    code += f"        public {class_name}() : base()\n        {{\n"
+    code += "        }\n\n"
 
-            # === BlendTree専用Play ===
-            code += "        // === BlendTree子ステート専用Play ===\n"
-            for layer in ctrl['layers']:
-                layer_orig = layer['name'] if layer['name'] else "Base Layer"
-                layer_safe = layer_map[layer_orig]
-                for state in layer['states']:
-                    if not (state.get('isBlendTree') and state.get('blendTree')): continue
-                    state_safe = to_valid_identifier(state['name'])
-                    param_name = to_valid_identifier(state['blendTree']['blendParameter'])
-                    for child in state['blendTree']['children']:
-                        child_name = child['motionName']
-                        if child_name == "None": continue
-                        child_safe = to_valid_identifier(child_name)
-                        method_name = f"Play_{layer_safe}_{state_safe}_{child_safe}"
-                        threshold = child['threshold']
-                        state_full = f"{layer_safe}_{state_safe}_{child_safe}"
-                        code += f"        public UniTask {method_name}(float crossFade = 0.2f, Action onFinish = null)\n"
-                        code += f"        {{\n"
-                        code += f"            Param.Float.Set(Param.FloatParams.{param_name}, {threshold}f);\n"
-                        code += f"            return PlayAnimation(State.{state_full}, crossFade, onFinish);\n"
-                        code += f"        }}\n\n"
+    # === BlendTree専用Play ===
+    code += "        // === BlendTree子ステート専用Play ===\n"
+    for layer in ctrl['layers']:
+        layer_orig = layer['name'] if layer['name'] else "Base Layer"
+        layer_safe = layer_map[layer_orig]
+        for state in layer['states']:
+            if not (state.get('isBlendTree') and state.get('blendTree')): 
+                continue
+            state_safe = to_valid_identifier(state['name'])
+            param_name = to_valid_identifier(state['blendTree']['blendParameter'])
+            for child in state['blendTree']['children']:
+                child_name = child['motionName']
+                if child_name == "None": continue
+                child_safe = to_valid_identifier(child_name)
+                method_name = f"Play_{layer_safe}_{state_safe}_{child_safe}"
+                threshold = child['threshold']
+                state_full = f"{layer_safe}_{state_safe}_{child_safe}"
+                code += f"        public UniTask {method_name}(float crossFade = 0.2f, Action onFinish = null)\n"
+                code += f"        {{\n"
+                code += f"            Param.Float.Set(Param.FloatParams.{param_name}, {threshold}f);\n"
+                code += f"            return PlayAnimation(State.{state_full}, crossFade, onFinish);\n"
+                code += f"        }}\n\n"
 
-            code += "    }\n}\n// </auto-generated>\n"
+    code += "    }\n}\n// </auto-generated>\n"
 
-            # 保存
-            dir_path = os.path.join(ANIM_DATA, class_name)
-            os.makedirs(dir_path, exist_ok=True)
-            file_path = os.path.join(dir_path, f"{class_name}.g.cs")
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(code)
+    # === ファイル保存 ===
+    dir_path = os.path.join(ANIM_DATA, f"{name}")
+    os.makedirs(dir_path, exist_ok=True)
+    file_path = os.path.join(dir_path, f"{class_name}.cs")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(code)
 
-    print("全Animator自動生成完了！（layer['index'] 完全対応・SetIndex明示割り当て）")
+    print(f"Generated: {file_path}")
+    return file_path
+
+def _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data):
+    
+    name = ctrl['name']
+    events = ctrl.get("events",[])
+    
+    method_str = ""
+    release_str = ""
+    for event in events:
+
+        type_str = event['type']
+        if type_str in enum_list:
+            type_str = f"GameCore.Enums.{type_str}ID"
+
+        elif type_str in class_list:
+            type_str = f"GameCore.Classes.{type_str}"
+
+        elif type_str in class_data_id_list:
+            type_str = f"GameCore.Tables.ID.{type_str}TableID"
+            
+        s_cap = event['name'].capitalize()
+        s_lower = lower_first(event['name'])
+        method_str += f"        //{event['description']}\n"        
+        method_str += f"        private Action<{type_str},{name}AnimatorManager> {s_lower};\n"
+        method_str += f"        private void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
+        method_str += f"        private void Remove{s_cap}(Action<{type_str},{name}AnimatorManager> remove) => {s_lower} -= add;\n"    
+        method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
+        method_str += f"        public On{s_cap}({type_str} parameter) => {s_lower}?.Invoke(parameter,animationManager);\n\n"
+        release_str += f"            {s_lower} = null;\n"
+        
+    code_str = f"""
+using System;
+using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+
+
+namespace GameCore.GameAnimator
+{{
+    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}.Layer,{name}.State>
+    {{
+{method_str}
+        public void Awake()
+        {{
+            SetUp();
+        }}
+        
+        public void OnDestroy()
+        {{
+            ReleaseHub();
+{release_str}
+        }}
+    }}
+}}
+"""
+    dir_path = os.path.join(ANIM_DATA, f"{name}")
+    os.makedirs(dir_path, exist_ok=True)
+    file_path = os.path.join(dir_path, f"{name}AnimatorHub.cs")
+    with open(file_path,"w",encoding="utf-8") as f:
+        f.write(code_str)
+        
+def lower_first(s):
+    return s[0].lower() + s[1:] if s else s
