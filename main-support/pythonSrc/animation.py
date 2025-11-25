@@ -623,7 +623,7 @@ namespace GameCore.GameAnimator
 
     # === KeySetUp ===
     code += "        public override void KeySetUp()\n        {\n"
-    code += "            if (animationKey != null){param.Init(animator); return;}\n"
+    code += "            if (animationKey != null){ param.Init(animator); return;}\n"
     code += "            animationKey = new();\n\n"
     
     for layer in ctrl['layers']:
@@ -757,15 +757,15 @@ def _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list,
         method_str += f"        //{event['description']}\n"
         if type_str == "void" or type_str == "Void":
             method_str += f"        private Action<{name}AnimatorManager> {s_lower};\n"
-            method_str += f"        private void Add{s_cap}(Action<{name}AnimatorManager> add) => {s_lower} += add;\n"
-            method_str += f"        private void Remove{s_cap}(Action<{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
-            method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
+            method_str += f"        public void Add{s_cap}(Action<{name}AnimatorManager> add) => {s_lower} += add;\n"
+            method_str += f"        public void Remove{s_cap}(Action<{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
+            method_str += f"        public void Clear{s_cap}() => {s_lower} = null;\n"
             method_str += f"        public On{s_cap}() => {s_lower}?.Invoke(animationManager);\n\n"
         else:
             method_str += f"        private Action<{type_str},{name}AnimatorManager> {s_lower};\n"
-            method_str += f"        private void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
-            method_str += f"        private void Remove{s_cap}(Action<{type_str},{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
-            method_str += f"        private void Clear{s_cap}() => {s_lower} = null;\n"
+            method_str += f"        public void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
+            method_str += f"        public void Remove{s_cap}(Action<{type_str},{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
+            method_str += f"        public void Clear{s_cap}() => {s_lower} = null;\n"
             method_str += f"        public On{s_cap}({type_str} parameter) => {s_lower}?.Invoke(parameter,animationManager);\n\n"
         release_str += f"            {s_lower} = null;\n"
         

@@ -699,43 +699,50 @@ def generate_sound_csharp():
         code_str = """
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
 using GameCore.SaveSystem;
 using GameCore.Enums;
+using System.Linq;
+using System.Threading;
+
 namespace GameCore.Sound
 {
     public class SoundCore : BaseSingleton<SoundCore>
     {
+        // =============================================================
+        // 爆速キャッシュ（LINQ完全排除、Dictionary 1段）
+        // =============================================================
+        private readonly Dictionary<(SoundGroup group, SoundID id), AudioClip> clipCache = new();
+        private readonly Dictionary<(SoundGroup group, SoundID id), float> volumeCache = new();
+        private readonly Dictionary<(SoundGroup group, SoundID id), SoundType> typeCache = new();
+        private readonly HashSet<(SoundGroup group, SoundID id)> loadingKeys = new();
+
+        // Addressable本体はUnload用にグループ単位で保持
+        private readonly Dictionary<SoundGroup, List<AddressableData<AudioClip>>> groupAddressables = new();
+
         private SoundDatabase database;
-        private Dictionary<SoundGroup, Dictionary<SoundID, AddressableData<AudioClip>>> loadedClips =
-            new Dictionary<SoundGroup, Dictionary<SoundID, AddressableData<AudioClip>>>();
+
+        // =============================================================
+        // AudioSource管理（プールは循環インデックスで最速）
+        // =============================================================
         private AudioSource bgmSource;
         private AudioSource crossFadeTempSource;
-        private List<AudioSource> sePool = new List<AudioSource>();
+        private readonly List<AudioSource> sePool = new();
         private const int PoolSize = 30;
-        private bool isLoadDatabase = false;
-        public bool IsLoadDatabase => isLoadDatabase;
+        private int poolIndex = 0;
 
+        private bool isCrossFading = false;
+
+        // =============================================================
+        // キャンセルトークン（シーン遷移時の完全停止＆ゾンビタスク防止）
+        // =============================================================
         private CancellationToken destroyToken;
+        private CancellationTokenSource manualCancelSource = new();
+        private CancellationToken combinedToken;
 
-        public void SetSystemBGMVolume()
-        {
-            if (bgmSource == null) return;
-            if (!bgmSource.isPlaying) return;
-            bgmSource.volume = SaveManagerCore.instance.SystemSettings.bgmVolume;
-        }
-
-        public void SetSystemSEVolume()
-        {
-            foreach(var clip in sePool)
-            {
-                clip.volume = SaveManagerCore.instance.SystemSettings.seVolume;
-            }
-        }
+        public bool IsLoadDatabase { get; private set; }
 
         public override void AwakeSingleton()
         {
@@ -743,11 +750,13 @@ namespace GameCore.Sound
             instance = this;
             DontDestroyOnLoad(gameObject);
 
-            // OnDestroy に紐づくキャンセルトークン
             destroyToken = this.GetCancellationTokenOnDestroy();
+            manualCancelSource = new CancellationTokenSource();
+            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
 
             bgmSource = gameObject.AddComponent<AudioSource>();
             bgmSource.loop = true;
+            bgmSource.playOnAwake = false;
 
             for (int i = 0; i < PoolSize; i++)
             {
@@ -763,89 +772,172 @@ namespace GameCore.Sound
         {
             database = SoundBinaryReader.LoadSoundDatabaseFromBinary(SupportFiles.ALL_SOUND_BIN);
             if (database == null)
-            {
-                Debug.LogError("Failed to load SoundDatabase from binary.");
-            }
-            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
-            isLoadDatabase = true;
+                Debug.LogError("[SoundCore] Failed to load SoundDatabase.");
+
+            IsLoadDatabase = true;
         }
 
-        public void LoadGroup(SoundGroup group, GroupCategory groupCategory, Action action = null)
+        // =============================================================
+        // シーン遷移時に必ず呼ぶ！！（これが全てを守る）
+        // =============================================================
+        public void StopAllAndCancelAllTasks()
         {
-            LoadGroupAsync(group, groupCategory, action).Forget();
+            manualCancelSource.Cancel();
+            manualCancelSource.Dispose();
+            manualCancelSource = new CancellationTokenSource();
+            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
+
+            foreach (var source in sePool)
+            {
+                if (source != null)
+                {
+                    if (source.isPlaying) source.Stop();
+                    source.clip = null;
+                }
+            }
+
+            if (bgmSource != null)
+            {
+                if (bgmSource.isPlaying) bgmSource.Stop();
+                bgmSource.clip = null;
+            }
+
+            if (crossFadeTempSource != null)
+            {
+                crossFadeTempSource.Stop();
+                Destroy(crossFadeTempSource);
+                crossFadeTempSource = null;
+            }
+
+            isCrossFading = false;
         }
 
-        public async UniTask LoadGroupAsync(SoundGroup group, GroupCategory groupCategory, Action action = null)
+        /// <summary>
+        /// その音のBaseVolume（データベースに登録された元の音量）を取得
+        /// 存在しない場合は1.0fを返す
+        /// </summary>
+        public float GetSoundVolume(SoundGroup group, SoundID id)
         {
-            while (database == null)
-            {
-                await UniTask.Yield(cancellationToken: destroyToken);
-            }
-            if (loadedClips.ContainsKey(group)) return;
-            var sounds = database.GroupedSoundsList.FirstOrDefault(data => data.Group == group);
-            if (sounds == null) return;
+            var key = (group, id);
+            return volumeCache.TryGetValue(key, out var volume) ? volume : 1f;
+        }
 
-            loadedClips[group] = new Dictionary<SoundID, AddressableData<AudioClip>>();
+        /// <summary>
+        /// ロード済みのAudioClipを直接取得（UIプレビューや特殊処理用）
+        /// ロードされてなければnull
+        /// </summary>
+        public AudioClip GetSoundClip(SoundGroup group, SoundID id)
+        {
+            var key = (group, id);
+            clipCache.TryGetValue(key, out var clip);
+            return clip;
+        }
+
+        /// <summary>
+        /// そのサウンドがSEかBGMかを取得（ロード前でも判定可能にするなら別途キャッシュ必要）
+        /// </summary>
+        public SoundType GetSoundType(SoundGroup group, SoundID id)
+        {
+            var key = (group, id);
+            return typeCache.TryGetValue(key, out var type) ? type : SoundType.SE;
+        }
+
+        // =============================================================
+        // グループロード／アンロード
+        // =============================================================
+        public void LoadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null)
+            => LoadGroupAsync(group, category, onCompleted).Forget();
+
+        private async UniTask LoadGroupAsync(SoundGroup group, GroupCategory category, Action onCompleted)
+        {
+            while (!IsLoadDatabase)
+                await UniTask.Yield(combinedToken);
+
+            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            if (groupData == null) { onCompleted?.Invoke(); return; }
+
+            var addressables = new List<AddressableData<AudioClip>>();
+            groupAddressables[group] = addressables;
+
             var tasks = new List<UniTask>();
 
-            foreach (var sound in sounds.Sounds)
+            foreach (var sound in groupData.Sounds)
             {
-                var addressable = new AddressableData<AudioClip>(groupCategory, AssetCategory.Audio, sound.AddressablePath);
-                
+                var key = (group, sound.SoundID);
+                if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
+
+                loadingKeys.Add(key);
+
+                var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
+                addressables.Add(addressable);
+
                 tasks.Add(addressable.LoadAsync(clip =>
                 {
                     if (addressable.IsLoadedAndSetup)
                     {
-                        loadedClips[group][sound.SoundID] = addressable;
+                        clipCache[key] = clip;
+                        volumeCache[key] = sound.BaseVolume;
+                        typeCache[key] = sound.Type;
                     }
+                    loadingKeys.Remove(key);
                 }, ex =>
                 {
-                    Debug.LogError($"Failed to load audio clip for {sound.SoundID} at {sound.AddressablePath}: {ex.Message}");
-                }).AttachExternalCancellation(destroyToken));
+                    Debug.LogError($"[SoundCore] Load failed {sound.SoundID}: {ex.Message}");
+                    loadingKeys.Remove(key);
+                }).AttachExternalCancellation(combinedToken));
             }
 
             await UniTask.WhenAll(tasks);
-            action?.Invoke();
+            onCompleted?.Invoke();
         }
 
-        public void UnloadGroup(SoundGroup group, GroupCategory groupCategory, Action action = null)
-        {
-            UnloadGroupAsync(group, groupCategory, action).Forget();
-        }
+        public void UnloadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null)
+            => UnloadGroupAsync(group, onCompleted).Forget();
 
-        public async UniTask UnloadGroupAsync(SoundGroup group, GroupCategory groupCategory, Action action = null)
+        private async UniTask UnloadGroupAsync(SoundGroup group, Action onCompleted)
         {
-            if (!loadedClips.TryGetValue(group, out var clips)) return;
-
-            foreach (var addressable in clips.Values)
+            if (groupAddressables.TryGetValue(group, out var list))
             {
-                addressable.Release();
+                foreach (var addr in list)
+                    addr.Release();
+                groupAddressables.Remove(group);
             }
-            loadedClips.Remove(group);
-            AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Audio);
-            action?.Invoke();
-            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+
+            var keysToRemove = new List<(SoundGroup, SoundID)>();
+            foreach (var kv in clipCache)
+                if (kv.Key.group == group) keysToRemove.Add(kv.Key);
+
+            foreach (var key in keysToRemove)
+            {
+                clipCache.Remove(key);
+                volumeCache.Remove(key);
+                typeCache.Remove(key);
+            }
+
+            onCompleted?.Invoke();
+            await UniTask.CompletedTask;
         }
 
-        public void PlaySE(SoundGroup group, SoundID id, float volume = 1.0f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
-        {
-            PlaySEInternal(group, id, volume, is3D, position, maxDistance, async: true).Forget();
-        }
+        // =============================================================
+        // SE再生（最速・安全）
+        // =============================================================
+        public void PlaySE(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
+            => PlaySEAsync(group, id, volume, is3D, position, maxDistance).Forget();
 
-        public async UniTask PlaySEAsync(SoundGroup group, SoundID id, float volume = 1.0f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
+        private async UniTask PlaySEAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance)
         {
-            await PlaySEInternal(group, id, volume, is3D, position, maxDistance, async: true);
-        }
+            var key = (group, id);
 
-        private async UniTask PlaySEInternal(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance, bool async)
-        {
-            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.SE) return;
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.SE)
+                return;
 
-            var source = GetPooledSource();
+            var source = GetPooledSourceFast();
             if (source == null) return;
 
-            source.clip = addressable.GetAddressableObjectResult();
-            source.volume = (data.BaseVolume * volume) * SaveManagerCore.instance.SystemSettings.seVolume;
+            source.clip = clip;
+            source.volume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.seVolume;
             source.loop = false;
             source.spatialBlend = is3D ? 1f : 0f;
             source.maxDistance = maxDistance;
@@ -853,165 +945,184 @@ namespace GameCore.Sound
 
             source.Play();
 
-            if (async)
+            try
             {
-                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: destroyToken);
+                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken);
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
                 ResetSource(source);
             }
         }
 
-        public void PlayBGM(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 0f)
+        private AudioSource GetPooledSourceFast()
         {
-            PlayBGMAsync(group, id, volume, fadeTime).Forget();
+            int startIndex = poolIndex;
+            do
+            {
+                var source = sePool[poolIndex];
+                if (!source.isPlaying)
+                {
+                    ResetSource(source);
+                    poolIndex = (poolIndex + 1) % PoolSize;
+                    return source;
+                }
+                poolIndex = (poolIndex + 1) % PoolSize;
+            } while (poolIndex != startIndex);
+
+            var victim = sePool[0];
+            ResetSource(victim);
+            return victim;
         }
 
-        public async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 0f)
+        // =============================================================
+        // BGM再生・フェード・クロスフェード
+        // =============================================================
+        public void PlayBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 0f)
+            => PlayBGMAsync(group, id, volume, fadeTime).Forget();
+
+        private async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime)
         {
-            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
+            var key = (group, id);
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.BGM)
+                return;
 
-            if (bgmSource.isPlaying && fadeTime > 0)
-            {
+            if (bgmSource.isPlaying && fadeTime > 0f)
                 await FadeOutAsync(fadeTime);
-            }
 
-            bgmSource.clip = addressable.GetAddressableObjectResult();
+            bgmSource.clip = clip;
             bgmSource.volume = 0f;
             bgmSource.Play();
 
-            float fadeVolue = (data.BaseVolume * volume) * SaveManagerCore.instance.SystemSettings.bgmVolume;
-
-            if (fadeTime > 0)
-            {
-                await FadeInAsync(fadeVolue, fadeTime);
-            }
+            float targetVolume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+            if (fadeTime > 0f)
+                await FadeInAsync(targetVolume, fadeTime);
             else
-            {
-                bgmSource.volume = fadeVolue;
-            }
+                bgmSource.volume = targetVolume;
         }
 
-        public void FadeOutBGM(float fadeTime)
-        {
-            FadeOutAsync(fadeTime).Forget();
-        }
+        public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 1f)
+            => CrossFadeBGMAsync(group, id, volume, fadeTime).Forget();
 
-        public async UniTask FadeOutAsync(float fadeTime, Action action = null)
+        private async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime)
         {
-            if (!bgmSource.isPlaying)
-            {
-                action?.Invoke();
+            var key = (group, id);
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.BGM)
                 return;
-            }
+
+            isCrossFading = true;
+
+            crossFadeTempSource = gameObject.AddComponent<AudioSource>();
+            crossFadeTempSource.loop = true;
+            crossFadeTempSource.clip = clip;
+            crossFadeTempSource.volume = 0f;
+            crossFadeTempSource.Play();
 
             float startVolume = bgmSource.volume;
+            float targetVolume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+
             float timer = 0f;
             while (timer < fadeTime)
             {
                 timer += Time.deltaTime;
-                bgmSource.volume = Mathf.Lerp(startVolume, 0f, timer / fadeTime);
-                if (fadeTime >= timer)
-                {
-                    bgmSource.volume = 0.0f;
-                    break;
-                }
-                await UniTask.Yield(cancellationToken: destroyToken);
+                float t = Mathf.Clamp01(timer / fadeTime);
+                bgmSource.volume = Mathf.Lerp(startVolume, 0f, t);
+                crossFadeTempSource.volume = Mathf.Lerp(0f, targetVolume, t);
+                await UniTask.Yield(combinedToken);
             }
+
             bgmSource.Stop();
-            ResetSource(bgmSource);
-            action?.Invoke();
+            Destroy(bgmSource);
+            bgmSource = crossFadeTempSource;
+            bgmSource.volume = targetVolume;
+            crossFadeTempSource = null;
+            isCrossFading = false;
         }
 
-        private async UniTask FadeInAsync(float targetVolume, float fadeTime, Action action = null)
+        private async UniTask FadeOutAsync(float fadeTime, Action onCompleted = null)
+        {
+            if (!bgmSource.isPlaying) { onCompleted?.Invoke(); return; }
+
+            float startVolume = bgmSource.volume;
+            float timer = 0f;
+
+            while (timer < fadeTime)
+            {
+                timer += Time.deltaTime;
+                bgmSource.volume = Mathf.Lerp(startVolume, 0f, timer / fadeTime);
+                if (timer >= fadeTime) break;
+                await UniTask.Yield(combinedToken);
+            }
+
+            bgmSource.volume = 0f;
+            bgmSource.Stop();
+            bgmSource.clip = null;
+            onCompleted?.Invoke();
+        }
+
+        private async UniTask FadeInAsync(float targetVolume, float fadeTime, Action onCompleted = null)
         {
             float timer = 0f;
             while (timer < fadeTime)
             {
                 timer += Time.deltaTime;
                 bgmSource.volume = Mathf.Lerp(0f, targetVolume, timer / fadeTime);
-                if (fadeTime >= timer)
-                {
-                    bgmSource.volume = targetVolume;
-                    break;
-                }
-                await UniTask.Yield(cancellationToken: destroyToken);
+                if (timer >= fadeTime) break;
+                await UniTask.Yield(combinedToken);
             }
-            action?.Invoke();
+            bgmSource.volume = targetVolume;
+            onCompleted?.Invoke();
         }
 
-        public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
-        {
-            CrossFadeBGMAsync(group, id, volume, fadeTime).Forget();
-        }
-
-        public async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume = 1.0f, float fadeTime = 1f)
-        {
-            if (!TryGetClipAndData(group, id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data) || data.Type != SoundType.BGM) return;
-
-            crossFadeTempSource = gameObject.AddComponent<AudioSource>();
-            crossFadeTempSource.loop = true;
-            crossFadeTempSource.clip = addressable.GetAddressableObjectResult();
-            crossFadeTempSource.volume = 0f;
-            crossFadeTempSource.Play();
-
-            float timer = 0f;
-            float startBGMVolume = bgmSource.volume;
-
-            while (timer < fadeTime)
-            {
-                timer += Time.deltaTime;
-                float t = timer / fadeTime;
-                bgmSource.volume = Mathf.Lerp(startBGMVolume, 0f, t);
-                crossFadeTempSource.volume = Mathf.Lerp(0f, (data.BaseVolume * volume) * SaveManagerCore.instance.SystemSettings.bgmVolume, t);
-                await UniTask.Yield(cancellationToken: destroyToken);
-            }
-
-            bgmSource.Stop();
-            ResetSource(bgmSource);
-            Destroy(bgmSource);
-            bgmSource = crossFadeTempSource;
-            crossFadeTempSource = null;
-        }
-
-        private bool TryGetClipAndData(SoundGroup group, SoundID id, out AddressableData<AudioClip> addressable, out SoundDatabase.SoundData data)
-        {
-            addressable = null;
-            data = null;
-            if (!loadedClips.TryGetValue(group, out var groupClips) || !groupClips.TryGetValue(id, out addressable)) return false;
-            data = database.GroupedSoundsList.FirstOrDefault(g => g.Group == group)?.Sounds.FirstOrDefault(s => s.SoundID == id);
-            return data != null && addressable.IsLoadedAndSetup;
-        }
-
-        private AudioSource GetPooledSource()
-        {
-            return sePool.FirstOrDefault(s => !s.isPlaying && s.clip == null);
-        }
-
+        // =============================================================
+        // ユーティリティ
+        // =============================================================
         private void ResetSource(AudioSource source)
         {
+            if (source == null) return;
             source.Stop();
             source.clip = null;
             source.volume = 0f;
             source.spatialBlend = 0f;
         }
 
+        public void SetSystemBGMVolume()
+        {
+            if (bgmSource != null && bgmSource.isPlaying)
+                bgmSource.volume = bgmSource.volume / SaveManagerCore.instance.SystemSettings.bgmVolume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+        }
+
+        public void SetSystemSEVolume()
+        {
+            float vol = SaveManagerCore.instance.SystemSettings.seVolume;
+            foreach (var s in sePool) s.volume = vol;
+        }
+
         private void Update()
         {
+            if (bgmSource == null && !isCrossFading)
+                bgmSource = gameObject.AddComponent<AudioSource>();
+
             sePool.RemoveAll(s => s == null);
-            if (bgmSource == null) bgmSource = gameObject.AddComponent<AudioSource>();
         }
 
         private void OnDestroy()
         {
-            // destroyToken 経由ですべての UniTask がキャンセルされるので
-            // ここでは loadedClips の解放などに専念できる
-            foreach (var group in loadedClips.Values)
-            {
-                foreach (var clip in group.Values)
-                {
-                    clip.Release();
-                }
-            }
-            loadedClips.Clear();
+            StopAllAndCancelAllTasks();
+
+            foreach (var list in groupAddressables.Values)
+                foreach (var addr in list)
+                    addr.Release();
+
+            clipCache.Clear();
+            volumeCache.Clear();
+            typeCache.Clear();
+            groupAddressables.Clear();
         }
     }
 }
@@ -1023,6 +1134,7 @@ namespace GameCore.Sound
     # SoundDatabase.cs
     if not os.path.exists(os.path.join(SOUND_DATA, 'SoundDatabase.cs')):
         code_str = """
+
 using System.Collections.Generic;
 using GameCore.Enums;
 namespace GameCore.Sound
@@ -2017,6 +2129,7 @@ def generate_gameobject_csharp():
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs")):
         code_str = """
 
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -2060,6 +2173,7 @@ namespace GameCore.Gameobject
         {
             LoadGroupAsync(group, groupCategory, action).Forget();
         }
+
 
         public async UniTask LoadGroupAsync(GameObjectGroup group, GroupCategory groupCategory, Action action = null)
         {
@@ -2112,6 +2226,33 @@ namespace GameCore.Gameobject
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
 
+        public void UnloadAll(Action action = null)
+        {
+            UnloadAllAsync(action).Forget();
+        }
+
+        public async UniTask UnloadAllAsync(Action action = null)
+        {
+            foreach(var group in loadedGameObjects.Values)
+            {
+                foreach(var data in group.Values)
+                {
+                    data.Release();
+                }
+                await UniTask.Yield(destroyToken);
+                group.Clear();
+            }
+            loadedGameObjects.Clear();
+
+            AddressableDataCore.Instance.ReleaseAssetsAll(AssetCategory.Prefab);
+            await UniTask.Yield(destroyToken);
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+
+        }
+
+
+
         public UnityEngine.GameObject GetGameObject(GameObjectGroup group, GameObjectID id)
         {
             if (loadedGameObjects.TryGetValue(group, out var groupGameObjects) && groupGameObjects.TryGetValue(id, out var addressable))
@@ -2134,7 +2275,6 @@ namespace GameCore.Gameobject
         }
     }
 }
-
 """
         with open(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
