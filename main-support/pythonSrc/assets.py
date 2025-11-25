@@ -1278,6 +1278,7 @@ namespace GameCore.Sound
         with open(os.path.join(SOUND_DATA, 'SoundBinaryReader.cs'), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
+            
     if not os.path.exists(os.path.join(SOUND_DATA,"SoundObjectPool.cs")):
         code_str = """
 //===================================================================
