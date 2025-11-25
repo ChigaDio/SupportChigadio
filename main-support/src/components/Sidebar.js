@@ -18,7 +18,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'Class Data ID', key: 'class-data-id' },
         { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
         { name: 'State', key: 'state' },
-        {name: 'Behavior' , key: 'behavior'}
+        { name: 'Behavior', key: 'behavior' }
       ],
     },
     {
@@ -28,6 +28,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'Texture', key: 'texture' },
         { name: 'GameObject', key: 'gameobject' },
         { name: 'Animator', key: 'animator' },
+        { name: 'Scene', key: 'scene' }
       ],
     },
     {
@@ -38,7 +39,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'ScenarioConditions', key: 'scenario-conditions' },
       ],
     },
-        {
+    {
       name: 'Debug',
       subItems: [
         { name: 'Log', key: 'log' },

@@ -27,6 +27,7 @@ import AnimatorDataDetailGrid from './components/AnimatorDataDetailGrid';
 import Sound from './assets/sound';
 import Texture from './assets/texture';
 import GameObject from './assets/gameobject';
+import Scene from './assets/scene';
 
 import DbgLog from './components/DebugLog'
 
@@ -89,6 +90,9 @@ function AppContent() {
         case 'animator':
           navigate('animator');
           break;
+        case 'scene':
+          navigate('scene');
+          break;
         default:
           navigate('sound'); // Assets default
       }
@@ -100,8 +104,8 @@ function AppContent() {
           break;
       }
     }
-    
-     else {
+
+    else {
       navigate('/');
     }
   };
@@ -136,6 +140,7 @@ function AppContent() {
           <Route path="/gameobject" element={<GameObject />} />
           <Route path="/animator" element={<AnimatorGrid />} />
           <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
+          <Route path="/scene" element={<Scene />} />
           <Route path="/log" element={<DbgLog />} />
 
         </Routes>

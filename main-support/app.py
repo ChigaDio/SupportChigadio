@@ -18,7 +18,7 @@ import pythonSrc.behavior
 import pythonSrc.animation
 import threading
 from pathlib import Path
-
+import pythonSrc.scene as scene
 isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -120,6 +120,7 @@ assets.generate_base()
 pythonSrc.addressableInit.generate_base()
 pythonSrc.behavior.generate_base()
 pythonSrc.animation.generate_base()
+pythonSrc.scene.generate_base() 
 
 
 # 型マッピング（Vector2, Vector3追加）
@@ -5912,6 +5913,34 @@ def api_generate_single_animator(name):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+#==================================================================
+# Scene
+#==================================================================
+
+@app.route('/api/scene/get', methods=['GET'])
+def get_scenes():
+    data = scene.load_scene_data()
+    return jsonify(data)
+
+@app.route('/api/scene/add', methods=['POST'])
+def add_scene():
+    data = request.json
+    enum_name = data.get('enum_name')
+    scene_type = data.get('scene_type') # Added scene_type
+    result = scene.add_scene(enum_name, scene_type)
+    return jsonify(result)
+
+@app.route('/api/scene/delete', methods=['POST'])
+def delete_scene():
+    data = request.json
+    enum_name = data.get('enum_name')
+    result = scene.delete_scene(enum_name)
+    return jsonify(result)
+
+@app.route('/api/scene/generate', methods=['POST'])
+def generate_scene_code():
+    result = scene.generate_cs_files() # Changed function name
+    return jsonify(result)
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
