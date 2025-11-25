@@ -144,6 +144,7 @@ using UnityEngine;
 using UnityEditorInternal;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEditor.Animations;
 
 public class EditorCommunication : EditorWindow
 {
@@ -281,10 +282,10 @@ public class EditorCommunication : EditorWindow
             string filePath = data.file_path;
             Debug.Log($"Received filePath: {filePath}");
 
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\\\", "/").TrimEnd('/');
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
             Debug.Log($"Project root (normalized): {projectRoot}");
 
-            string normalizedFilePath = filePath.Replace("\\\\", "/").TrimEnd('/');
+            string normalizedFilePath = filePath.Replace("\\", "/").TrimEnd('/');
             Debug.Log($"Normalized filePath: {normalizedFilePath}");
 
             string assetPath = normalizedFilePath;
@@ -298,14 +299,14 @@ public class EditorCommunication : EditorWindow
                 Debug.LogWarning($"filePath does not start with project root: {projectRoot}");
             }
 
-            assetPath = assetPath.Replace("\\\\", "/").Trim();
+            assetPath = assetPath.Replace("\\", "/").Trim();
             if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = "Assets/" + assetPath.TrimStart('/');
             }
             Debug.Log($"Final assetPath: {assetPath}");
 
-            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\\\", "/");
+            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\", "/");
             if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(assetPath)) && !File.Exists(fullPath))
             {
                 Debug.LogWarning($"Invalid asset path for AssetDatabase: {assetPath}");
@@ -343,8 +344,8 @@ public class EditorCommunication : EditorWindow
         else if (command == "get_sprite_info")
         {
             string filePath = data.file_path;
-            string assetPath = filePath.Replace("\\\\", "/");
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\\\", "/").TrimEnd('/');
+            string assetPath = filePath.Replace("\\", "/");
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
             if (assetPath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = assetPath.Substring(projectRoot.Length).TrimStart('/');
@@ -390,7 +391,7 @@ public class EditorCommunication : EditorWindow
 
             var controller = AssetDatabase.LoadAssetAtPath<UnityEditor.Animations.AnimatorController>(assetPath);
             if (controller == null) return "[]";
-
+            
             var info = new AnimatorFullInfo
             {
                 parameters = controller.parameters.Select(p => new ParamInfo
@@ -401,6 +402,8 @@ public class EditorCommunication : EditorWindow
                     defaultInt = p.defaultInt,
                     defaultBool = p.defaultBool
                 }).ToList(),
+
+
                 layers = controller.layers.Select((l,i) => new LayerFullInfo
                 {
                     name = l.name ?? "BaseLayer",
@@ -427,15 +430,15 @@ public class EditorCommunication : EditorWindow
     {
         public string file_path;
     }
-    
+
     private static string NormalizeAssetPath(string filePath)
     {
         if (string.IsNullOrEmpty(filePath)) return "";
 
         string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
-            .Replace("\\\\", "/").TrimEnd('/');
+            .Replace("\\", "/").TrimEnd('/');
 
-        string normalized = filePath.Replace("\\\\", "/").Trim();
+        string normalized = filePath.Replace("\\", "/").Trim();
 
         if (normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
         {
@@ -503,11 +506,12 @@ public class EditorCommunication : EditorWindow
         public int defaultInt;
         public bool defaultBool;
     }
-    [Serializable] private class LayerFullInfo { public string name; public List<StateFullInfo> states; }
+    [Serializable] private class LayerFullInfo { public string name; public int index; public List<StateFullInfo> states; }
     [Serializable] private class StateFullInfo { public string name; public bool isBlendTree; public List<string> motions; public BlendTreeInfo blendTree; }
     [Serializable] private class BlendTreeInfo { public string blendType; public string blendParameter; public string blendParameterY; public List<BlendTreeChildInfo> children; }
     [Serializable] private class BlendTreeChildInfo { public string motionName; public float threshold; public float timeScale; public string directBlendParameter; }
 }
+
 """
         with open(os.path.join(EDITOR_DATA, "EditorCommunication.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
