@@ -19,6 +19,7 @@ import pythonSrc.animation
 import threading
 from pathlib import Path
 import pythonSrc.scene as scene
+import pythonSrc.savedata as savedata
 isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -33,6 +34,7 @@ else:
 # ディレクトリパスをプロジェクトルート基準に設定
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
+
 
 CLASS_DATA_ID = 'class-data-id'
 CLASS_DATA_MATRIX_ID = 'class-data-matrix-id'
@@ -52,6 +54,9 @@ LOG = "Log"
 
 SUBMODULE = "submodule"
 PLUGIN = "Plugin"
+
+SAVE_DATA_DIR = os.path.join(DATA_DIR, "save-data")
+SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom-data")
 
 def find_highest_assets_folder(base_folder = BASE_DIR):
     """
@@ -121,6 +126,7 @@ pythonSrc.addressableInit.generate_base()
 pythonSrc.behavior.generate_base()
 pythonSrc.animation.generate_base()
 pythonSrc.scene.generate_base() 
+pythonSrc.savedata.generate_base()
 
 
 # 型マッピング（Vector2, Vector3追加）
@@ -4984,6 +4990,118 @@ def delete_scene():
 def generate_scene_code():
     result = scene.generate_cs_files() # Changed function name
     return jsonify(result)
+
+# --- SaveData (SystemData/PlayerData) Management ---
+
+@app.route('/api/save-data/<name>', methods=['GET', 'POST'])
+def manage_save_data_schema(name):
+    if name not in ['SystemData', 'PlayerData']:
+        return jsonify({"error": "Invalid save data type"}), 400
+
+    file_path = os.path.join(SAVE_DATA_CUSTOM_DIR, f"{name}.json")
+
+    if request.method == 'GET':
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return jsonify(data)
+            except Exception as e:
+                logger.error(f"Error reading {name} schema: {e}")
+                return jsonify([]), 500 # Return empty list if error or file empty
+        else:
+            return jsonify([]) # Return empty list if file doesn't exist
+
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            # Ensure directory exists
+            if not os.path.exists(SAVE_DATA_CUSTOM_DIR):
+                os.makedirs(SAVE_DATA_CUSTOM_DIR)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return jsonify({"message": f"{name} schema saved successfully"})
+        except Exception as e:
+            logger.error(f"Error saving {name} schema: {e}")
+            return jsonify({"error": str(e)}), 500
+
+@app.route('/api/generate-save-data/<name>', methods=['POST'])
+def generate_save_data_cs(name):
+    if name not in ['SystemData', 'PlayerData']:
+        return jsonify({"error": "Invalid save data type"}), 400
+
+    # Get data from request or file
+    data = request.get_json()
+    if not data:
+        file_path = os.path.join(SAVE_DATA_CUSTOM_DIR, f"{name}.json")
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        else:
+            data = []
+
+    try:
+        # Generate C# Code
+        field_declarations = ""
+        for item in data:
+            type_name = item.get('type', 'int')
+            var_name = item.get('name', 'Variable')
+            array_size = item.get('arraySize', 0)
+            description = item.get('description', '')
+
+            # Basic comment
+            if description:
+                field_declarations += f"        /// <summary>\n        /// {description}\n        /// </summary>\n"
+            
+            # Field definition
+            if array_size > 0:
+                 field_declarations += f"        public {type_name}[] {var_name} = new {type_name}[{array_size}];\n"
+            else:
+                 # Initialize string to empty to avoid null issues if desired, or default
+                 if type_name == 'string':
+                     field_declarations += f"        public string {var_name} = \"\";\n"
+                 else:
+                     field_declarations += f"        public {type_name} {var_name};\n"
+
+        code_str = f"""using System;
+using UnityEngine;
+using System.Collections.Generic;
+using GameCore.Enums;
+using GameCore.Tables;
+
+namespace GameCore.SaveSystem
+{{
+    [Serializable]
+    public class Base{name}
+    {{
+{field_declarations}
+    }}
+}}
+"""
+        cs_path = os.path.join(SAVE_DATA_CUSTOM_DIR, f"Base{name}.cs")
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+        
+        return jsonify({"message": f"{name}.cs generated successfully"})
+    except Exception as e:
+        logger.error(f"Error generating {name}.cs: {e}")
+        return jsonify({"error": str(e)}), 500
+    #if request.method == 'PATCH':
+    #    try:
+    #        delete_name = request.get_json()['name']
+    #        with open(file_path, 'r', encoding='utf-8') as f:
+    #            data = json.load(f)
+    #        data = [item for item in data if item['name'] != delete_name]
+    #        with open(file_path, 'w', encoding='utf-8') as f:
+    #            json.dump(data, f, ensure_ascii=False, indent=2)
+    #        logger.info(f"Removed enum: {delete_name}")
+    #        return jsonify({"message": f"Enum {delete_name} removed from enum_list.json"})
+    #    except FileNotFoundError:
+    #        return jsonify({"error": "enum_list.json not found"}), 404
+    #    except Exception as e:
+    #        logger.error(f"Error removing enum-id: {str(e)}")
+    #        return jsonify({"error": str(e)}), 500
 # 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -4992,6 +5110,8 @@ def serve_static(path):
     if path != '' and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, 'index.html')
+
+
 
 def flask_main():
     app.run(debug=True, port=8000,use_reloader=False)

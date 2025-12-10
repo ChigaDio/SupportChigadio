@@ -23,6 +23,7 @@ import BehaviorDetailGrid from './components/BehaviorDetailGrid';
 
 import AnimatorGrid from './components/AnimatorDataGrid'
 import AnimatorDataDetailGrid from './components/AnimatorDataDetailGrid';
+import SaveDataGrid from './components/SaveDataGrid';
 
 import Sound from './assets/sound';
 import Texture from './assets/texture';
@@ -58,6 +59,9 @@ function AppContent() {
           break;
         case 'behavior':
           navigate('/behavior');
+          break;
+        case 'save-data':
+          navigate('/save-data');
           break;
         default:
           navigate('/enum-id'); // GenerateTool default
@@ -104,7 +108,6 @@ function AppContent() {
           break;
       }
     }
-
     else {
       navigate('/');
     }
@@ -141,6 +144,7 @@ function AppContent() {
           <Route path="/animator" element={<AnimatorGrid />} />
           <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
           <Route path="/scene" element={<Scene />} />
+          <Route path="/save-data" element={<SaveDataGrid />} />
           <Route path="/log" element={<DbgLog />} />
 
         </Routes>
