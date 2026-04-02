@@ -282,10 +282,10 @@ public class EditorCommunication : EditorWindow
             string filePath = data.file_path;
             Debug.Log($"Received filePath: {filePath}");
 
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace(@"\\", "/").TrimEnd('/');
             Debug.Log($"Project root (normalized): {projectRoot}");
 
-            string normalizedFilePath = filePath.Replace("\\", "/").TrimEnd('/');
+            string normalizedFilePath = filePath.Replace(@"\\", "/").TrimEnd('/');
             Debug.Log($"Normalized filePath: {normalizedFilePath}");
 
             string assetPath = normalizedFilePath;
@@ -299,14 +299,14 @@ public class EditorCommunication : EditorWindow
                 Debug.LogWarning($"filePath does not start with project root: {projectRoot}");
             }
 
-            assetPath = assetPath.Replace("\\", "/").Trim();
+            assetPath = assetPath.Replace(@"\\", "/").Trim();
             if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = "Assets/" + assetPath.TrimStart('/');
             }
             Debug.Log($"Final assetPath: {assetPath}");
 
-            string fullPath = Path.Combine(projectRoot, assetPath).Replace("\\", "/");
+            string fullPath = Path.Combine(projectRoot, assetPath).Replace(@"\\", "/");
             if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(assetPath)) && !File.Exists(fullPath))
             {
                 Debug.LogWarning($"Invalid asset path for AssetDatabase: {assetPath}");
@@ -344,8 +344,8 @@ public class EditorCommunication : EditorWindow
         else if (command == "get_sprite_info")
         {
             string filePath = data.file_path;
-            string assetPath = filePath.Replace("\\", "/");
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace("\\", "/").TrimEnd('/');
+            string assetPath = filePath.Replace(@"\\", "/");
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace(@"\\", "/").TrimEnd('/');
             if (assetPath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
             {
                 assetPath = assetPath.Substring(projectRoot.Length).TrimStart('/');
@@ -436,9 +436,9 @@ public class EditorCommunication : EditorWindow
         if (string.IsNullOrEmpty(filePath)) return "";
 
         string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
-            .Replace("\\", "/").TrimEnd('/');
+            .Replace(@"\\", "/").TrimEnd('/');
 
-        string normalized = filePath.Replace("\\", "/").Trim();
+        string normalized = filePath.Replace(@"\\", "/").Trim();
 
         if (normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
         {
@@ -2001,6 +2001,7 @@ def generate_texture_csharp():
     # TextureCore.cs
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -2065,7 +2066,7 @@ namespace GameCore.Texture
                 {
                     // スプライトシート自体のロード
                     var addressableSpriteSheet = new TextureAddressableData(groupCategory, AssetCategory.Sprite, texture.AddressablePath,true);
-                    tasks.Add(addressableSpriteSheet.LoadAsync(texture.Sprites.Count, obj =>
+                    tasks.Add(addressableSpriteSheet.LoadAsync(texture.AddressablePath,texture.Sprites.Count, obj =>
                     {
                         if (addressableSpriteSheet.IsLoadedAndSetup)
                         {
@@ -2073,7 +2074,7 @@ namespace GameCore.Texture
                         }
                     }, ex =>
                     {
-                        Debug.LogError($"Failed to load sprite sheet for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
+                        Debug.LogError($"Failed to load sprite sheet for {texture.TextureID} at {texture.AddressablePath}: {ex.ToString()}");
                     }).AttachExternalCancellation(destroyToken));
 
 
@@ -2084,7 +2085,7 @@ namespace GameCore.Texture
                 {
                     // テクスチャのロード
                     var addressableTexture = new TextureAddressableData(groupCategory, AssetCategory.Texture, texture.AddressablePath, false);
-                    tasks.Add(addressableTexture.LoadAsync(0, obj =>
+                    tasks.Add(addressableTexture.LoadAsync(texture.AddressablePath, 0,obj =>
                     {
                         if (addressableTexture.IsLoadedAndSetup)
                         {
@@ -2092,7 +2093,7 @@ namespace GameCore.Texture
                         }
                     }, ex =>
                     {
-                        Debug.LogError($"Failed to load texture for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
+                        Debug.LogError($"Failed to load texture for {texture.TextureID} at {texture.AddressablePath}: {ex.ToString()}");
                     }).AttachExternalCancellation(destroyToken));
                 }
             }
@@ -2205,6 +2206,7 @@ namespace GameCore.Texture
             
     if not os.path.exists(os.path.join(ENUM_DIR, "TextureAddressableData.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -2219,17 +2221,17 @@ namespace GameCore.Texture
         private readonly AddressableData<Texture2D> textureData;
         private readonly bool isSprite;
 
-        public TextureAddressableData(GroupCategory groupCategory, AssetCategory assetCategory, bool isSprite)
+        public TextureAddressableData(GroupCategory groupCategory, AssetCategory assetCategory, string path,bool isSprite)
         {
             this.isSprite = isSprite;
             if (isSprite)
             {
-                spriteData = new AddressableData<Sprite>(groupCategory, assetCategory);
+                spriteData = new AddressableData<Sprite>(groupCategory, assetCategory, path);
                 textureData = null;
             }
             else
             {
-                textureData = new AddressableData<Texture2D>(groupCategory, assetCategory);
+                textureData = new AddressableData<Texture2D>(groupCategory, assetCategory, path);
                 spriteData = null;
             }
         }
@@ -2242,22 +2244,16 @@ namespace GameCore.Texture
             {
                 if (spriteCount > 1)
                 {
-                    await spriteData.LoadArrayAsync(path, sprites =>
-                    {
-                        onSuccess?.Invoke(sprites);
-                    }, onError);
+                    await spriteData.LoadArrayAsync(onSuccess, onError);
                 }
                 else
                 {
-                    await spriteData.LoadAsync(path, spr =>
-                    {
-                        onSuccess?.Invoke(spr);
-                    }, onError);
+                    await spriteData.LoadAsync(onSuccess, onError);
                 }
             }
             else
             {
-                await textureData.LoadAsync(path, tex => onSuccess?.Invoke(tex), onError);
+                await textureData.LoadAsync(onSuccess, onError);
             }
         }
 
@@ -2282,12 +2278,13 @@ namespace GameCore.Texture
         {
             if (isSprite)
             {
-                return spriteData.GetAddressableObjectResult() is Sprite sprite ? new[] { sprite } : spriteData.typedAddressableArray;
+                return spriteData.GetAddressableObjectResult() is Sprite sprite ? new[] { sprite } : spriteData.GetAddressableObjectArrayResult();
             }
             return null;
         }
     }
 }
+        
         """
         
         with open(os.path.join(ENUM_DIR, "TextureAddressableData.cs"), 'w', encoding='utf-8') as f:
@@ -2466,7 +2463,7 @@ namespace GameCore.Texture
     }
 }
         """
-        with open(os.path.exists(os.path.join(TEXTURE_DATA, 'TextureBinaryReader.cs')),"w",encoding='utf-8') as f:
+        with open(os.path.join(TEXTURE_DATA, 'TextureBinaryReader.cs'), "w", encoding='utf-8') as f:
             f.write(code_str)
             
 

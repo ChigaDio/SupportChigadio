@@ -1317,7 +1317,7 @@ namespace GameCore
                 if (instance == null)
                 {
                     // まず、既にシーン内にあるかチェック
-                    instance = GameObject.FindFirstObjectByType<T>();
+                    instance = GameObject.FindAnyObjectByType<T>();
 
                     if (instance == null)
                     {
@@ -2891,7 +2891,7 @@ def generate_state_manager_data(file_path, name, json_data):
     'ScriptableObject'
     ]
     for item in json_data.get('manager', []):
-        base_code_str.append(f"{generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)}")
+        base_code_str.append(f"{generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)['field']}")
         
     with open(file_base_state_manager_data_path, 'w', encoding='utf-8') as f:
         f.write('using System.Collections.Generic;\n')
