@@ -886,7 +886,8 @@ namespace GameCore.Sound
 
         private async UniTask LoadDatabaseAsync()
         {
-            database = SoundBinaryReader.LoadSoundDatabaseFromBinary(SupportFiles.ALL_SOUND_BIN);
+            string path = SupportFiles.ADDRESSABLE_CHECK ? SupportFiles.ALL_SOUND_BIN_FILE : SupportFiles.ALL_SOUND_BIN;
+            database = SoundBinaryReader.LoadSoundDatabaseFromBinary(path,SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
                 Debug.LogError("[SoundCore] Failed to load SoundDatabase.");
 
@@ -2893,7 +2894,8 @@ namespace GameCore.Gameobject
 
         private async UniTask LoadDatabaseAsync()
         {
-            database = GameObjectBinaryReader.LoadGameObjectDatabaseFromBinary(SupportFiles.ALL_GAMEOBJECT_BIN);
+            string path = SupportFiles.ADDRESSABLE_CHECK ? SupportFiles.ALL_GAMEOBJECT_BIN_FILE : SupportFiles.ALL_GAMEOBJECT_BIN;
+            database = GameObjectBinaryReader.LoadGameObjectDatabaseFromBinary(path, SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
             {
                 Debug.LogError("Failed to load GameObjectDatabase from binary.");

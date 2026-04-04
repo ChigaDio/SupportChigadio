@@ -715,8 +715,8 @@ namespace RadarChartGenerator
             
     if not os.path.exists( RADAR_CHART_GENERATOR_RADERCHARTGENERATORWINDOW_CS):
         with open(RADAR_CHART_GENERATOR_RADERCHARTGENERATORWINDOW_CS, 'w', encoding='utf-8') as f:
-            code = """"
-            using System.Collections.Generic;
+            code = """
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEditor;
@@ -1014,7 +1014,7 @@ namespace RadarChartGenerator
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     // ラベル編集
-                    _labels[i] = EditorGUILayout.TextField(GUILayout.Width(80), _labels[i]);
+                    _labels[i] = EditorGUILayout.TextField(_labels[i], GUILayout.Width(80));
                     _values[i] = EditorGUILayout.Slider(_values[i], 0f, 1f);
                     EditorGUILayout.LabelField($"{_values[i]:F2}", GUILayout.Width(36));
                 }
@@ -1203,7 +1203,7 @@ namespace RadarChartGenerator
         // =====================
         private Canvas EnsureCanvas()
         {
-            var canvas = FindObjectOfType<Canvas>();
+            var canvas = GameObject.FindAnyObjectByType<Canvas>();
             if (canvas != null) return canvas;
 
             var canvasObj = new GameObject("Canvas");
@@ -1252,6 +1252,7 @@ namespace RadarChartGenerator
         public Gradient gradient = new Gradient();
     }
 }
+            
             """
             
             f.write(code)        

@@ -679,8 +679,9 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
-
-        string path = SupportFiles.ALL_ID_BIN;
+        
+        addressable |= SupportFiles.ADDRESSABLE_CHECK;
+        string path = addressable ?  SupportFiles.ID_BIN_FILE  :  SupportFiles.ALL_ID_BIN;
 
         try
         {
@@ -792,7 +793,8 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-        string path = SupportFiles.ALL_MATRIX_ID_BIN;
+        addressable |= SupportFiles.ADDRESSABLE_CHECK;
+        string path = addressable ?  SupportFiles.MATRIX_ID_BIN_FILE  :  SupportFiles.ALL_MATRIX_ID_BIN;
 
         try
         {
@@ -1375,7 +1377,7 @@ namespace GameCore
                 if (instance == null)
                 {
                     // まず、既にシーン内にあるかチェック
-                    instance = GameObject.FindAnyObjectByType<T>();
+                    instance =  GameObject.FindAnyObjectByType<T>(FindObjectsInactive.Exclude);
 
                     if (instance == null)
                     {
