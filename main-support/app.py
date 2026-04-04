@@ -20,6 +20,7 @@ import threading
 from pathlib import Path
 import pythonSrc.scene as scene
 import pythonSrc.savedata as savedata
+import pythonSrc.expansion as expansion
 isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -54,6 +55,7 @@ LOG = "Log"
 
 SUBMODULE = "submodule"
 PLUGIN = "Plugin"
+
 
 SAVE_DATA_DIR = os.path.join(DATA_DIR, "save-data")
 SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom-data")
@@ -127,7 +129,7 @@ pythonSrc.behavior.generate_base()
 pythonSrc.animation.generate_base()
 pythonSrc.scene.generate_base() 
 pythonSrc.savedata.generate_base()
-
+expansion.get_static_file_path()
 
 # 型マッピング（Vector2, Vector3追加）
 TYPE_MAP = {
