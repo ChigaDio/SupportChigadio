@@ -890,6 +890,7 @@ namespace GameCore.Sound
             database = SoundBinaryReader.LoadSoundDatabaseFromBinary(path,SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
                 Debug.LogError("[SoundCore] Failed to load SoundDatabase.");
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
 
             IsLoadDatabase = true;
         }

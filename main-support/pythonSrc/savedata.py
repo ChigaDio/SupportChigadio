@@ -28,6 +28,7 @@ using UnityEngine;
 
 namespace GameCore.SaveSystem
 {
+    [AddComponentMenu("GameCore/Save Manager Core")]
     public class SaveManagerCore : BaseSingleton<SaveManagerCore>
     {
         private SaveManager saveManager;
