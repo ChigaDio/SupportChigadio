@@ -125,8 +125,8 @@ namespace GameCore.SaveSystem
 #endif
             Directory.CreateDirectory(saveDir);
 
-            systemDataPath = Path.Combine(saveDir, "systemData.bin");
-            playerDataPath = Path.Combine(saveDir, "playerData.bin");
+            systemDataPath = Path.Combine(saveDir, "systemData.bytes");
+            playerDataPath = Path.Combine(saveDir, "playerData.bytes");
 
             cts = new CancellationTokenSource();
             if (linkedGameObject != null)

@@ -514,6 +514,119 @@ public class EditorCommunication : EditorWindow
 """
         with open(os.path.join(EDITOR_DATA, "EditorCommunication.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
+            
+    if not os.path.exists(os.path.join(EDITOR_DATA, "AddressableBinCustomizer.cs")):
+        code_str = """
+        using UnityEngine;
+using System.Collections.Generic;
+using GameCore;
+
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.AddressableAssets;
+using UnityEditor.AddressableAssets.Settings;
+using System.IO;
+
+[InitializeOnLoad]   // ← 必須
+public class AddressableBinCustomizer
+{
+    private static bool _isProcessing = false;
+
+    static AddressableBinCustomizer()
+    {
+        AddressableAssetSettings.OnModificationGlobal += OnAddressableModification;
+        Debug.Log("[Addressable Bin] カスタムAddress自動設定スクリプトが起動しました");
+    }
+
+    private static void OnAddressableModification(AddressableAssetSettings settings,
+        AddressableAssetSettings.ModificationEvent e, object obj)
+    {
+        if (_isProcessing) return;
+
+        // EntryCreated か EntryModified のときだけ処理
+        if (e != AddressableAssetSettings.ModificationEvent.EntryCreated &&
+            e != AddressableAssetSettings.ModificationEvent.EntryModified &&
+            e != AddressableAssetSettings.ModificationEvent.EntryAdded)
+            return;
+
+        // ★★★ ここを修正：objが配列の場合も単体のEntryの場合も両方対応 ★★★
+        ProcessEntries(settings, obj);
+    }
+
+    private static void ProcessEntries(AddressableAssetSettings settings, object data)
+    {
+        // 1. 単体のEntryの場合
+        if (data is AddressableAssetEntry singleEntry)
+        {
+            ProcessSingleEntry(settings, singleEntry);
+            return;
+        }
+
+        // 2. 配列（object[]）の場合 ← これがあなたの環境で起きているやつ
+        if (data is object[] entryArray)
+        {
+            foreach (var item in entryArray)
+            {
+                if (item is AddressableAssetEntry entry)
+                    ProcessSingleEntry(settings, entry);
+            }
+            return;
+        }
+
+        // 3. List<AddressableAssetEntry> の場合（念のため）
+        if (data is IList<AddressableAssetEntry> entryList)
+        {
+            foreach (var entry in entryList)
+                ProcessSingleEntry(settings, entry);
+        }
+    }
+
+    private static void ProcessSingleEntry(AddressableAssetSettings settings, AddressableAssetEntry entry)
+    {
+        if (entry == null) return;
+
+        string assetPath = AssetDatabase.GUIDToAssetPath(entry.guid);
+        if (string.IsNullOrEmpty(assetPath) || !assetPath.EndsWith(".bytes", System.StringComparison.OrdinalIgnoreCase))
+            return;
+
+        string newAddress = GetCustomAddressForBin(assetPath);
+
+        if (entry.address != newAddress)
+        {
+            _isProcessing = true;
+
+            entry.address = newAddress;
+            settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, entry, true);
+
+            Debug.Log($"[Addressable Bin] .bytes のAddressを自動設定 → {newAddress}  ({assetPath})");
+
+            _isProcessing = false;
+        }
+    }
+
+    private static string GetCustomAddressForBin(string assetPath)
+    {
+        string fileNameWithExt = Path.GetFileName(assetPath);
+
+        List<string> fileDataPath = new List<string>
+        {
+            SupportFiles.ID_BIN_FILE,
+            SupportFiles.MATRIX_ID_BIN_FILE,
+            SupportFiles.ALL_GAMEOBJECT_BIN_FILE,
+            SupportFiles.ALL_TEXTURE_BIN_FILE,
+            SupportFiles.ALL_SOUND_BIN
+        };
+
+        var findData = fileDataPath.Find(x => x.Equals(fileNameWithExt));
+
+        // リストに一致したらファイル名だけ、それ以外は元のフルパス（デフォルト）のまま
+        return findData != null ? fileNameWithExt : assetPath;
+    }
+}
+#endif
+        """
+        with open(os.path.join(EDITOR_DATA, "AddressableBinCustomizer.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 
 def load_sound_data():
     """
@@ -1199,67 +1312,103 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using GameCore.Enums;
+using UnityEngine.AddressableAssets;           // ← 追加
+using UnityEngine.ResourceManagement.AsyncOperations; // ← 追加
+
 namespace GameCore.Sound
 {
     public class SoundBinaryReader
     {
-        public static SoundDatabase LoadSoundDatabaseFromBinary(string filePath)
+        public static SoundDatabase LoadSoundDatabaseFromBinary(string filePath, bool addressable = false)
         {
-            if (!File.Exists(filePath))
+            if (!addressable)
             {
-                Debug.LogError($"Binary file not found: {filePath}");
-                return null;
-            }
-
-            SoundDatabase database = new SoundDatabase();
-
-            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
-            {
-                int groupCount = reader.ReadInt32();
-                int[] offsets = new int[groupCount];
-
-                for (int i = 0; i < groupCount; i++)
+                if (!File.Exists(filePath))
                 {
-                    offsets[i] = reader.ReadInt32();
-                }
-
-                string[] groupNames = Enum.GetNames(typeof(SoundGroup));
-                if (groupCount > groupNames.Length - 1)
-                {
-                    Debug.LogError("Binary contains more groups than defined in SoundGroup enum.");
+                    Debug.LogError($"Binary file not found: {filePath}");
                     return null;
                 }
 
-                for (int i = 0; i < groupCount; i++)
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                 {
-                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                    int soundCount = reader.ReadInt32();
-                    List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
 
-                    for (int j = 0; j < soundCount; j++)
-                    {
-                        int id = reader.ReadInt32();
-                        string addressablePath = ReadNullTerminatedString(reader);
-                        float volume = reader.ReadSingle();
-                        byte typeByte = reader.ReadByte();
-                        SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
+                handle.WaitForCompletion();
 
-                        string groupName = groupNames[i + 1];
-                        string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
-                        sounds.Add(new SoundDatabase.SoundData(
-                            idName: enumName, // Store only the sound name
-                            addressablePath: addressablePath,
-                            baseVolume: volume,
-                            type: type,
-                            soundID: (SoundID)id
-                        ));
-                    }
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
 
-                    database.GroupedSoundsList.Add(new SoundDatabase.GroupedSounds(
-                        group: (SoundGroup)(i + 1),
-                        sounds: sounds
+                TextAsset textAsset = handle.Result;
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    SoundDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);
+                    return database;
+                }
+            }
+        }
+
+        // 共通読み込みロジック
+        private static SoundDatabase ReadDatabase(BinaryReader reader)
+        {
+            SoundDatabase database = new SoundDatabase();
+
+            int groupCount = reader.ReadInt32();
+            int[] offsets = new int[groupCount];
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                offsets[i] = reader.ReadInt32();
+            }
+
+            string[] groupNames = Enum.GetNames(typeof(SoundGroup));
+            if (groupCount > groupNames.Length - 1)
+            {
+                Debug.LogError("Binary contains more groups than defined in SoundGroup enum.");
+                return null;
+            }
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                int soundCount = reader.ReadInt32();
+                List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
+
+                for (int j = 0; j < soundCount; j++)
+                {
+                    int id = reader.ReadInt32();
+                    string addressablePath = ReadNullTerminatedString(reader);
+                    float volume = reader.ReadSingle();
+                    byte typeByte = reader.ReadByte();
+                    SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
+
+                    string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
+
+                    sounds.Add(new SoundDatabase.SoundData(
+                        idName: enumName,
+                        addressablePath: addressablePath,
+                        baseVolume: volume,
+                        type: type,
+                        soundID: (SoundID)id
                     ));
                 }
+
+                database.GroupedSoundsList.Add(new SoundDatabase.GroupedSounds(
+                    group: (SoundGroup)(i + 1),
+                    sounds: sounds
+                ));
             }
 
             return database;
@@ -1847,7 +1996,7 @@ def generate_sound_bin():
     サウンドデータのバイナリファイルを生成
     """
     data = load_sound_data()
-    with open(os.path.join(SOUND_DATA, 'sound_data.bin'), 'wb') as f:
+    with open(os.path.join(SOUND_DATA, 'sound_data.bytes'), 'wb') as f:
         groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
@@ -2002,6 +2151,7 @@ def generate_texture_csharp():
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
         code_str = """
 
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -2033,7 +2183,7 @@ namespace GameCore.Texture
 
         private async UniTask LoadDatabaseAsync()
         {
-            database = TextureBinaryReader.LoadTextureDatabaseFromBinary(SupportFiles.ALL_TEXTURE_BIN);
+            database = TextureBinaryReader.LoadTextureDatabaseFromBinary(SupportFiles.ALL_TEXTURE_BIN,SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
             {
                 Debug.LogError("Failed to load TextureDatabase from binary.");
@@ -2162,15 +2312,15 @@ namespace GameCore.Texture
                 groupAssets.TryGetValue(textureId, out var addressable))
             {
                 // TEnum を数値（インデックス）として変換
-                int index = Convert.ToInt32(spriteIndex);
+                int index = Convert.ToInt32(spriteIndex) - 1;
 
                 // fallbackIndex が指定されている場合はそちらを優先
                 int targetIndex = fallbackIndex >= 0 ? fallbackIndex : index;
 
-                var result = addressable.GetAddressableObjectResult();
-                if (result is Sprite sprite && targetIndex == 0)
+                var result = addressable.GetAddressableArrayResult();
+                if (result is Sprite[] sprite && targetIndex == 0)
                 {
-                    return sprite; // 単一スプライトの場合
+                    return sprite[0]; // 単一スプライトの場合
                 }
                 if (result is IList<Sprite> sprites && sprites.Count > 0)
                 {
@@ -2185,7 +2335,6 @@ namespace GameCore.Texture
             Debug.LogWarning($"No asset found for TextureID {textureId} in group {group}.");
             return null;
         }
-
         private void OnDestroy()
         {
             foreach (var group in loadedAssets.Values)
@@ -2200,12 +2349,15 @@ namespace GameCore.Texture
     }
 }
 
+
+
 """
         with open(os.path.join(TEXTURE_DATA, "TextureCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
     if not os.path.exists(os.path.join(ENUM_DIR, "TextureAddressableData.cs")):
         code_str = """
+
 
 using System;
 using System.Collections.Generic;
@@ -2278,12 +2430,13 @@ namespace GameCore.Texture
         {
             if (isSprite)
             {
-                return spriteData.GetAddressableObjectResult() is Sprite sprite ? new[] { sprite } : spriteData.GetAddressableObjectArrayResult();
+                return spriteData.GetAddressableObjectArrayResult();
             }
             return null;
         }
     }
 }
+        
         
         """
         
@@ -2372,79 +2525,115 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using GameCore.Enums;
+using UnityEngine.AddressableAssets;      
+using UnityEngine.ResourceManagement.AsyncOperations;
+
 namespace GameCore.Texture
 {
     public class TextureBinaryReader
     {
-        public static TextureDatabase LoadTextureDatabaseFromBinary(string filePath)
+        public static TextureDatabase LoadTextureDatabaseFromBinary(string filePath, bool addressable = false)
         {
-            if (!File.Exists(filePath))
+            if (!addressable)
             {
-                Debug.LogError($"Binary file not found: {filePath}");
-                return null;
-            }
-
-            TextureDatabase database = new TextureDatabase();
-
-            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
-            {
-                int groupCount = reader.ReadInt32();
-                int[] offsets = new int[groupCount];
-
-                for (int i = 0; i < groupCount; i++)
+                if (!File.Exists(filePath))
                 {
-                    offsets[i] = reader.ReadInt32();
-                }
-
-                string[] groupNames = Enum.GetNames(typeof(TextureGroup));
-                if (groupCount > groupNames.Length - 1)
-                {
-                    Debug.LogError("Binary contains more groups than defined in TextureGroup enum.");
+                    Debug.LogError($"Binary file not found: {filePath}");
                     return null;
                 }
 
-                for (int i = 0; i < groupCount; i++)
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                 {
-                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                    int textureCount = reader.ReadInt32();
-                    List<TextureDatabase.TextureData> textures = new List<TextureDatabase.TextureData>();
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_TEXTURE_BIN_FILE);
 
-                    for (int j = 0; j < textureCount; j++)
+                handle.WaitForCompletion();   // 同期的に待機（ロード画面などで呼ぶ想定）
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {SupportFiles.ALL_TEXTURE_BIN_FILE}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    TextureDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);   // 必ず解放
+                    return database;
+                }
+            }
+        }
+
+        // 共通読み込みロジック（コード重複を避けるため抽出）
+        private static TextureDatabase ReadDatabase(BinaryReader reader)
+        {
+            TextureDatabase database = new TextureDatabase();
+
+            int groupCount = reader.ReadInt32();
+            int[] offsets = new int[groupCount];
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                offsets[i] = reader.ReadInt32();
+            }
+
+            string[] groupNames = Enum.GetNames(typeof(TextureGroup));
+            if (groupCount > groupNames.Length - 1)
+            {
+                Debug.LogError("Binary contains more groups than defined in TextureGroup enum.");
+                return null;
+            }
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                int textureCount = reader.ReadInt32();
+                List<TextureDatabase.TextureData> textures = new List<TextureDatabase.TextureData>();
+
+                for (int j = 0; j < textureCount; j++)
+                {
+                    int textureId = reader.ReadInt32();
+                    string textureIdName = ReadNullTerminatedString(reader);
+                    string addressablePath = ReadNullTerminatedString(reader);
+                    bool isSpriteSheet = reader.ReadBoolean();
+                    int spriteCount = reader.ReadInt32();
+                    List<TextureDatabase.SpriteData> sprites = new List<TextureDatabase.SpriteData>();
+
+                    for (int k = 0; k < spriteCount; k++)
                     {
-                        int textureId = reader.ReadInt32();
-                        string textureIdName = ReadNullTerminatedString(reader);
-                        string addressablePath = ReadNullTerminatedString(reader);
-                        bool isSpriteSheet = reader.ReadBoolean();
-                        int spriteCount = reader.ReadInt32();
-                        List<TextureDatabase.SpriteData> sprites = new List<TextureDatabase.SpriteData>();
+                        int spriteTextureId = reader.ReadInt32();
+                        string spriteIdName = ReadNullTerminatedString(reader);
+                        string spriteAddressablePath = ReadNullTerminatedString(reader);
 
-                        for (int k = 0; k < spriteCount; k++)
-                        {
-                            int spriteTextureId = reader.ReadInt32();
-                            string spriteIdName = ReadNullTerminatedString(reader);
-                            string spriteAddressablePath = ReadNullTerminatedString(reader);
-
-                            sprites.Add(new TextureDatabase.SpriteData(
-                                textureID: (TextureID)spriteTextureId,
-                                idName: spriteIdName,
-                                addressablePath: spriteAddressablePath
-                            ));
-                        }
-
-                        textures.Add(new TextureDatabase.TextureData(
-                            textureID: (TextureID)textureId,
-                            idName: textureIdName,
-                            addressablePath: addressablePath,
-                            sprites: sprites,
-                            isSpriteSheet: isSpriteSheet
+                        sprites.Add(new TextureDatabase.SpriteData(
+                            textureID: (TextureID)spriteTextureId,
+                            idName: spriteIdName,
+                            addressablePath: spriteAddressablePath
                         ));
                     }
 
-                    database.GroupedTexturesList.Add(new TextureDatabase.GroupedTextures(
-                        group: (TextureGroup)(i + 1),
-                        textures: textures
+                    textures.Add(new TextureDatabase.TextureData(
+                        textureID: (TextureID)textureId,
+                        idName: textureIdName,
+                        addressablePath: addressablePath,
+                        sprites: sprites,
+                        isSpriteSheet: isSpriteSheet
                     ));
                 }
+
+                database.GroupedTexturesList.Add(new TextureDatabase.GroupedTextures(
+                    group: (TextureGroup)(i + 1),
+                    textures: textures
+                ));
             }
 
             return database;
@@ -2532,7 +2721,7 @@ def generate_texture_bin():
     テクスチャデータのバイナリファイルを生成
     """
     data = load_texture_data()
-    with open(os.path.join(TEXTURE_DATA, 'texture_data.bin'), 'wb') as f:
+    with open(os.path.join(TEXTURE_DATA, 'texture_data.bytes'), 'wb') as f:
         groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
@@ -2570,15 +2759,20 @@ def generate_texture_bin():
             for texture in textures:
                 texture_id = texture_id_map.get(f"{group}_{texture['name']}", 0)
                 f.write(struct.pack('i', texture_id))
+                id_name = texture['name'].encode('utf-8') + b'\0'
+                f.write(id_name)
                 path_bytes = texture['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
                 sprites = texture.get('sprites', [])
-                f.write(struct.pack('i', len(sprites)))
                 isSpriteRender = texture.get('isSpriteRender', False)
                 f.write(struct.pack('B', 1 if isSpriteRender else 0))
+                sprite_count = len(sprites)
+                f.write(struct.pack('i', sprite_count))
                 for sprite in sprites:
                     sprite_id = sprite_id_map.get(f"{group}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['name']}", 0))
                     f.write(struct.pack('i', sprite_id))
+                    sprite_name = sprite.encode('utf-8') + b'\0'
+                    f.write(sprite_name)
                     sprite_path = f"{texture['path']}#{sprite}".encode('utf-8') + b'\0'
                     f.write(sprite_path)
             current_offset = f.tell()
@@ -2872,67 +3066,102 @@ namespace GameCore.Gameobject
             
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, 'GameObjectBinaryReader.cs')):
         code_str = """
-        using System;
+ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using GameCore.Enums;
+using UnityEngine.AddressableAssets;           // ← 追加
+using UnityEngine.ResourceManagement.AsyncOperations; // ← 追加
 
 namespace GameCore.Gameobject
 {
     public class GameObjectBinaryReader
     {
-        public static GameObjectDatabase LoadGameObjectDatabaseFromBinary(string filePath)
+        public static GameObjectDatabase LoadGameObjectDatabaseFromBinary(string filePath, bool addressable = false)
         {
-            if (!File.Exists(filePath))
+            if (!addressable)
             {
-                Debug.LogError($"Binary file not found: {filePath}");
-                return null;
-            }
-
-            GameObjectDatabase database = new GameObjectDatabase();
-
-            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
-            {
-                int groupCount = reader.ReadInt32();
-                int[] offsets = new int[groupCount];
-
-                for (int i = 0; i < groupCount; i++)
+                if (!File.Exists(filePath))
                 {
-                    offsets[i] = reader.ReadInt32();
-                }
-
-                string[] groupNames = Enum.GetNames(typeof(GameObjectGroup));
-                if (groupCount > groupNames.Length - 1)
-                {
-                    Debug.LogError("Binary contains more groups than defined in GameObjectGroup enum.");
+                    Debug.LogError($"Binary file not found: {filePath}");
                     return null;
                 }
 
-                for (int i = 0; i < groupCount; i++)
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                 {
-                    reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                    int gameObjectCount = reader.ReadInt32();
-                    List<GameObjectDatabase.GameObjectData> gameObjects = new List<GameObjectDatabase.GameObjectData>();
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
 
-                    for (int j = 0; j < gameObjectCount; j++)
-                    {
-                        int gameObjectId = reader.ReadInt32();
-                        string idName = ReadNullTerminatedString(reader);
-                        string addressablePath = ReadNullTerminatedString(reader);
+                handle.WaitForCompletion();
 
-                        gameObjects.Add(new GameObjectDatabase.GameObjectData(
-                            gameObjectID: (GameObjectID)gameObjectId,
-                            idName: idName,
-                            addressablePath: addressablePath
-                        ));
-                    }
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
 
-                    database.GroupedGameObjectsList.Add(new GameObjectDatabase.GroupedGameObjects(
-                        group: (GameObjectGroup)(i + 1),
-                        gameObjects: gameObjects
+                TextAsset textAsset = handle.Result;
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    GameObjectDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);
+                    return database;
+                }
+            }
+        }
+
+        // 共通読み込みロジック
+        private static GameObjectDatabase ReadDatabase(BinaryReader reader)
+        {
+            GameObjectDatabase database = new GameObjectDatabase();
+
+            int groupCount = reader.ReadInt32();
+            int[] offsets = new int[groupCount];
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                offsets[i] = reader.ReadInt32();
+            }
+
+            string[] groupNames = Enum.GetNames(typeof(GameObjectGroup));
+            if (groupCount > groupNames.Length - 1)
+            {
+                Debug.LogError("Binary contains more groups than defined in GameObjectGroup enum.");
+                return null;
+            }
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                int gameObjectCount = reader.ReadInt32();
+                List<GameObjectDatabase.GameObjectData> gameObjects = new List<GameObjectDatabase.GameObjectData>();
+
+                for (int j = 0; j < gameObjectCount; j++)
+                {
+                    int gameObjectId = reader.ReadInt32();
+                    string idName = ReadNullTerminatedString(reader);
+                    string addressablePath = ReadNullTerminatedString(reader);
+
+                    gameObjects.Add(new GameObjectDatabase.GameObjectData(
+                        gameObjectID: (GameObjectID)gameObjectId,
+                        idName: idName,
+                        addressablePath: addressablePath
                     ));
                 }
+
+                database.GroupedGameObjectsList.Add(new GameObjectDatabase.GroupedGameObjects(
+                    group: (GameObjectGroup)(i + 1),
+                    gameObjects: gameObjects
+                ));
             }
 
             return database;
@@ -3403,7 +3632,7 @@ def generate_gameobject_bin():
     ゲームオブジェクトデータのバイナリファイルを生成
     """
     data = load_gameobject_data()
-    with open(os.path.join(GAMEOBJECT_DATA, 'gameobject_data.bin'), 'wb') as f:
+    with open(os.path.join(GAMEOBJECT_DATA, 'gameobject_data.bytes'), 'wb') as f:
         groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))

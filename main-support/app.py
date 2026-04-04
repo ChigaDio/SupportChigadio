@@ -648,6 +648,8 @@ using System.IO;
 using System.Threading;
 using System;
 using UnityEngine;
+using UnityEngine.AddressableAssets;                    // ← 追加
+using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
 
 public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
 {
@@ -664,37 +666,62 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
         DontDestroyOnLoad(instance);
     }
 
-
     private void OnDestroy()
     {
-
     }
 
     /// <summary>
-    /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
+    /// ALL_ID_BIN を読み込み（Addressable対応追加）
     /// </summary>
-    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataHeader, UniTask> onLoaded)
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataHeader, UniTask> onLoaded, bool addressable = false)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-
         string path = SupportFiles.ALL_ID_BIN;
-
-
 
         try
         {
-            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-            using (BinaryReader reader = new BinaryReader(fs))
+            if (!addressable)
             {
-                if (m_classDataTables == null) m_classDataTables = new ClassDataHeader(reader);
-                if (onLoaded != null)
+                // 従来の同期ファイル読み込み
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (BinaryReader reader = new BinaryReader(fs))
                 {
-                    // スレッド切り替えを内部で処理
-                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
                 }
-                isLoaded = true;
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(path);
+
+                TextAsset textAsset = await handle.ToUniTask(cancellationToken: cts);
+
+                if (textAsset == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {path}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return;
+                }
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
+                }
+
+                if (handle.IsValid()) Addressables.Release(handle);
             }
         }
         catch (OperationCanceledException)
@@ -708,16 +735,15 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
     }
 
     private async UniTask ExecuteOnThreadPoolAndReturn(
-    Func<BinaryReader, ClassDataHeader, UniTask> action,
-    BinaryReader reader,
-    ClassDataHeader classDataHeader,
-    CancellationToken token)
+        Func<BinaryReader, ClassDataHeader, UniTask> action,
+        BinaryReader reader,
+        ClassDataHeader classDataHeader,
+        CancellationToken token)
     {
         await UniTask.SwitchToThreadPool();
         await action(reader, classDataHeader).AttachExternalCancellation(token);
         await UniTask.SwitchToMainThread();
     }
-
 }
 
     """
@@ -734,6 +760,8 @@ using System.IO;
 using System.Threading;
 using System;
 using UnityEngine;
+using UnityEngine.AddressableAssets;                    // ← 追加
+using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
 
 public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
 {
@@ -750,37 +778,62 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
         DontDestroyOnLoad(instance);
     }
 
-
     private void OnDestroy()
     {
-
     }
 
     /// <summary>
-    /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
+    /// ALL_MATRIX_ID_BIN を読み込み（Addressable対応追加）
     /// </summary>
-    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded)
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded, bool addressable = false)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-
         string path = SupportFiles.ALL_MATRIX_ID_BIN;
-
-
 
         try
         {
-            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-            using (BinaryReader reader = new BinaryReader(fs))
+            if (!addressable)
             {
-                if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
-                if (onLoaded != null)
+                // 従来の同期ファイル読み込み
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (BinaryReader reader = new BinaryReader(fs))
                 {
-                    // スレッド切り替えを内部で処理
-                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
                 }
-                isLoaded = true;
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(path);
+
+                TextAsset textAsset = await handle.ToUniTask(cancellationToken: cts);
+
+                if (textAsset == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {path}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return;
+                }
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
+                }
+
+                if (handle.IsValid()) Addressables.Release(handle);
             }
         }
         catch (OperationCanceledException)
@@ -794,18 +847,16 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
     }
 
     private async UniTask ExecuteOnThreadPoolAndReturn(
-    Func<BinaryReader, ClassDataMatrixHeader, UniTask> action,
-    BinaryReader reader,
-    ClassDataMatrixHeader classDataHeader,
-    CancellationToken token)
+        Func<BinaryReader, ClassDataMatrixHeader, UniTask> action,
+        BinaryReader reader,
+        ClassDataMatrixHeader classDataHeader,
+        CancellationToken token)
     {
         await UniTask.SwitchToThreadPool();
         await action(reader, classDataHeader).AttachExternalCancellation(token);
         await UniTask.SwitchToMainThread();
     }
-
 }
-
 
 
     """
@@ -847,21 +898,21 @@ namespace GameCore
 
         //dataID
         public const string ID_FOLDER = "class-data-id";
-        public const string ID_BIN_FILE = "all_class_data.bin";
+        public const string ID_BIN_FILE = "all_class_data.bytes";
 
         //matrixID
         public const string MATRIX_DATA_ID_FOLDER = "class-data-matrix-id";
-        public const string MATRIX_ID_BIN_FILE = "all_class_data_matrix.bin";
+        public const string MATRIX_ID_BIN_FILE = "all_class_data_matrix.bytes";
 
         // ファイル名（ここだけ定義すればOK）
-        public const string ALL_SOUND_BIN_FILE = "sound_data.bin";
-        public const string ALL_TEXTURE_BIN_FILE = "texture_data.bin";
-        public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bin";
+        public const string ALL_SOUND_BIN_FILE = "sound_data.bytes";
+        public const string ALL_TEXTURE_BIN_FILE = "texture_data.bytes";
+        public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bytes";
 
         //Scenario
         public const string SCENARIO_FOLDER = "scenario-data";
         public const string SCENARIO_EVEMT_FOLDER = "scenario-event-data";
-        public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bin";
+        public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bytes";
 
         // キャッシュ（最初に解決したパスを保持）
         public static string s_cachedSupportDataPath = null;
@@ -928,7 +979,7 @@ namespace GameCore
         }
 
         /// <summary>
-        /// これだけ参照すれば all_sound.bin のフルパスが得られる（呼び出し側はこれだけ見れば良い）
+        /// これだけ参照すれば all_sound.bytes のフルパスが得られる（呼び出し側はこれだけ見れば良い）
         /// </summary>
         public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_TEXTURE_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, TEXTURE_FOLDER, ALL_TEXTURE_BIN_FILE)).Replace("\\\\", "/");
@@ -972,6 +1023,11 @@ namespace GameCore
         /// 存在確認のショートカット
         /// </summary>
         public static bool ALL_SOUND_BIN_Exists => File.Exists(ALL_SOUND_BIN);
+        
+                /// <summary>
+        /// Addressableのチェック
+        /// </summary>
+        public static bool ADDRESSABLE_CHECK = true;
     }
 }
 
@@ -2013,7 +2069,7 @@ def generate_binary_data(name, json_data):
 @app.route('/api/generate-all-binary', methods=['POST'])
 def generate_all_binary():
     try:
-        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'all_class_data.bin')
+        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'all_class_data.bytes')
         header = bytearray()
         data_sections = bytearray()
         
@@ -2066,7 +2122,7 @@ def generate_all_binary():
                 
                 pos += 4
         
-        logger.info("Generated all_class_data.bin")
+        logger.info("Generated all_class_data.bytes")
         return jsonify({"message": "All binary generated successfully"})
     except Exception as e:
         logger.error(f"Error generating all binary: {str(e)}")
@@ -2698,7 +2754,7 @@ def generate_binary(name):
         data = request.get_json()
         columns = data['columns']
         rows = data['rows']
-        bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bin")
+        bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bytes")
         os.makedirs(os.path.dirname(bin_path), exist_ok=True)
         
         basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
@@ -3720,7 +3776,7 @@ def generate_binary_matrix(name):
         fields = json_data['fields']
         basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data= get_type_lists()
 
-        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bin"), 'wb') as f:
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bytes"), 'wb') as f:
             f.write(struct.pack('i', len(row_keys)))
             for rk in row_keys:
                 f.write(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
@@ -3809,7 +3865,7 @@ def generate_binary_matrix_data(name, json_data):
 @app.route('/api/generate-all-binary-matrix', methods=['POST'])
 def generate_all_binary_matrix():
     try:
-        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'all_class_data_matrix.bin')
+        all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'all_class_data_matrix.bytes')
         header = bytearray()
         data_sections = bytearray()
         
@@ -3867,7 +3923,7 @@ def generate_all_binary_matrix():
                 
                 pos += 4
         
-        logger.info("Generated all_class_data_matrix.bin")
+        logger.info("Generated all_class_data_matrix.bytes")
         return jsonify({"message": "All matrix binary generated successfully"})
     except Exception as e:
         logger.error(f"Error generating all matrix binary: {str(e)}")

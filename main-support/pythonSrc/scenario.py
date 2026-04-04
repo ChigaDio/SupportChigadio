@@ -558,6 +558,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using UnityEngine;
+using UnityEngine.AddressableAssets;                    // ← 追加
+using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
 
 namespace GameCore.Scenario
 {
@@ -584,7 +587,7 @@ namespace GameCore.Scenario
             }
         }
 
-        public static long GetEventSeekPos(string eventName,string subName)
+        public static long GetEventSeekPos(string eventName, string subName)
         {
             var find = _events.Find(data => data.EventId == eventName);
             var findSub = find.SubEvents.Find(data => data.SubEventName == subName);
@@ -597,70 +600,108 @@ namespace GameCore.Scenario
             return findSub.SubEventOffset;
         }
 
-        public static async UniTask ReadHeaderAsync(Action action = null)
+        /// <summary>
+        /// ALL_SCENARIO_EVENTS_BIN を読み込む（Addressable対応追加）
+        /// </summary>
+        public static async UniTask ReadHeaderAsync(bool addressable = false, Action action = null)
         {
-            using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
-            using (var reader = new BinaryReader(stream, Encoding.UTF8))
+            if (!addressable)
             {
-                int eventCount = reader.ReadInt32();
-
-
-                if (eventCount <= 0)
+                // 従来の同期ファイル読み込み
+                using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
+                using (var reader = new BinaryReader(stream, Encoding.UTF8))
                 {
-                    throw new InvalidDataException($"Invalid event count: {eventCount}");
+                    await ReadHeaderFromReader(reader, action);
                 }
-
-                Events.Clear();
-                for (int i = 0; i < eventCount; i++)
-                {
-                    int idLength = reader.ReadInt32();
-                    if (idLength < 0 || idLength > 1000) // 妥当な長さチェック
-                    {
-                        throw new InvalidDataException($"Invalid event ID length: {idLength} at position {stream.Position - 4}");
-                    }
-                    string eventId = Encoding.UTF8.GetString(reader.ReadBytes(idLength));
-                    int nameLength = reader.ReadInt32();
-                    if (nameLength < 0 || nameLength > 1000)
-                    {
-                        throw new InvalidDataException($"Invalid event name length: {nameLength} at position {stream.Position - 4}");
-                    }
-                    string eventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength));
-                    long eventOffset = reader.ReadInt64();
-                    if (eventOffset < 0 || eventOffset > stream.Length)
-                    {
-                        throw new InvalidDataException($"Invalid event offset: {eventOffset} at position {stream.Position - 8}");
-                    }
-
-                    int subEventCount = reader.ReadInt32();
-                    if (subEventCount < 0 || subEventCount > 1000)
-                    {
-                        throw new InvalidDataException($"Invalid subEvent count: {subEventCount} at position {stream.Position - 4}");
-                    }
-
-                    var subEvents = new List<ScenarioSubEventInfo>();
-                    for (int j = 0; j < subEventCount; j++)
-                    {
-                        int subEventId = reader.ReadInt32();
-                        int subNameLength = reader.ReadInt32();
-                        if (subNameLength < 0 || subNameLength > 1000)
-                        {
-                            throw new InvalidDataException($"Invalid subEvent name length: {subNameLength} at position {stream.Position - 4}");
-                        }
-                        string subEventName = Encoding.UTF8.GetString(reader.ReadBytes(subNameLength));
-                        long subEventOffset = reader.ReadInt64();
-                        if (subEventOffset < 0 || subEventOffset > stream.Length)
-                        {
-                            throw new InvalidDataException($"Invalid subEvent offset: {subEventOffset} at position {stream.Position - 8}");
-                        }
-                        subEvents.Add(new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset));
-                    }
-
-                    Events.Add(new ScenarioEventInfo(eventId, eventName, eventOffset, subEvents));
-                    await UniTask.Yield();
-                }
-                await UniTask.Yield();
-                action?.Invoke();
             }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_SCENARIO_EVENTS_BIN);
+
+                TextAsset textAsset = await handle.ToUniTask();   // UniTaskで非同期待機
+
+                if (textAsset == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {SupportFiles.ALL_SCENARIO_EVENTS_BIN}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return;
+                }
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (var reader = new BinaryReader(ms, Encoding.UTF8))
+                {
+                    await ReadHeaderFromReader(reader, action);
+                }
+
+                Addressables.Release(handle);   // 必ず解放
+            }
+        }
+
+        /// <summary>
+        /// 実際の読み込みロジック（FileStream / MemoryStream 共通）
+        /// </summary>
+        private static async UniTask ReadHeaderFromReader(BinaryReader reader, Action action = null)
+        {
+            int eventCount = reader.ReadInt32();
+
+            if (eventCount <= 0)
+            {
+                throw new InvalidDataException($"Invalid event count: {eventCount}");
+            }
+
+            Events.Clear();
+            for (int i = 0; i < eventCount; i++)
+            {
+                int idLength = reader.ReadInt32();
+                if (idLength < 0 || idLength > 1000)
+                {
+                    throw new InvalidDataException($"Invalid event ID length: {idLength} at position {reader.BaseStream.Position - 4}");
+                }
+                string eventId = Encoding.UTF8.GetString(reader.ReadBytes(idLength));
+
+                int nameLength = reader.ReadInt32();
+                if (nameLength < 0 || nameLength > 1000)
+                {
+                    throw new InvalidDataException($"Invalid event name length: {nameLength} at position {reader.BaseStream.Position - 4}");
+                }
+                string eventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength));
+
+                long eventOffset = reader.ReadInt64();
+                if (eventOffset < 0 || eventOffset > reader.BaseStream.Length)
+                {
+                    throw new InvalidDataException($"Invalid event offset: {eventOffset} at position {reader.BaseStream.Position - 8}");
+                }
+
+                int subEventCount = reader.ReadInt32();
+                if (subEventCount < 0 || subEventCount > 1000)
+                {
+                    throw new InvalidDataException($"Invalid subEvent count: {subEventCount} at position {reader.BaseStream.Position - 4}");
+                }
+
+                var subEvents = new List<ScenarioSubEventInfo>();
+                for (int j = 0; j < subEventCount; j++)
+                {
+                    int subEventId = reader.ReadInt32();
+                    int subNameLength = reader.ReadInt32();
+                    if (subNameLength < 0 || subNameLength > 1000)
+                    {
+                        throw new InvalidDataException($"Invalid subEvent name length: {subNameLength} at position {reader.BaseStream.Position - 4}");
+                    }
+                    string subEventName = Encoding.UTF8.GetString(reader.ReadBytes(subNameLength));
+                    long subEventOffset = reader.ReadInt64();
+                    if (subEventOffset < 0 || subEventOffset > reader.BaseStream.Length)
+                    {
+                        throw new InvalidDataException($"Invalid subEvent offset: {subEventOffset} at position {reader.BaseStream.Position - 8}");
+                    }
+                    subEvents.Add(new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset));
+                }
+
+                Events.Add(new ScenarioEventInfo(eventId, eventName, eventOffset, subEvents));
+                await UniTask.Yield();   // 元の処理と同じくフレーム分割
+            }
+            await UniTask.Yield();
+            action?.Invoke();
         }
 
         // イベント名とサブイベントIDからサブイベントのシーク座標を取得するメソッド
@@ -1150,7 +1191,7 @@ def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, cla
     
 
 def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data ):
-    all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bin')
+    all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bytes')
     header = bytearray()
     data_sections = bytearray()
     
