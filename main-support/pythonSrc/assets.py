@@ -887,7 +887,7 @@ namespace GameCore.Sound
         private async UniTask LoadDatabaseAsync()
         {
             string path = SupportFiles.ADDRESSABLE_CHECK ? SupportFiles.ALL_SOUND_BIN_FILE : SupportFiles.ALL_SOUND_BIN;
-            database = SoundBinaryReader.LoadSoundDatabaseFromBinary(path,SupportFiles.ADDRESSABLE_CHECK);
+            database =  await SoundBinaryReader.LoadSoundDatabaseFromBinaryAsync(path,SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
                 Debug.LogError("[SoundCore] Failed to load SoundDatabase.");
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
@@ -966,7 +966,7 @@ namespace GameCore.Sound
         public void LoadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null)
             => LoadGroupAsync(group, category, onCompleted).Forget();
 
-        private async UniTask LoadGroupAsync(SoundGroup group, GroupCategory category, Action onCompleted)
+        public async UniTask LoadGroupAsync(SoundGroup group, GroupCategory category, Action onCompleted)
         {
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
@@ -1245,6 +1245,7 @@ namespace GameCore.Sound
     }
 }
 
+
 """
         with open(os.path.join(SOUND_DATA, "SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -1314,13 +1315,66 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using GameCore.Enums;
-using UnityEngine.AddressableAssets;           // ← 追加
-using UnityEngine.ResourceManagement.AsyncOperations; // ← 追加
+using UnityEngine.AddressableAssets;         
+using UnityEngine.ResourceManagement.AsyncOperations;
+using Cysharp.Threading.Tasks;
 
 namespace GameCore.Sound
 {
     public class SoundBinaryReader
     {
+
+        public static async UniTask<SoundDatabase> LoadSoundDatabaseFromBinaryAsync(string filePath, bool addressable = false)
+        {
+            if (!addressable)
+            {
+                if (!File.Exists(filePath))
+                {
+                    UnityEngine.Debug.LogError($"Binary file not found: {filePath}");
+                    return null;
+                }
+
+                return await UniTask.RunOnThreadPool(() =>
+                {
+                    using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+                    {
+                        return ReadDatabase(reader);
+                    }
+                });
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
+
+                await handle.ToUniTask();   // ここはメインスレッドで待機完了
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    UnityEngine.Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+
+                // ★★★ ここでメインスレッド上で .bytes を取得 ★★★
+                byte[] rawBytes = textAsset.bytes;        // ← これを先に取る！
+
+                // 解析だけ別スレッドに逃がす
+                SoundDatabase database;
+                using (MemoryStream ms = new MemoryStream(rawBytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    database = ReadDatabase(reader);
+                }
+
+                Addressables.Release(handle);
+
+                return database;
+            }
+        }
         public static SoundDatabase LoadSoundDatabaseFromBinary(string filePath, bool addressable = false)
         {
             if (!addressable)
@@ -1339,9 +1393,12 @@ namespace GameCore.Sound
             else
             {
                 // ====================== Addressableの場合 ======================
+                // sound_data.bytes
                 AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
 
+
                 handle.WaitForCompletion();
+
 
                 if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
                 {
@@ -1428,6 +1485,7 @@ namespace GameCore.Sound
         }
     }
 }
+
 """ 
         with open(os.path.join(SOUND_DATA, 'SoundBinaryReader.cs'), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -2152,8 +2210,6 @@ def generate_texture_csharp():
     # TextureCore.cs
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
         code_str = """
-
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -2185,7 +2241,7 @@ namespace GameCore.Texture
 
         private async UniTask LoadDatabaseAsync()
         {
-            database = TextureBinaryReader.LoadTextureDatabaseFromBinary(SupportFiles.ALL_TEXTURE_BIN,SupportFiles.ADDRESSABLE_CHECK);
+            database = await TextureBinaryReader.LoadTextureDatabaseFromBinaryAsync(SupportFiles.ALL_TEXTURE_BIN,SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
             {
                 Debug.LogError("Failed to load TextureDatabase from binary.");
@@ -2337,6 +2393,7 @@ namespace GameCore.Texture
             Debug.LogWarning($"No asset found for TextureID {textureId} in group {group}.");
             return null;
         }
+
         private void OnDestroy()
         {
             foreach (var group in loadedAssets.Values)
@@ -2350,6 +2407,8 @@ namespace GameCore.Texture
         }
     }
 }
+
+
 
 
 
@@ -2529,6 +2588,7 @@ using UnityEngine;
 using GameCore.Enums;
 using UnityEngine.AddressableAssets;      
 using UnityEngine.ResourceManagement.AsyncOperations;
+using Cysharp.Threading.Tasks;
 
 namespace GameCore.Texture
 {
@@ -2554,7 +2614,10 @@ namespace GameCore.Texture
                 // ====================== Addressableの場合 ======================
                 AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_TEXTURE_BIN_FILE);
 
-                handle.WaitForCompletion();   // 同期的に待機（ロード画面などで呼ぶ想定）
+
+
+                handle.WaitForCompletion();
+
 
                 if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
                 {
@@ -2566,6 +2629,53 @@ namespace GameCore.Texture
                 TextAsset textAsset = handle.Result;
 
                 using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    TextureDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);   // 必ず解放
+                    return database;
+                }
+            }
+        }
+
+        public static async UniTask<TextureDatabase> LoadTextureDatabaseFromBinaryAsync(string filePath, bool addressable = false)
+        {
+            if (!addressable)
+            {
+                if (!File.Exists(filePath))
+                {
+                    Debug.LogError($"Binary file not found: {filePath}");
+                    return null;
+                }
+
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+                {
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_TEXTURE_BIN_FILE);
+
+
+
+                await handle.ToUniTask();
+
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {SupportFiles.ALL_TEXTURE_BIN_FILE}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+
+
+                byte[] rawBytes = textAsset.bytes;
+
+                using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
                     TextureDatabase database = ReadDatabase(reader);
@@ -2896,7 +3006,7 @@ namespace GameCore.Gameobject
         private async UniTask LoadDatabaseAsync()
         {
             string path = SupportFiles.ADDRESSABLE_CHECK ? SupportFiles.ALL_GAMEOBJECT_BIN_FILE : SupportFiles.ALL_GAMEOBJECT_BIN;
-            database = GameObjectBinaryReader.LoadGameObjectDatabaseFromBinary(path, SupportFiles.ADDRESSABLE_CHECK);
+            database = await GameObjectBinaryReader.LoadGameObjectDatabaseFromBinaryAsync(path, SupportFiles.ADDRESSABLE_CHECK);
             if (database == null)
             {
                 Debug.LogError("Failed to load GameObjectDatabase from binary.");
@@ -3011,6 +3121,7 @@ namespace GameCore.Gameobject
         }
     }
 }
+
 """
         with open(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -3069,13 +3180,14 @@ namespace GameCore.Gameobject
             
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, 'GameObjectBinaryReader.cs')):
         code_str = """
- using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using GameCore.Enums;
-using UnityEngine.AddressableAssets;           // ← 追加
-using UnityEngine.ResourceManagement.AsyncOperations; // ← 追加
+using UnityEngine.AddressableAssets;         
+using UnityEngine.ResourceManagement.AsyncOperations;
+using Cysharp.Threading.Tasks;
 
 namespace GameCore.Gameobject
 {
@@ -3103,6 +3215,7 @@ namespace GameCore.Gameobject
 
                 handle.WaitForCompletion();
 
+
                 if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
                 {
                     Debug.LogError($"Failed to load Addressable binary: {filePath}");
@@ -3113,6 +3226,50 @@ namespace GameCore.Gameobject
                 TextAsset textAsset = handle.Result;
 
                 using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    GameObjectDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);
+                    return database;
+                }
+            }
+        }
+
+        public static async UniTask<GameObjectDatabase> LoadGameObjectDatabaseFromBinaryAsync(string filePath, bool addressable = false)
+        {
+            if (!addressable)
+            {
+                if (!File.Exists(filePath))
+                {
+                    Debug.LogError($"Binary file not found: {filePath}");
+                    return null;
+                }
+
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+                {
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
+
+                await handle.ToUniTask();
+
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+
+                byte[] rawBytes = textAsset.bytes;
+
+                using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
                     GameObjectDatabase database = ReadDatabase(reader);
@@ -3182,6 +3339,7 @@ namespace GameCore.Gameobject
         }
     }
 }
+        
         """
 
         with open(os.path.join(GAMEOBJECT_DATA, 'GameObjectBinaryReader.cs'), 'w', encoding='utf-8') as f:

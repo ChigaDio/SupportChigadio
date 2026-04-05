@@ -658,6 +658,7 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
     private ClassDataHeader m_classDataTables;
     private CancellationToken cts;
     private bool isLoaded;
+    public bool IsLoaded => isLoaded;
 
     public override void AwakeSingleton()
     {
@@ -665,8 +666,10 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
         instance = this;
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         isLoaded = false;
+        
         DontDestroyOnLoad(instance);
     }
+    
 
     private void OnDestroy()
     {
@@ -679,9 +682,8 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
-        
-        addressable |= SupportFiles.ADDRESSABLE_CHECK;
-        string path = addressable ?  SupportFiles.ID_BIN_FILE  :  SupportFiles.ALL_ID_BIN;
+
+        string path = addressable == true ?  SupportFiles.ID_BIN_FILE  :  SupportFiles.ALL_ID_BIN;
 
         try
         {
@@ -743,11 +745,16 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
         ClassDataHeader classDataHeader,
         CancellationToken token)
     {
+#if UNITY_WEBGL
+        await action(reader, classDataHeader).AttachExternalCancellation(token);
+#else
         await UniTask.SwitchToThreadPool();
         await action(reader, classDataHeader).AttachExternalCancellation(token);
         await UniTask.SwitchToMainThread();
+#endif
     }
 }
+
 
     """
     with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataIDCore.cs"), 'w', encoding='utf-8') as f:
@@ -763,8 +770,6 @@ using System.IO;
 using System.Threading;
 using System;
 using UnityEngine;
-using UnityEngine.AddressableAssets;                    // ← 追加
-using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
 
 public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
 {
@@ -781,63 +786,37 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
         DontDestroyOnLoad(instance);
     }
 
+
     private void OnDestroy()
     {
+
     }
 
     /// <summary>
-    /// ALL_MATRIX_ID_BIN を読み込み（Addressable対応追加）
+    /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
     /// </summary>
-    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded, bool addressable = false)
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-        addressable |= SupportFiles.ADDRESSABLE_CHECK;
-        string path = addressable ?  SupportFiles.MATRIX_ID_BIN_FILE  :  SupportFiles.ALL_MATRIX_ID_BIN;
+
+        string path = SupportFiles.ALL_MATRIX_ID_BIN;
+
+
 
         try
         {
-            if (!addressable)
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+            using (BinaryReader reader = new BinaryReader(fs))
             {
-                // 従来の同期ファイル読み込み
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-                using (BinaryReader reader = new BinaryReader(fs))
+                if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                if (onLoaded != null)
                 {
-                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
-                    if (onLoaded != null)
-                    {
-                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
-                    }
-                    isLoaded = true;
+                    // スレッド切り替えを内部で処理
+                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
                 }
-            }
-            else
-            {
-                // ====================== Addressableの場合 ======================
-                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(path);
-
-                TextAsset textAsset = await handle.ToUniTask(cancellationToken: cts);
-
-                if (textAsset == null)
-                {
-                    Debug.LogError($"Failed to load Addressable binary: {path}");
-                    if (handle.IsValid()) Addressables.Release(handle);
-                    return;
-                }
-
-                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
-                using (BinaryReader reader = new BinaryReader(ms))
-                {
-                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
-                    if (onLoaded != null)
-                    {
-                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
-                    }
-                    isLoaded = true;
-                }
-
-                if (handle.IsValid()) Addressables.Release(handle);
+                isLoaded = true;
             }
         }
         catch (OperationCanceledException)
@@ -851,16 +830,22 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
     }
 
     private async UniTask ExecuteOnThreadPoolAndReturn(
-        Func<BinaryReader, ClassDataMatrixHeader, UniTask> action,
-        BinaryReader reader,
-        ClassDataMatrixHeader classDataHeader,
-        CancellationToken token)
+    Func<BinaryReader, ClassDataMatrixHeader, UniTask> action,
+    BinaryReader reader,
+    ClassDataMatrixHeader classDataHeader,
+    CancellationToken token)
     {
+#if UNITY_WEBGL
+        await action(reader, classDataHeader).AttachExternalCancellation(token);
+#else
         await UniTask.SwitchToThreadPool();
         await action(reader, classDataHeader).AttachExternalCancellation(token);
         await UniTask.SwitchToMainThread();
+#endif
     }
+
 }
+
 
 
     """
