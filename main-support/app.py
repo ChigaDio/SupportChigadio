@@ -2050,6 +2050,8 @@ def generate_binary_data(name, json_data):
                 property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
                 actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
                 binary_data.extend(struct.pack('i', actual_id))
+            elif col['type'] in unity_types or col['type'] in class_list:
+                write_binary_field_extend(binary_data, value, col['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
             else:
                 binary_data.extend(struct.pack('i', 0))
     
@@ -2723,7 +2725,7 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
     elif type_str in class_list:
         # ClassDataの再帰処理
         class_schema_path = os.path.join(DATA_DIR, CLASS_DATA, type_str, f"{type_str}.class.json")
-        class_schema = json.load(open(class_schema_path)) if os.path.exists(class_schema_path) else []
+        class_schema = json.load(open(class_schema_path, encoding="utf-8")) if os.path.exists(class_schema_path) else []
         for item in class_schema:  # class_data → class_schema
             array_size = item.get('arraySize', 0)
             item_value = value.get(item['name']) if isinstance(value, dict) else None
@@ -2740,6 +2742,71 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
                 write_binary_field(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data )
     else:
         f.write(struct.pack('i', 0))  # 未サポート型
+        
+def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
+    type_lower = type_str.lower()
+
+    if type_lower in TYPE_MAP:
+        # 文字列処理
+        if type_lower == 'string':
+            val_bytes = (value or '').encode('utf-8') if isinstance(value, str) else b''
+            f.extend(struct.pack('i', len(val_bytes)))
+            f.extend(val_bytes)
+
+        # ベクトル2
+        elif type_lower == 'vector2':
+            x, y = value if isinstance(value, (list, tuple)) and len(value) >= 2 else [0.0, 0.0]
+            f.extend(struct.pack('ff', float(x), float(y)))
+
+        # ベクトル3
+        elif type_lower == 'vector3':
+            x, y, z = value if isinstance(value, (list, tuple)) and len(value) >= 3 else [0.0, 0.0, 0.0]
+            f.extend(struct.pack('fff', float(x), float(y), float(z)))
+
+        # 基本型（int, float, double, bool）
+        else:
+            default_value = 0 if type_lower in ['int', 'float', 'double'] else False
+            safe_value = value if value is not None else default_value
+            if type_lower == 'int':
+                safe_value = int(safe_value)
+            elif type_lower == 'float':
+                safe_value = float(safe_value)
+            elif type_lower == 'double':
+                safe_value = float(safe_value)
+            elif type_lower == 'bool':
+                safe_value = bool(safe_value)
+            f.extend(struct.pack(TYPE_MAP[type_lower]['pack'], safe_value))
+
+    elif type_str in enum_list:
+        #数値ではなければ
+        if not isinstance(value, (int, float)):
+            # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
+            property_name = value.split('.')[-1]
+            actual_id = next((item['id'] for item in enum_data[type_str + 'ID'] if item['property'] == property_name), 0) if property_name else 0
+            value = actual_id
+        # Enumはintとして処理
+        f.extend(struct.pack('i', int(value) if value is not None else 0))
+
+    elif type_str in class_list:
+        # ClassDataの再帰処理
+        class_schema_path = os.path.join(DATA_DIR, CLASS_DATA, type_str, f"{type_str}.class.json")
+        class_schema = json.load(open(class_schema_path, encoding="utf-8")) if os.path.exists(class_schema_path) else []
+        for item in class_schema:  # class_data → class_schema
+            array_size = item.get('arraySize', 0)
+            item_value = value.get(item['name']) if isinstance(value, dict) else None
+            if array_size == -1:  # List
+                values = item_value if isinstance(item_value, list) else []
+                f.extend(struct.pack('i', len(values)))
+                for v in values:
+                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+            elif array_size > 0:  # Array
+                values = item_value if isinstance(item_value, list) else [None] * array_size
+                for v in values[:array_size]:
+                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+            else:
+                write_binary_field_extend(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data )
+    else:
+        f.extend(struct.pack('i', 0))  # 未サポート型
 
 
 # ClassDataID Binary生成（行のレコード値を正確に書き込み）
@@ -2809,7 +2876,7 @@ def generate_binary(name):
                     
                     elif col['type'] in class_list:
                         # .class.jsonを正しく参照し、col_valueから.valueを取り出す
-                        class_schema = json.load(open(os.path.join(DATA_DIR, CLASS_DATA,f"{col['type'].replace('[]', '')}", f"{col['type'].replace('[]', '')}.class.json"), 'r'))
+                        class_schema = json.load(open(os.path.join(DATA_DIR, CLASS_DATA,f"{col['type'].replace('[]', '')}", f"{col['type'].replace('[]', '')}.class.json"), 'r', encoding='utf-8')) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA,f"{col['type'].replace('[]', '')}", f"{col['type'].replace('[]', '')}.class.json")) else []
                         actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
                         for item in class_schema:
                             item_value = actual_value.get(item['name'])
@@ -3422,7 +3489,8 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         elif type_str.startswith('GameCore.Tables.'):
             read_code = f"            {var_name} = ({type_str})Enum.ToObject(typeof({type_str}), reader.ReadInt32());\n"
         elif type_str.startswith('GameCore.Classes.'):
-            read_code = f"            {var_name} = new {type_str}(reader);\n"
+            read_code = f"            {var_name} = new {type_str}();\n            {var_name}.Read(reader);\n"
+            
         else:
             read_code = f"            {var_name} = new {type_str}(); // Unsupported\n"
 
