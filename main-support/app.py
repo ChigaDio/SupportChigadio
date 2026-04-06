@@ -1940,7 +1940,7 @@ def generate_class_cs(name):
                 field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
                 f.write(field_data['field'])
                 read_codes.append(field_data['read'])
-            f.write(f"\n        public {name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
+            f.write(f"\n        public Base{name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
             for read_code in read_codes:
                 f.write(read_code)
             f.write("        }\n")
@@ -2676,7 +2676,7 @@ namespace GameCore.Tables
 
     
 #バイナリ書き込み
-def write_binary_field(f, value, type_str, enum_list, class_list):
+def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
     type_lower = type_str.lower()
 
     if type_lower in TYPE_MAP:
@@ -2711,27 +2711,33 @@ def write_binary_field(f, value, type_str, enum_list, class_list):
             f.write(struct.pack(TYPE_MAP[type_lower]['pack'], safe_value))
 
     elif type_str in enum_list:
+        #数値ではなければ
+        if not isinstance(value, (int, float)):
+            # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
+            property_name = value.split('.')[-1]
+            actual_id = next((item['id'] for item in enum_data[type_str + 'ID'] if item['property'] == property_name), 0) if property_name else 0
+            value = actual_id
         # Enumはintとして処理
         f.write(struct.pack('i', int(value) if value is not None else 0))
 
     elif type_str in class_list:
         # ClassDataの再帰処理
-        class_data = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, f"{type_str}.json"))) \
-            if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, f"{type_str}.json")) else []
-        for item in class_data:
+        class_schema_path = os.path.join(DATA_DIR, CLASS_DATA, type_str, f"{type_str}.class.json")
+        class_schema = json.load(open(class_schema_path)) if os.path.exists(class_schema_path) else []
+        for item in class_schema:  # class_data → class_schema
             array_size = item.get('arraySize', 0)
             item_value = value.get(item['name']) if isinstance(value, dict) else None
             if array_size == -1:  # List
                 values = item_value if isinstance(item_value, list) else []
                 f.write(struct.pack('i', len(values)))
                 for v in values:
-                    write_binary_field(f, v, item['type'], enum_list, class_list)
+                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
             elif array_size > 0:  # Array
                 values = item_value if isinstance(item_value, list) else [None] * array_size
                 for v in values[:array_size]:
-                    write_binary_field(f, v, item['type'], enum_list, class_list)
+                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
             else:
-                write_binary_field(f, item_value, item['type'], enum_list, class_list)
+                write_binary_field(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data )
     else:
         f.write(struct.pack('i', 0))  # 未サポート型
 
@@ -2802,24 +2808,36 @@ def generate_binary(name):
                         f.write(struct.pack('i', actual_id))
                     
                     elif col['type'] in class_list:
-                        class_data = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, f"{col['type']}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, f"{col['type']}.json")) else []
-                        for item in class_data:
-                            item_value = col_value.get(item['name']) if isinstance(col_value, dict) else None
+                        # .class.jsonを正しく参照し、col_valueから.valueを取り出す
+                        class_schema = json.load(open(os.path.join(DATA_DIR, CLASS_DATA,f"{col['type'].replace('[]', '')}", f"{col['type'].replace('[]', '')}.class.json"), 'r'))
+                        actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
+                        for item in class_schema:
+                            item_value = actual_value.get(item['name'])
                             array_size = item.get('arraySize', 0)
                             if array_size == -1:  # List
                                 values = item_value if isinstance(item_value, list) else []
                                 f.write(struct.pack('i', len(values)))
                                 for v in values:
-                                    write_binary_field(f, v, item['type'], enum_list, class_list)
+                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
                             elif array_size > 0:  # Array
                                 values = item_value if isinstance(item_value, list) else [None] * array_size
                                 for v in values[:array_size]:
-                                    write_binary_field(f, v, item['type'], enum_list, class_list)
+                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
                             else:
-                                write_binary_field(f, item_value, item['type'], enum_list, class_list)
-                    
+                                write_binary_field(f, item_value, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
                     else:
-                        f.write(struct.pack('i', 0))  # 未サポート型
+                        col_name_type = col['type']
+                        # 配列型カラム("int[]", "MyClass[]"など)
+                        if col_name_type.endswith('[]'):
+                            base_type = col_name_type[:-2]
+                            arr_vals = actual_value if isinstance(actual_value, list) else []
+                            f.write(struct.pack('i', len(arr_vals)))  # 長さを先に書く
+                            for v in arr_vals:
+                                write_binary_field(f, v, base_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                            else:
+                                f.write(struct.pack('i', 0))  # 未サポート型
+                    
+
         
         return jsonify({"message": f"Binary generated: {bin_path}"})
     except Exception as e:
