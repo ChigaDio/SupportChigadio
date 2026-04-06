@@ -2555,6 +2555,7 @@ def generate_class_data_id_cs(name):
                             lf.write(f"                    {col['name']}.Add(new Vector2(reader.ReadSingle(), reader.ReadSingle()));\n")
                         elif type_lower == 'vector3':
                             lf.write(f"                    {col['name']}.Add(new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));\n")
+                            
                         else:
                             lf.write(f"                    {col['name']}.Add(reader.{TYPE_MAP[type_lower]['cs_read']}());\n")
                     elif col['type'] in enum_list:
