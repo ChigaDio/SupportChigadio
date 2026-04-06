@@ -2529,6 +2529,15 @@ def generate_class_data_id_cs(name):
             lf.write("            {\n")
             for i, col in enumerate(columns):
                 type_lower = col['type'].lower().replace("[]", "")
+                
+                array_type = ""
+                if col['type'].replace("[]", "") in class_data_id_list:
+                    array_type = f"GameCore.Tables.ID.{col['type'].replace('[]', '')}TableID"
+                elif col['type'].replace("[]", "") in enum_list:
+                    array_type = f"GameCore.Enums.{col['type'].replace('[]', '')}ID"
+                elif col['type'].replace("[]", "") in class_list:
+                    array_type = f"GameCore.Classes.{col['type'].replace('[]', '')}"
+            
                 #配列対応
                 array_size = 0
                 if "[]" in col['type']:
@@ -2536,7 +2545,7 @@ def generate_class_data_id_cs(name):
                 if array_size == -1:
                     col['type'] = col['type'].replace("[]", "")
                     lf.write(f"                int count{i} = reader.ReadInt32();\n")
-                    lf.write(f"                {col['name']} = new List<{col['type']}>();\n")
+                    lf.write(f"                {col['name']} = new List<{array_type if array_type else col['type']}>();\n")
                     lf.write(f"                for(int j=0; j<count{i}; j++) {{\n")
                     if type_lower in TYPE_MAP:
                         if type_lower == 'string':
@@ -2559,7 +2568,7 @@ def generate_class_data_id_cs(name):
                     lf.write("                }\n")
                 elif array_size > 0:
                     col['type'] = col['type'].replace("[]", "")
-                    lf.write(f"                {col['name']} = new {col['type']}[{array_size}];\n")
+                    lf.write(f"                {col['name']} = new {array_type if array_type else col['type']}[{array_size}];\n")
                     lf.write(f"                for(int j=0; j<{array_size}; j++) {{\n")
                     if type_lower in TYPE_MAP:
                             if type_lower == 'string':
