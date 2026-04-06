@@ -284,6 +284,28 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
         onChange={(e) => !readOnly && onChange(e.target.value)}
         inputProps={{ readOnly }}
         fullWidth
+        multiline
+        minRows={1}
+        onKeyDown={(e) => {
+          // Shift+Enter または Enter で改行を挿入（DataGridのEnterによる確定を防ぐ）
+          if (e.key === 'Enter') {
+            e.stopPropagation(); // DataGridへのEnterキーイベント伝播を止める
+            if (!readOnly) {
+              const el = e.target;
+              const start = el.selectionStart;
+              const end = el.selectionEnd;
+              const newVal = (value ?? '').substring(0, start) + '\n' + (value ?? '').substring(end);
+              onChange(newVal);
+              // カーソル位置を改行の後に移動
+              requestAnimationFrame(() => {
+                el.selectionStart = el.selectionEnd = start + 1;
+              });
+            }
+          }
+        }}
+        sx={{
+          '& .MuiInputBase-root': { alignItems: 'flex-start' },
+        }}
       />
     );
   }
@@ -938,7 +960,8 @@ function ClassDataIdDetailGrid() {
         } : {}),
 
         // ★ 表示用フォーマッタ（classData型・配列型はJSONで表示）
-        valueFormatter: ({ value }) => {
+        // MUI DataGrid v7以降は引数がオブジェクトではなく value 直接渡し
+        valueFormatter: (value) => {
           if (value === null || value === undefined) return '';
           if (Array.isArray(value)) return `[${value.length}件] ${JSON.stringify(value)}`;
           if (typeof value === 'object') return JSON.stringify(value);
@@ -1027,11 +1050,15 @@ function ClassDataIdDetailGrid() {
                 classSchemas={classSchemas}
                 onChange={(newVal) => {
                   apiRef.current.setEditCellValue({ id: params.id, field: params.field, value: newVal });
-                  setTimeout(() => {
-                    try {
-                      apiRef.current.stopCellEditMode({ id: params.id, field: params.field, ignoreModifications: false });
-                    } catch (e) {}
-                  }, 0);
+                  // string型は文字入力中なので即確定しない
+                  // enum/bool/number は選択・変更後に確定する
+                  if (!isString) {
+                    setTimeout(() => {
+                      try {
+                        apiRef.current.stopCellEditMode({ id: params.id, field: params.field, ignoreModifications: false });
+                      } catch (e) {}
+                    }, 0);
+                  }
                 }}
               />
             </Box>
@@ -1115,6 +1142,15 @@ function ClassDataIdDetailGrid() {
             }}
             onCellEditStop={(params, event) => {
               console.log(`セル編集終了: row=${params.id}, field=${params.field}, reason=${params.reason}`);
+              // string型のセルはEnterキーで改行するため、enterKeyDownでは確定しない
+              const col = data.columns.find(c => c.name === params.field);
+              const isStringField = col && col.type.toLowerCase() === 'string';
+              // enum_property / description も string扱い
+              const isBuiltinStringField = params.field === 'enum_property' || params.field === 'description';
+              if (params.reason === 'enterKeyDown' && (isStringField || isBuiltinStringField)) {
+                if (event) event.defaultMuiPrevented = true;
+                return; // Enterキーでは確定しない（セル内改行に使うため）
+              }
               if (params.reason === 'cellFocusOut' || params.reason === 'enterKeyDown') {
                 try {
                   apiRef.current.stopCellEditMode({
