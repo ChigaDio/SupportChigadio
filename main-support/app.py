@@ -2510,7 +2510,7 @@ def generate_class_data_id_cs(name):
             lf.write("namespace GameCore.Tables\n{\n")
             lf.write(f"    public class {name}Row : BaseClassDataRow\n    {{\n")
             for col in columns:
-                type_str = col['type']
+                type_str = col['type'].replace("[]", "")
                 if type_str in enum_list:
                     type_str = f"GameCore.Enums.{type_str}ID"
                 elif type_str in class_list:
@@ -2526,7 +2526,7 @@ def generate_class_data_id_cs(name):
             lf.write("\n            public override void Read(BinaryReader reader)\n")
             lf.write("            {\n")
             for i, col in enumerate(columns):
-                type_lower = col['type'].lower()
+                type_lower = col['type'].lower().replace("[]", "")
                 #配列対応
                 array_size = col.get('arraySize', 0)
                 if array_size == -1:
@@ -3431,7 +3431,7 @@ def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
 
 # C#フィールド生成（private + ゲッター）
 def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list):
-    type_str = item['type']
+    type_str = item['type'].replace("[]", "")
     var_name = item['name']
     array_size = item.get('arraySize', 0)
     description = item.get('description', '')
