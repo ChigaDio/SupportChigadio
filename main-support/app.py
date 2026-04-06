@@ -2519,6 +2519,8 @@ def generate_class_data_id_cs(name):
                     type_str = f"GameCore.Tables.ID.{type_str}TableID"
                 elif type_str.lower() in ['vector2', 'vector3']:
                     type_str = type_str.capitalize()
+                if "[]" in col['type']:
+                    type_str += "[]"
                 lf.write(f"            private {type_str} {col['name']};\n")
                 lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
                 
@@ -2528,8 +2530,11 @@ def generate_class_data_id_cs(name):
             for i, col in enumerate(columns):
                 type_lower = col['type'].lower().replace("[]", "")
                 #配列対応
-                array_size = col.get('arraySize', 0)
+                array_size = 0
+                if "[]" in col['type']:
+                    array_size = len(rows[0]['data'][col['name']]['value']) if rows and 'data' in rows[0] and col['name'] in rows[0]['data'] else 0
                 if array_size == -1:
+                    col['type'] = col['type'].replace("[]", "")
                     lf.write(f"                int count{i} = reader.ReadInt32();\n")
                     lf.write(f"                {col['name']} = new List<{col['type']}>();\n")
                     lf.write(f"                for(int j=0; j<count{i}; j++) {{\n")
@@ -2553,6 +2558,7 @@ def generate_class_data_id_cs(name):
                         lf.write(f"                    reader.BaseStream.Seek({TYPE_MAP.get(type_lower, {}).get('size', 4)}, SeekOrigin.Current); // Unsupported type, skip\n")
                     lf.write("                }\n")
                 elif array_size > 0:
+                    col['type'] = col['type'].replace("[]", "")
                     lf.write(f"                {col['name']} = new {col['type']}[{array_size}];\n")
                     lf.write(f"                for(int j=0; j<{array_size}; j++) {{\n")
                     if type_lower in TYPE_MAP:
@@ -3479,6 +3485,8 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         initial = f"{type_str}.None"
     else:
         initial = f"new {type_str}()"
+        
+    find_type = item['type'].replace("[]", "").replace("TableID","").replace("ID","").split('.')[-1]
 
     # BinaryReader読み込みコード
     read_code = ""
@@ -3486,18 +3494,18 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         read_code = f"            {var_name} = new List<{item['type']}>();\n"
         read_code += f"            int {var_name}_count = reader.ReadInt32();\n"
         read_code += f"            for(int i=0; i<{var_name}_count; i++) {{\n"
-        if item['type'].lower() in TYPE_MAP:
-            if item['type'].lower() == 'vector2':
+        if find_type.lower() in TYPE_MAP:
+            if find_type.lower() == 'vector2':
                 read_code += f"                {var_name}.Add(new Vector2(reader.ReadSingle(), reader.ReadSingle()));\n"
-            elif item['type'].lower() == 'vector3':
+            elif find_type.lower() == 'vector3':
                 read_code += f"                {var_name}.Add(new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));\n"
             else:
                 read_code += f"                {var_name}.Add(reader.{TYPE_MAP[item['type'].lower()]['cs_read']}());\n"
-        elif item['type'] in enum_list:
+        elif find_type in enum_list:
             read_code += f"                {var_name}.Add(({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32()));\n"
-        elif item['type'] in class_id_list:
+        elif find_type in class_id_list:
             read_code += f"                {var_name}.Add(({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32()));\n"
-        elif item['type'] in class_list:
+        elif find_type in class_list:
             read_code += f"                var add_data = new {item['type']}();\n"
             read_code += f"                add_data.Read(reader);\n"
             read_code += f"                {var_name}.Add(add_data);\n"
@@ -3507,20 +3515,20 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
     elif is_array:
         read_code = f"            {var_name} = new {item['type']}[{array_size}];\n"
         read_code += f"            for(int i=0; i<{array_size}; i++) {{\n"
-        if item['type'].lower() in TYPE_MAP:
-            if item['type'].lower() == 'vector2':
+        if find_type.lower() in TYPE_MAP:
+            if find_type.lower() == 'vector2':
                 read_code += f"                {var_name}[i] = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
-            elif item['type'].lower() == 'vector3':
+            elif find_type.lower() == 'vector3':
                 read_code += f"                {var_name}[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n"
             else:
-                read_code += f"                {var_name}[i] = reader.{TYPE_MAP[item['type'].lower()]['cs_read']}();\n"
-        elif item['type'] in enum_list:
+                read_code += f"                {var_name}[i] = reader.{TYPE_MAP[find_type.lower()]['cs_read']}();\n"
+        elif find_type in enum_list:
             read_code += f"                {var_name}[i] = ({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32());\n"
-        elif item['type'] in class_id_list:
+        elif find_type in class_id_list:
             read_code += f"                {var_name}[i] = ({item['type']})Enum.ToObject(typeof({item['type']}), reader.ReadInt32());\n" 
-        elif item['type'] in class_list:
-            read_code += f"                {var_name}[i] = new {item['type']}\n"
-            read_code += f"                {var_name}[i].Read(reader)\n"
+        elif find_type in class_list:
+            read_code += f"                {var_name}[i] = new {item['type']}();\n"
+            read_code += f"                {var_name}[i].Read(reader);\n"
         else:
             read_code += f"                {var_name}[i] = new {item['type']}(); // Unsupported\n"
         read_code += "            }\n"
