@@ -10,6 +10,7 @@ import os
 import json
 
 import psutil
+import pythonSrc.generators as generators
 import pythonSrc.scenario as scenario
 import pythonSrc.assets as assets
 import pythonSrc.dbgServer as dbgServer
@@ -21,6 +22,18 @@ from pathlib import Path
 import pythonSrc.scene as scene
 import pythonSrc.savedata as savedata
 import pythonSrc.expansion as expansion
+
+
+if getattr(sys, 'frozen', False):
+    # exe実行時
+    base_dir = os.path.dirname(sys.executable)
+else:
+    # 開発時
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+if base_dir not in sys.path:
+    sys.path.append(base_dir)
+from data.enum.MaterialCondition.MaterialConditionID import MaterialConditionID
 isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -637,7 +650,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, "BaseCustomClassData.cs
         }
     }
     """
-    with open(os.path.join(DATA_DIR, CLASS_DATA, "BaseClassDaBaseCustomClassDatataMatrixRow.cs"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(DATA_DIR, CLASS_DATA, "BaseCustomClassData.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
 
 #ClassDataIDCore.cs 生成
@@ -1582,6 +1595,249 @@ namespace GameCore.Utils
         """
         with open(os.path.join(DATA_DIR,SCRIPT,"FastEnumBitFlags.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
+            
+#python版 -DataClassID-
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataRow.py")):
+    code = """
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+
+
+class BaseClassDataRow(ABC):
+    @abstractmethod
+    def read(self, reader):
+        pass
+
+    @classmethod
+    def from_json(cls, data: dict) -> 'BaseClassDataRow':
+        raise NotImplementedError("from_json must be implemented in subclass")
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataRow.py"), 'w', encoding='utf-8') as f:
+        f.write(code)
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseTable.py")):
+    code = """
+from abc import ABC, abstractmethod
+
+
+class BaseTable(ABC):
+    @abstractmethod
+    def read(self, reader):
+        pass
+
+    @abstractmethod
+    def release(self):
+        pass
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseTable.py"), 'w', encoding='utf-8') as f:
+        f.write(code)
+        
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataID.py")):
+    code = """
+from abc import ABC
+from typing import Dict
+from enum import Enum
+from BaseTable import BaseTable
+from BaseClassDataRow import BaseClassDataRow
+
+
+class BaseClassDataID(BaseTable, ABC):
+    Table: Dict[Enum, BaseClassDataRow] = {}
+
+    def release(self):
+        self.__class__.Table.clear()
+
+    @classmethod
+    def load_from_json(cls, json_data: dict):
+        cls.Table.clear()
+        for enum_name, row_data in json_data.items():
+            try:
+                enum_val = cls._get_enum(enum_name)
+            except (KeyError, AttributeError):
+                raise ValueError(f"Unknown enum name: {enum_name}")
+            row = cls._get_row_class().from_json(row_data)
+            cls.Table[enum_val] = row
+
+    @classmethod
+    def _get_enum(cls, name: str):
+        raise NotImplementedError("サブクラスでオーバーライドしてください")
+
+    @classmethod
+    def _get_row_class(cls):
+        raise NotImplementedError("サブクラスでオーバーライドしてください")
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataID.py"), 'w', encoding='utf-8') as f:
+        f.write(code)
+        
+#python版 -ClassData-
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA,"BaseCustomClassData.py")):
+    code = """
+from abc import ABC, abstractmethod
+class BaseCustomClassData(ABC):
+    @abstractmethod
+    def read(self, reader):
+        pass
+
+    def load_json(self, data):
+        pass
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA,"BaseCustomClassData.py"), 'w', encoding='utf-8') as f:
+        f.write(code)
+
+#js版　-BinaryReader-
+if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,"BinaryReader.js")):
+    code = """
+export class BinaryReader {
+    constructor(buffer) {
+        this._buffer = buffer;   // ArrayBuffer 推奨
+        this._offset = 0;
+    }
+
+    readInt32() {
+        const value = new Int32Array(this._buffer, this._offset, 1)[0];
+        this._offset += 4;
+        return value;
+    }
+    
+    readInt16() {
+        const value = new Int16Array(this._buffer, this._offset, 1)[0];
+        this._offset += 2;
+        return value;
+    }
+    
+    readInt64() {
+        const value = new BigInt64Array(this._buffer, this._offset, 1)[0];
+        this._offset += 8;
+        return value;
+
+    }
+
+    readFloat32() {
+        const value = new Float32Array(this._buffer, this._offset, 1)[0];
+        this._offset += 4;
+        return value;
+    }
+
+    readBoolean() {
+        const value = new Uint8Array(this._buffer, this._offset, 1)[0] !== 0;
+        this._offset += 1;
+        return value;
+    }
+
+    readString() {
+        const len = this.readInt32();
+        if (len <= 0) return "";
+        const bytes = new Uint8Array(this._buffer, this._offset, len);
+        this._offset += len;
+        return new TextDecoder("utf-8").decode(bytes);
+    }
+
+    readDouble() {
+        const value = new Float64Array(this._buffer, this._offset, 1)[0];
+        this._offset += 8;
+        return value;
+    }
+
+    readUint() {
+        const value = new Uint32Array(this._buffer, this._offset, 1)[0];
+        this._offset += 4;
+        return value;
+    }
+
+    readVector2() {
+        return {
+            x: this.readFloat32(),
+            y: this.readFloat32()
+        };
+    }
+
+    readVector3() {
+        return {
+            x: this.readFloat32(),
+            y: this.readFloat32(),
+            z: this.readFloat32()
+        };
+    }
+    
+    readChar()
+    {
+        const value = new Uint16Array(this._buffer, this._offset, 1)[0];
+        this._offset += 2;
+        return value;
+
+    }
+}
+    """
+    with open(os.path.join(DATA_DIR,SCRIPT,"BinaryReader.js"), 'w', encoding='utf-8') as f:
+        f.write(code)
+
+#js版 -DataClassID-
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataID.js")):
+    code = """
+import { BaseTable } from './BaseTable.js';
+import { BaseClassDataRow } from './BaseClassDataRow.js';
+
+export class BaseClassDataID extends BaseTable {
+  static Table = new Map();
+
+  release() {
+    this.constructor.Table.clear();
+  }
+
+  static loadFromJson(jsonData) {
+    this.Table.clear();
+    for (const [enumName, rowData] of Object.entries(jsonData)) {
+      const enumVal = this._getEnum(enumName);
+      const row = this._getRowClass().fromJson(rowData);
+      this.Table.set(enumVal, row);
+    }
+  }
+
+  static _getEnum(name) {
+    throw new Error('_getEnum must be implemented in subclass');
+  }
+
+  static _getRowClass() {
+    throw new Error('_getRowClass must be implemented in subclass');
+  }
+}
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataID.js"), 'w', encoding='utf-8') as f:
+        f.write(code)
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseTable.js")):
+    code = """
+export class BaseTable {
+  read(reader) { throw new Error('read must be implemented'); }
+  release() { throw new Error('release must be implemented'); }
+}
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseTable.js"), 'w', encoding='utf-8') as f:
+        f.write(code)
+
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataRow.js")):
+    code = """
+export class BaseClassDataRow {
+  read(reader) { throw new Error('read must be implemented'); }
+  static fromJson(data) { throw new Error('fromJson must be implemented'); }
+}
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA_ID,"BaseClassDataRow.js"), 'w', encoding='utf-8') as f:
+        f.write(code)
+        
+if not os.path.exists(os.path.join(DATA_DIR,CLASS_DATA,"BaseCustomClassData.js")):
+    code = """
+
+export class BaseCustomClassData {
+    read(view, offset) {
+        throw new Error("read() must be implemented");
+    }
+    loadJson(data) {
+        throw new Error("loadJson() must be implemented");
+    }
+}
+    """
+    with open(os.path.join(DATA_DIR,CLASS_DATA,"BaseCustomClassData.js"), 'w', encoding='utf-8') as f:
+        f.write(code)
+
 
 if not os.path.exists(os.path.join(DATA_DIR,SCRIPT,OBJECTPOOL)):
     os.mkdir(os.path.join(DATA_DIR,SCRIPT,OBJECTPOOL))
@@ -1810,6 +2066,17 @@ namespace GameCore.Enums
         """
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
+            
+        py_content = generators.generate_enum_python(name, data)
+        js_content = generators.generate_enum_js(name, data)
+
+        py_path = os.path.join(DATA_DIR, ENUM, name, f"{name}ID.py")
+        js_path = os.path.join(DATA_DIR, ENUM, name, f"{name}ID.js")
+
+        with open(py_path, 'w+', encoding='utf-8') as f:
+            f.write(py_content)
+        with open(js_path, 'w', encoding='utf-8') as f:
+            f.write(js_content)
         
         return jsonify({"message": f"C# enum {name}ID generated successfully"})
     except Exception as e:
@@ -1951,7 +2218,12 @@ def generate_class_cs(name):
             f.write("namespace GameCore.Classes\n{\n")
             f.write(f"    public class {name} : Base{name}\n    {{\n")
             f.write("    }\n}\n")
+            
+        py_path = generators.generate_class_python(name, data, enum_list, class_list, class_data_id_list)
+        js_path = generators.generate_class_js(name, data, enum_list, class_list, class_data_id_list)
         return jsonify({"message": f"C# file generated: {cs_path}"})
+    
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     try:
@@ -2735,6 +3007,27 @@ namespace GameCore.Tables
 }}
             """
             ef.write(template)
+            
+        py_row_path = generators.generate_row_python(name, columns, rows, enum_list, class_list, class_data_id_list)
+        py_table_path = generators.generate_table_python(name, columns, rows, enum_list, class_list, class_data_id_list)
+
+        # Python用 TableID enum
+        enum_data = [
+            {'property': row['enum_property'], 'value': i + 1, 'description': row.get('description', '')}
+            for i, row in enumerate(rows)
+        ]
+        py_enum_path = os.path.join(table_dir, f"{name}TableID.py")
+        with open(py_enum_path, 'w', encoding='utf-8') as f:
+            f.write(generators.generate_enum_python(f"{name}TableID", enum_data))
+
+        # JS生成
+        js_row_path = generators.generate_row_js(name, columns, rows, enum_list, class_list, class_data_id_list)
+        js_table_path = generators.generate_table_js(name, columns, rows, enum_list, class_list, class_data_id_list)
+
+        # JS用 TableID enum
+        js_enum_path = os.path.join(table_dir, f"{name}TableID.js")
+        with open(js_enum_path, 'w', encoding='utf-8') as f:
+            f.write(generators.generate_enum_js(f"{name}TableID", enum_data))
 
         return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
     except Exception as e:
