@@ -34,7 +34,7 @@ else:
 
 if base_dir not in sys.path:
     sys.path.append(base_dir)
-from data.enum.MaterialCondition.MaterialConditionID import MaterialConditionID
+
 isDbg = True
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
