@@ -26,7 +26,8 @@ import pythonSrc.expansion as expansion
 
 if getattr(sys, 'frozen', False):
     # exe実行時
-    base_dir = os.path.dirname(sys.executable)
+    # 一つ前
+    base_dir = os.path.abspath(os.path.join(sys.executable, ".."))
 else:
     # 開発時
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
