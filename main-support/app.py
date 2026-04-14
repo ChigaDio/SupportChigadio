@@ -3864,6 +3864,9 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         read_code += f"            int {var_name}_count = reader.ReadInt32();\n"
         read_code += f"            for(int i=0; i<{var_name}_count; i++) {{\n"
         if find_type.lower() in TYPE_MAP:
+            if find_type.lower() == 'string':
+                read_code += f"                    int len_{var_name} = reader.ReadInt32();\n"
+                read_code += f"                    {var_name}.Add(System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name})));\n"    
             if find_type.lower() == 'vector2':
                 read_code += f"                {var_name}.Add(new Vector2(reader.ReadSingle(), reader.ReadSingle()));\n"
             elif find_type.lower() == 'vector3':
@@ -3885,6 +3888,9 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         read_code = f"            {var_name} = new {item['type']}[{array_size}];\n"
         read_code += f"            for(int i=0; i<{array_size}; i++) {{\n"
         if find_type.lower() in TYPE_MAP:
+            if find_type.lower() == 'string':
+                read_code += f"                    int len_{var_name} = reader.ReadInt32();\n"
+                read_code += f"                    {var_name}[i] = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name}));\n"
             if find_type.lower() == 'vector2':
                 read_code += f"                {var_name}[i] = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
             elif find_type.lower() == 'vector3':
@@ -3903,6 +3909,9 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         read_code += "            }\n"
     else:
         if type_str.lower() in TYPE_MAP:
+            if type_str.lower() == 'string':
+                read_code = f"                    int len_{var_name} = reader.ReadInt32();\n"
+                read_code = f"                    {var_name} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name}));\n"
             if type_str.lower() == 'vector2':
                 read_code = f"            {var_name} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
             elif type_str.lower() == 'vector3':
