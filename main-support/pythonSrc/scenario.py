@@ -72,6 +72,7 @@ using System.Collections;
 using UnityEngine;
 using System.IO;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 namespace GameCore.Scenario
 {
     public  class BaseOrigintScenarioRoleAction
@@ -101,7 +102,7 @@ namespace GameCore.Scenario
             // Implement cleanup logic here
         }
         
-        ublic virtual async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        public virtual async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             IsCompleted = false;
             await UniTask.CompletedTask;
@@ -138,6 +139,7 @@ using System.Collections;
 using UnityEngine;
 using System.IO;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 namespace GameCore.Scenario
 {
     public  class BaseGeneralScenarioRoleAction<T> : BaseOrigintScenarioRoleAction where T : BaseScenarioRoleData
@@ -175,7 +177,7 @@ using System;
 using System.Collections;
 using System.Threading;
 using UnityEngine;
-
+using Cysharp.Threading.Tasks;
 namespace GameCore.Scenario
 {
     public class BaseScenarioRoleAction<T> : BaseGeneralScenarioRoleAction<T> where T : BaseScenarioRoleData
@@ -214,7 +216,7 @@ using System;
 using System.Collections;
 using System.Threading;
 using UnityEngine;
-
+using Cysharp.Threading.Tasks;
 namespace GameCore.Scenario
 {
     public class BaseScenarioRoleBranchAction<T> : BaseGeneralScenarioRoleAction<T> where T : BaseScenarioRoleData

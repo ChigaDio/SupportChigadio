@@ -4762,6 +4762,7 @@ namespace GameCore.Scenario {{
         
         public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {{
+
             await base.OnInitializeAsync(executeData, ct);
         }}
         public override async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
