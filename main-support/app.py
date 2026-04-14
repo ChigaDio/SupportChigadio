@@ -4759,6 +4759,25 @@ namespace GameCore.Scenario {{
         public override void OnFinalize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom cleanup logic
         }}
+        
+        public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {{
+            await base.OnInitializeAsync(executeData, ct);
+        }}
+        public override async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {{
+            // Implement action logic here
+            await UniTask.CompletedTask;
+        }}
+        public override async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {{
+            // Implement action logic here
+            await UniTask.CompletedTask;
+        }}
+        public override async UniTask OnFinalizeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {{
+            await UniTask.CompletedTask;
+        }}
     }}
 }}
 """

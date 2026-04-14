@@ -100,6 +100,26 @@ namespace GameCore.Scenario
         {
             // Implement cleanup logic here
         }
+        
+        ublic virtual async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            IsCompleted = false;
+            await UniTask.CompletedTask;
+        }
+        public virtual async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            // Implement action logic here
+            await UniTask.CompletedTask;
+        }
+        public virtual async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            // Implement action logic here
+            await UniTask.CompletedTask;
+        }
+        public virtual async UniTask OnFinalizeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            await UniTask.CompletedTask;
+        }
     }
 }
 
@@ -134,6 +154,11 @@ namespace GameCore.Scenario
         {
             base.OnInitialize(executeData,ct);
         }
+        
+        public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            await base.OnInitializeAsync(executeData, ct);
+        }
     }
 }
 
@@ -164,6 +189,11 @@ namespace GameCore.Scenario
         public override  void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             base.OnInitialize(executeData,ct);
+        }
+        
+        public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            await base.OnInitializeAsync(executeData, ct);
         }
 
 
@@ -199,6 +229,11 @@ namespace GameCore.Scenario
         public override void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             base.OnInitialize(executeData,ct);
+        }
+        
+        public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
+        {
+            await base.OnInitializeAsync(executeData, ct);
         }
 
 
@@ -443,7 +478,10 @@ public class ScenarioExecuteAction
     {
         if (IsStartUp)
         {
+            await UniTask.Yield(ct.Token);
+            return;
         }
+        await action.OnInitializeAsync(executeData,ct);
         action.OnInitialize(executeData, ct);
         await UniTask.Yield(ct.Token);
     }
@@ -454,7 +492,9 @@ public class ScenarioExecuteAction
         if (IsOneCompleted)
         {
             await UniTask.Yield(ct.Token);
+            return;
         }
+        await action.OnOneExecuteAsync(executeData,ct);
         action.OnOneExecute(executeData, ct);
         await UniTask.Yield(ct.Token);
     }
@@ -465,7 +505,9 @@ public class ScenarioExecuteAction
         if (IsCompleted)
         {
             await UniTask.Yield(ct.Token);
+            return;
         }
+        await action.OnExecuteAsync(executeData,ct);
         action.OnExecute(executeData, ct);
         await UniTask.Yield(ct.Token);
     }
@@ -475,7 +517,9 @@ public class ScenarioExecuteAction
         if (IsRelease)
         {
             await UniTask.Yield(ct.Token);
+            return;
         }
+        await action.OnFinalizeAsync(executeData,ct);
         action.OnFinalize(executeData, ct);
         await UniTask.Yield(ct.Token);
     }
