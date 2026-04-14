@@ -614,7 +614,8 @@ public class AddressableBinCustomizer
             SupportFiles.MATRIX_ID_BIN_FILE,
             SupportFiles.ALL_GAMEOBJECT_BIN_FILE,
             SupportFiles.ALL_TEXTURE_BIN_FILE,
-            SupportFiles.ALL_SOUND_BIN
+            SupportFiles.ALL_SOUND_BIN,
+            SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE
         };
 
         var findData = fileDataPath.Find(x => x.Equals(fileNameWithExt));

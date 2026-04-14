@@ -49,6 +49,9 @@ namespace GameCore.GameAnimator
         code_str = """
 
 
+
+
+
 // ========================================
 // GameCore/Animator/AnimatorManager.cs
 // ========================================
@@ -95,6 +98,8 @@ namespace GameCore.GameAnimator
             public Action OnFinish;
         }
 
+        private float animation_speed = 1.0f;
+        public float SetAnimationSpeed(float set) => animation_speed = set;
         private PlayRecord? current;
         public void CancelUnitasl()
         {
@@ -156,6 +161,10 @@ namespace GameCore.GameAnimator
                 onFinish?.Invoke();
                 return;
             }
+            if (animator != null)
+            {
+                animator.speed = 1f;
+            }
 
             current?.Cts?.Cancel();
             current?.Cts?.Dispose();
@@ -179,6 +188,7 @@ namespace GameCore.GameAnimator
             else
                 animator.Play(clipName, layerIndex, reverse ? 1f : 0f);
 
+
             await WaitAnimationComplete(layerIndex, clipName, reverse, cts.Token);
         }
 
@@ -188,25 +198,33 @@ namespace GameCore.GameAnimator
             {
                 while (!ct.IsCancellationRequested)
                 {
+                    await UniTask.Yield(PlayerLoopTiming.LastPostLateUpdate, ct);
                     var info = animator.GetCurrentAnimatorStateInfo(layerIndex);
                     if (info.shortNameHash != Animator.StringToHash(clipName)) break;
 
-                    animator.speed = reverse ? -1f : 1f;
+                    animator.SetFloat("AnimSpeed", reverse ? animation_speed * -1f : animation_speed * 1f);
+                    
+                    float norm = info.normalizedTime > 1.0f || info.normalizedTime < 0.0f ? info.normalizedTime % 1f : info.normalizedTime;
 
-                    float norm = info.normalizedTime % 1f;
-                    if (reverse) norm = 1f - norm;
                     if ((reverse && norm <= 0f) || (!reverse && norm >= 1f)) break;
-
-                    await UniTask.Yield(PlayerLoopTiming.Update, ct);
                 }
+
+                // 逆再生が終わったなら、速度を 0 にしてその場に留める
+                if (reverse)
+                {
+                    animator.SetFloat("AnimSpeed", 0f);
+                }
+                else
+                {
+                    animator.SetFloat("AnimSpeed", animation_speed); // 正転時は通常通り（または0にするかはお好みで）
+                }
+
+                var callback = current?.OnFinish;
+                current = null;
+                callback?.Invoke();
             }
             catch (OperationCanceledException) { }
-            finally
-            {
-                animator.speed = 1f;
-                current = null;
-                current?.OnFinish?.Invoke();
-            }
+
         }
 
         // ─────────────────────────────────────
@@ -264,6 +282,9 @@ namespace GameCore.GameAnimator
 }
 
 
+        
+
+        
         
 
         """
@@ -336,6 +357,7 @@ namespace GameCore.GameAnimator
             
     if not os.path.exists(os.path.join(ANIM_DATA,"BaseAnimatorHub.cs")):
         code_str = """
+
 using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
@@ -386,11 +408,20 @@ namespace GameCore.GameAnimator
         public bool IsPlaying(TLayerEnum layer) => animationManager.IsPlaying(layer);
 
         public void Stop() => animationManager.Stop();
+
+        public void SetAnimationSpeed(float speed)
+        {
+            animationManager.SetAnimationSpeed(speed);
+        }
     }
 
 
 }
 
+        
+        
+
+        
         
         
 
@@ -759,7 +790,7 @@ def _generate_animator_hub_csharp_core(ctrl,basic_types, unity_types, enum_list,
             method_str += f"        public void Add{s_cap}(Action<{name}AnimatorManager> add) => {s_lower} += add;\n"
             method_str += f"        public void Remove{s_cap}(Action<{name}AnimatorManager> remove) => {s_lower} -= remove;\n"    
             method_str += f"        public void Clear{s_cap}() => {s_lower} = null;\n"
-            method_str += f"        public On{s_cap}() => {s_lower}?.Invoke(animationManager);\n\n"
+            method_str += f"        public void On{s_cap}() => {s_lower}?.Invoke(animationManager);\n\n"
         else:
             method_str += f"        private Action<{type_str},{name}AnimatorManager> {s_lower};\n"
             method_str += f"        public void Add{s_cap}(Action<{type_str},{name}AnimatorManager> add) => {s_lower} += add;\n"
@@ -777,7 +808,7 @@ using UnityEngine;
 
 namespace GameCore.GameAnimator
 {{
-    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}AnimatorManager.Layer,{name}AnimatorManager.Stat, {name}AnimatorManager.Param>
+    public class {name}AnimatorHub : BaseAnimatorHub<{name}AnimatorManager,{name}AnimatorManager.Layer,{name}AnimatorManager.State, {name}AnimatorManager.Param>
     {{
 {method_str}
         public void Awake()
