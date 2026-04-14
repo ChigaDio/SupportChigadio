@@ -3867,7 +3867,7 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             if find_type.lower() == 'string':
                 read_code += f"                    int len_{var_name} = reader.ReadInt32();\n"
                 read_code += f"                    {var_name}.Add(System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name})));\n"    
-            if find_type.lower() == 'vector2':
+            elif find_type.lower() == 'vector2':
                 read_code += f"                {var_name}.Add(new Vector2(reader.ReadSingle(), reader.ReadSingle()));\n"
             elif find_type.lower() == 'vector3':
                 read_code += f"                {var_name}.Add(new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));\n"
@@ -3891,7 +3891,7 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             if find_type.lower() == 'string':
                 read_code += f"                    int len_{var_name} = reader.ReadInt32();\n"
                 read_code += f"                    {var_name}[i] = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name}));\n"
-            if find_type.lower() == 'vector2':
+            elif find_type.lower() == 'vector2':
                 read_code += f"                {var_name}[i] = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
             elif find_type.lower() == 'vector3':
                 read_code += f"                {var_name}[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n"
@@ -3911,8 +3911,8 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         if type_str.lower() in TYPE_MAP:
             if type_str.lower() == 'string':
                 read_code = f"                    int len_{var_name} = reader.ReadInt32();\n"
-                read_code = f"                    {var_name} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name}));\n"
-            if type_str.lower() == 'vector2':
+                read_code += f"                    {var_name} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len_{var_name}));\n"
+            elif type_str.lower() == 'vector2':
                 read_code = f"            {var_name} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n"
             elif type_str.lower() == 'vector3':
                 read_code = f"            {var_name} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n"
