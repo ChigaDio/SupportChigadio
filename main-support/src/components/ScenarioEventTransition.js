@@ -1,1277 +1,1330 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, {
+  useState, useEffect, useCallback, useMemo, useRef
+} from 'react';
 import { useParams } from 'react-router-dom';
-import { ReactFlow, Background, Controls, useNodesState, useEdgesState, addEdge, Position, Handle, applyNodeChanges } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { Box, Drawer, List, ListItem, ListItemText, Button, Typography, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Tabs, Tab, AppBar, Accordion, AccordionSummary, AccordionDetails, Backdrop, CircularProgress } from '@mui/material';
+import {
+  Box, Button, Typography, IconButton, Dialog, DialogTitle,
+  DialogContent, DialogActions, TextField, Tabs, Tab, AppBar,
+  Accordion, AccordionSummary, AccordionDetails,
+  Backdrop, CircularProgress, Chip, Tooltip, Paper, Divider,
+  Alert, Snackbar, InputAdornment, List, ListItem, ListItemButton,
+  ListItemText, Drawer, Badge, Menu, MenuItem, Select, FormControl,
+  InputLabel, Stack
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import SaveIcon from '@mui/icons-material/Save';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import LinkIcon from '@mui/icons-material/Link';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RoleInputFactory from '../scenario/RoleInputFactory';
 import { debounce } from 'lodash';
 
-const CustomGroupNode = ({ data, id, saveCurrentTab, roles: globalRoles, roleDataCache, roleFormSchemas }) => {
-  const params = useParams();
-  const eventId = params.eventId;
-  const subId = params.subId;
-  const [showMenu, setShowMenu] = useState(false);
-  const [showDataMenu, setShowDataMenu] = useState(false);
-  const [roles, setRoles] = useState(globalRoles);
-  const [roleForms, setRoleForms] = useState({});
-  const [formErrors, setFormErrors] = useState({});
-  const [formDataState, setFormDataState] = useState({});
-  const formRefs = useRef([]);
+// ============================================================
+// SnackBar hook
+// ============================================================
+const useSnack = () => {
+  const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' });
+  const show = (msg, severity = 'success') => setSnack({ open: true, msg, severity });
+  const hide = () => setSnack(s => ({ ...s, open: false }));
+  return { snack, show, hide };
+};
 
-  useEffect(() => {
-    console.log('CustomGroupNode params:', { eventId, subId, nodeId: id });
-    if (!eventId || !subId) {
-      console.error('CustomGroupNode: eventId or subId is undefined');
-    }
-  }, [eventId, subId, id]);
+// ============================================================
+// ID採番ユーティリティ
+// ============================================================
+const getNextNodeId = (nodes) => {
+  const ids = nodes.map(n => parseInt(n.id, 10)).filter(n => !isNaN(n));
+  return ids.length > 0 ? (Math.max(...ids) + 1).toString() : '1';
+};
 
-  useEffect(() => {
-    setRoles(globalRoles || []);
-  }, [globalRoles]);
+// ============================================================
+// スキーマAPIキャッシュ（連続呼び出しバグ修正）
+// モジュールレベルのキャッシュで同一リクエストの重複排除
+// ============================================================
+const schemaCache = {};
+const schemaInFlight = {};
 
-  useEffect(() => {
-    console.log('showMenu state for node', id, ':', showMenu);
-    console.log('showDataMenu state for node', id, ':', showDataMenu);
-  }, [showMenu, showDataMenu, id]);
+const fetchSchemaOnce = async (roleName) => {
+  if (schemaCache[roleName]) return schemaCache[roleName];
+  if (schemaInFlight[roleName]) return schemaInFlight[roleName];
+  schemaInFlight[roleName] = fetch(`/api/role-form-schema/${roleName}`)
+    .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+    .then(schema => { schemaCache[roleName] = schema; delete schemaInFlight[roleName]; return schema; })
+    .catch(err => { delete schemaInFlight[roleName]; throw err; });
+  return schemaInFlight[roleName];
+};
 
-  useEffect(() => {
-    if (data.roles && data.roles.length > 0) {
-      data.roles.forEach((role, index) => {
-        const cachedData = roleDataCache?.[id]?.[role.uniqueId];
-        setFormDataState(prev => ({ ...prev, [role.uniqueId]: cachedData || role.data || [] }));
-        formRefs.current[index] = { submit: () => {} };
-      });
-      const loadRoleData = async () => {
-        const updatedRoles = await Promise.all(data.roles.map(async (role) => {
-          const uniqueId = role.uniqueId;
-          if (roleDataCache?.[id]?.[uniqueId]) {
-            console.log(`Cache hit for node ${id}, role ${uniqueId}`);
-            return { ...role, data: roleDataCache[id][uniqueId] };
-          }
-          try {
-            const res = await fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${uniqueId}`);
-            if (res.ok) {
-              const { formData } = await res.json();
-              setFormDataState(prev => ({ ...prev, [uniqueId]: formData }));
-              window.dispatchEvent(new CustomEvent('updateRoleDataCache', { detail: { nodeId: id, uniqueId, formData } }));
-              return { ...role, data: formData };
-            }
-            return role;
-          } catch (error) {
-            console.error(`Error loading role data for node ${id}, role ${uniqueId}:`, error);
-            return role;
-          }
-        }));
-        if (updatedRoles.some((r, i) => JSON.stringify(r.data) !== JSON.stringify(data.roles[i].data))) {
-          window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles: updatedRoles } }));
-        }
-      };
-      const debouncedLoad = debounce(loadRoleData, 500);
-      debouncedLoad();
-      return () => debouncedLoad.cancel();
-    }
-  }, [data.roles, eventId, subId, id, roleDataCache]);
-
-  const loadForms = useCallback(async () => {
-    if (!eventId || !subId) {
-      console.error('Cannot load role forms: eventId or subId is undefined');
-      return;
-    }
-    try {
-      const formPromises = (data.roles || []).map(async (role) => {
-        try {
-          // 修正: 親から渡されたスキーマを使用
-          const cachedSchema = roleFormSchemas[role.name];
-          if (cachedSchema) {
-            console.log(`Using cached schema for role ${role.name}`);
-            const FormComp = await RoleInputFactory.getForm(
-              role.name,
-              formDataState[role.uniqueId] || role.data || [],
-              (formData) => {
-                console.log(`Form data updated for ${role.uniqueId}:`, formData);
-                setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
-              },
-              cachedSchema // スキーマを渡す
-            );
-            return { uniqueId: role.uniqueId, FormComp };
-          }
-          const res = await fetch(`/api/role-form-schema/${role.name}`);
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          const schema = await res.json();
-          window.dispatchEvent(new CustomEvent('updateRoleFormSchema', { detail: { roleName: role.name, schema } }));
-          const FormComp = await RoleInputFactory.getForm(
-            role.name,
-            formDataState[role.uniqueId] || role.data || [],
-            (formData) => {
-              console.log(`Form data updated for ${role.uniqueId}:`, formData);
-              setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
-            },
-            schema
-          );
-          return { uniqueId: role.uniqueId, FormComp };
-        } catch (error) {
-          console.error(`Error loading form for role ${role.name}:`, error);
-          return { uniqueId: role.uniqueId, error: error.message };
-        }
-      });
-      const results = await Promise.all(formPromises);
-      const newRoleForms = {};
-      const newFormErrors = {};
-      results.forEach(({ uniqueId, FormComp, error }) => {
-        if (error) {
-          newFormErrors[uniqueId] = error;
-        } else {
-          newRoleForms[uniqueId] = FormComp;
-        }
-      });
-      setRoleForms(newRoleForms);
-      setFormErrors(newFormErrors);
-    } catch (error) {
-      console.error('Error loading role forms:', error);
-    }
-  }, [data.roles, eventId, subId, roleFormSchemas]); // 修正: formDataStateを依存から除外
-
-  useEffect(() => {
-    const debouncedLoad = debounce(loadForms, 500);
-    debouncedLoad();
-    return () => debouncedLoad.cancel();
-  }, [loadForms]);
-
-  const handleAddRole = (role) => {
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
-    const uniqueId = Date.now().toString();
-    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${id}/role`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roleId: role.id, name: role.name, branchType: role.branchType || 'General', uniqueId }),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(result => {
-        alert(result.message);
-        const newRole = { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: [] };
-        const newRoles = [...(data.roles || []), newRole];
-        window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
-        setShowMenu(false);
-        saveCurrentTab();
-      })
-      .catch(error => {
-        console.error('Error adding role:', error);
-        alert('Role追加エラー: ' + error.message);
-      });
-  };
-
-  const handleDeleteRole = (uniqueId) => {
-    const newRoles = (data.roles || []).filter(role => role.uniqueId !== uniqueId);
-    window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
-    saveCurrentTab();
-  };
-
-  const handleSaveRole = (uniqueId, formData) => {
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
-    console.log('Saving role data:', { uniqueId, formData });
-    fetch(`/api/save-role-data/${eventId}/${subId}/${id}/${uniqueId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ formData }),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(result => {
-        console.log('Role save response:', result);
-        alert(result.message);
-        const newRoles = (data.roles || []).map(role =>
-          role.uniqueId === uniqueId ? { ...role, data: formData } : role
-        );
-        window.dispatchEvent(new CustomEvent('updateNodeRoles', { detail: { id, newRoles } }));
-        window.dispatchEvent(new CustomEvent('updateRoleDataCache', { detail: { nodeId: id, uniqueId, formData } }));
-        saveCurrentTab();
-      })
-      .catch(error => {
-        console.error('Error saving role data:', error);
-        alert('保存エラー: ' + error.message);
-      });
-  };
-
-  const handleBatchSave = () => {
-    data.roles.forEach((role) => {
-      const formData = formDataState[role.uniqueId];
-      if (formData) {
-        handleSaveRole(role.uniqueId, formData);
-      }
-    });
-  };
-
-  const handleDeleteNode = (e) => {
-    e.stopPropagation();
-    window.dispatchEvent(new CustomEvent('deleteNode', { detail: id }));
-  };
-
-  const handleCopyNode = (e) => {
-    e.stopPropagation();
-    window.dispatchEvent(new CustomEvent('copyNode', { detail: id }));
-  };
-
-  const handleEditNodeId = (e) => {
-    e.stopPropagation();
-    window.dispatchEvent(new CustomEvent('editNodeId', { detail: id }));
-  };
-
-  const hasRoleButton = data.isSubGroup;
-  const hasSubGroupButton = !data.isSubGroup;
+// ============================================================
+// 接続線SVGコンポーネント（ブロック間の矢印）
+// ============================================================
+const ConnectionArrows = ({ nodes, edges }) => {
+  if (!nodes.length || !edges.length) return null;
+  const nodeMap = {};
+  nodes.forEach(n => { nodeMap[n.id] = n; });
 
   return (
-    <Box
-      sx={{ bgcolor: 'white', p: 2, borderRadius: 2, border: '1px solid black', width: 200, textAlign: 'center' }}
-      onClick={(e) => {
-        if (hasRoleButton) {
-          e.stopPropagation();
-          setShowDataMenu(true);
-        }
-      }}
-    >
-      <IconButton onClick={handleDeleteNode} sx={{ position: 'absolute', top: 0, right: 0 }}>
-        <DeleteIcon />
-      </IconButton>
-      <IconButton onClick={handleCopyNode} sx={{ position: 'absolute', top: 0, left: 0 }}>
-        <ContentCopyIcon />
-      </IconButton>
-      <IconButton onClick={handleEditNodeId} sx={{ position: 'absolute', bottom: 0, left: 0 }}>
-        <EditIcon />
-      </IconButton>
-      <Typography variant="h6">{data.label}</Typography>
-      {data.description && (
-        <Typography variant="body2" sx={{ fontStyle: 'italic', mt: 0.5 }}>{data.description}</Typography>
-      )}
-      {data.roles && data.roles.length > 0 && (
-        <Box sx={{ mt: 1, textAlign: 'left' }}>
-          <Typography variant="subtitle2">Roles:</Typography>
-          <List dense>
-            {data.roles.map((role, index) => (
-              <ListItem key={role.uniqueId}>
-                <ListItemText primary={role.name} secondary={role.description} />
-              </ListItem>
-            ))}
-          </List>
-        </Box>
-      )}
-      {hasSubGroupButton && (
-        <Button
-          variant="contained"
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            data.onTabSwitch?.(id);
-          }}
-          sx={{ mt: 1 }}
-        >
-          SubGroupへ
-        </Button>
-      )}
-      {hasRoleButton && (
-        <Button
-          variant="contained"
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu(true);
-          }}
-          sx={{ mt: 1 }}
-        >
-          Role追加
-        </Button>
-      )}
-      <Drawer
-        key={`drawer-role-select-${id}-${showMenu}`}
-        anchor="right"
-        open={showMenu}
-        onClose={(e) => {
-          e.stopPropagation();
-          setShowMenu(false);
-        }}
-      >
-        <Box sx={{ width: 600, p: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h6">ScenarioRole 選択</Typography>
-            <IconButton
-              onClick={(e) => {
-                e.stopPropagation();
-                console.log('Close Role select button clicked for node:', id);
-                setShowMenu(false);
-              }}
-            >
-              <CloseIcon />
-            </IconButton>
+    <Box sx={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}>
+      {edges.map((edge, i) => {
+        const src = nodeMap[edge.source];
+        const tgt = nodeMap[edge.target];
+        if (!src || !tgt) return null;
+        return (
+          <Box key={i} sx={{
+            position: 'absolute',
+            top: '50%',
+            left: 0,
+            display: 'flex',
+            alignItems: 'center',
+            color: 'cyan',
+            fontSize: '0.6rem',
+            whiteSpace: 'nowrap',
+          }}>
+            <ArrowForwardIcon sx={{ fontSize: 14, color: 'cyan' }} />
+            <Typography variant="caption" sx={{ color: 'cyan', ml: 0.25 }}>
+              {edge.source}→{edge.target}
+            </Typography>
           </Box>
-          <List>
-            {roles.map(role => (
-              <ListItem button key={role.id} onClick={() => handleAddRole(role)}>
-                <ListItemText primary={role.name} secondary={role.description} />
-              </ListItem>
-            ))}
-          </List>
-        </Box>
-      </Drawer>
-      <Drawer
-        key={`drawer-data-input-${id}-${showDataMenu}`}
-        anchor="right"
-        open={showDataMenu}
-        onClose={(e) => {
-          e.stopPropagation();
-          setShowDataMenu(false);
-        }}
-      >
-        <Box sx={{ width: 600, p: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h6">Role データ入力</Typography>
-            <IconButton
-              onClick={(e) => {
-                e.stopPropagation();
-                console.log('Close Data input button clicked for node:', id);
-                setShowDataMenu(false);
-              }}
-            >
-              <CloseIcon />
-            </IconButton>
-          </Box>
-          {(data.roles || []).map((role, index) => (
-            <Accordion key={role.uniqueId}>
-              <AccordionSummary>
-                <Typography>{role.name}</Typography>
-                <Button onClick={() => handleDeleteRole(role.uniqueId)} sx={{ ml: 'auto' }}>削除</Button>
-              </AccordionSummary>
-              <AccordionDetails>
-                {formErrors[role.uniqueId] ? (
-                  <Typography color="error">フォーム読み込みエラー: {formErrors[role.uniqueId]}</Typography>
-                ) : roleForms[role.uniqueId] ? (
-                  (() => {
-                    const RoleForm = roleForms[role.uniqueId];
-                    return <RoleForm />;
-                  })()
-                ) : (
-                  <Typography>Loading...</Typography>
-                )}
-              </AccordionDetails>
-            </Accordion>
-          ))}
-          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="contained" color="primary" onClick={handleBatchSave}>
-              一括保存
-            </Button>
-          </Box>
-        </Box>
-      </Drawer>
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+        );
+      })}
     </Box>
   );
 };
 
+// ============================================================
+// 接続バッジ（ノードの接続先表示）
+// ============================================================
+const ConnectionBadge = ({ nodeId, edges, onRemove }) => {
+  const outgoing = edges.filter(e => e.source === nodeId);
+  const incoming = edges.filter(e => e.target === nodeId);
+  if (!outgoing.length && !incoming.length) return null;
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.5 }}>
+      {incoming.map(e => (
+        <Chip key={`in-${e.source}`} size="small"
+          label={`←${e.source}`}
+          onDelete={() => onRemove(e)}
+          sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'purple.100', color: 'purple.800' }} />
+      ))}
+      {outgoing.map(e => (
+        <Chip key={`out-${e.target}`} size="small"
+          label={`→${e.target}`}
+          onDelete={() => onRemove(e)}
+          sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'cyan.100', color: 'cyan.800' }} />
+      ))}
+    </Box>
+  );
+};
+
+// ============================================================
+// RoleDataDrawer（データ入力専用Drawer）
+// ============================================================
+const RoleDataDrawer = ({
+  open, onClose, nodeId, roles, formDataState, setFormDataState,
+  roleFormSchemas, eventId, subId, onSave, onDeleteRole
+}) => {
+  const [roleForms, setRoleForms] = useState({});
+  const [formErrors, setFormErrors] = useState({});
+  const [loadingForms, setLoadingForms] = useState({});
+  const { snack, show: showSnack, hide: hideSnack } = useSnack();
+  const loadedRef = useRef({});
+
+  // ロールフォーム読み込み（重複防止）
+  useEffect(() => {
+    if (!open || !roles.length) return;
+    roles.forEach(async (role) => {
+      const uid = role.uniqueId;
+      if (loadedRef.current[uid]) return;
+      loadedRef.current[uid] = true;
+      setLoadingForms(prev => ({ ...prev, [uid]: true }));
+      try {
+        const schema = roleFormSchemas[role.name] || await fetchSchemaOnce(role.name);
+        const FormComp = await RoleInputFactory.getForm(
+          role.name,
+          formDataState[uid] || role.data || [],
+          (formData) => setFormDataState(prev => ({ ...prev, [uid]: formData })),
+          schema
+        );
+        setRoleForms(prev => ({ ...prev, [uid]: FormComp }));
+      } catch (err) {
+        setFormErrors(prev => ({ ...prev, [uid]: err.message }));
+      } finally {
+        setLoadingForms(prev => ({ ...prev, [uid]: false }));
+      }
+    });
+  }, [open, roles, roleFormSchemas]);
+
+  // Drawer閉じたらキャッシュリセット（次回再ロード用）
+  const handleClose = () => {
+    loadedRef.current = {};
+    setRoleForms({});
+    setFormErrors({});
+    onClose();
+  };
+
+  const handleSave = (uniqueId) => {
+    onSave(uniqueId, formDataState[uniqueId]);
+    showSnack('保存しました');
+  };
+  const handleBatchSave = () => {
+    roles.forEach(r => onSave(r.uniqueId, formDataState[r.uniqueId]));
+    showSnack('一括保存しました');
+  };
+
+  return (
+    <Drawer anchor="right" open={open} onClose={handleClose}>
+      <Box sx={{ width: 660, p: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {/* ヘッダー */}
+        <Box sx={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          px: 2, py: 1.5, bgcolor: 'primary.dark', color: 'white'
+        }}>
+          <Box>
+            <Typography variant="subtitle1" fontWeight="bold">データ入力</Typography>
+            <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId} / {roles.length} Role</Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button variant="contained" size="small" color="success"
+              startIcon={<SaveIcon />} onClick={handleBatchSave}>
+              一括保存
+            </Button>
+            <IconButton onClick={handleClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
+          </Box>
+        </Box>
+
+        <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
+          {roles.length === 0 ? (
+            <Alert severity="info">Roleがありません</Alert>
+          ) : roles.map((role, index) => (
+            <Accordion key={role.uniqueId} defaultExpanded={index === 0}
+              sx={{ mb: 1, border: '1px solid', borderColor: 'divider', borderRadius: '8px !important', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ borderRadius: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%', pr: 1 }}>
+                  <Typography fontWeight="bold" variant="body2">{role.name}</Typography>
+                  {role.branchType && role.branchType !== 'General' && (
+                    <Chip label={role.branchType} size="small" color="secondary" sx={{ height: 18, fontSize: '0.65rem' }} />
+                  )}
+                  <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5 }}>
+                    <Tooltip title="保存">
+                      <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); handleSave(role.uniqueId); }}>
+                        <SaveIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="削除">
+                      <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); onDeleteRole(role.uniqueId); }}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails sx={{ pt: 0, px: 1.5 }}>
+                {formErrors[role.uniqueId] ? (
+                  <Alert severity="error" sx={{ mb: 1 }}>エラー: {formErrors[role.uniqueId]}</Alert>
+                ) : loadingForms[role.uniqueId] ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5 }}>
+                    <CircularProgress size={16} />
+                    <Typography variant="caption" color="text.secondary">フォームを読み込み中...</Typography>
+                  </Box>
+                ) : roleForms[role.uniqueId] ? (
+                  (() => { const F = roleForms[role.uniqueId]; return <F />; })()
+                ) : (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5 }}>
+                    <CircularProgress size={16} />
+                    <Typography variant="caption">Loading...</Typography>
+                  </Box>
+                )}
+              </AccordionDetails>
+            </Accordion>
+          ))}
+        </Box>
+
+        <Snackbar open={snack.open} autoHideDuration={2000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+          <Alert onClose={hideSnack} severity={snack.severity} variant="filled">{snack.msg}</Alert>
+        </Snackbar>
+      </Box>
+    </Drawer>
+  );
+};
+
+// ============================================================
+// RoleSelectDrawer（Role選択Drawer）
+// ============================================================
+const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => (
+  <Drawer anchor="right" open={open} onClose={onClose}>
+    <Box sx={{ width: 320, p: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 2, py: 1.5, bgcolor: 'secondary.dark', color: 'white' }}>
+        <Box>
+          <Typography variant="subtitle1" fontWeight="bold">Role 追加</Typography>
+          <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId}</Typography>
+        </Box>
+        <IconButton onClick={onClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
+      </Box>
+      <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
+        {roles.length === 0 ? (
+          <Typography color="text.secondary" variant="body2">Roleが登録されていません</Typography>
+        ) : roles.map(role => (
+          <Paper key={role.id} variant="outlined" sx={{
+            mb: 0.75, p: 1.25, cursor: 'pointer',
+            transition: 'all 0.15s',
+            '&:hover': { bgcolor: 'secondary.50', borderColor: 'secondary.main', transform: 'translateX(2px)' },
+          }} onClick={() => { onAdd(role); onClose(); }}>
+            <Typography variant="body2" fontWeight="bold">{role.name}</Typography>
+            {role.description && (
+              <Typography variant="caption" color="text.secondary">{role.description}</Typography>
+            )}
+          </Paper>
+        ))}
+      </Box>
+    </Box>
+  </Drawer>
+);
+
+// ============================================================
+// BlockCard（スクラッチ/ティラノビルダー風ブロックカード）
+// ============================================================
+const BlockCard = ({
+  node, index, totalNodes, isSub, edges, allNodeIds,
+  globalRoles, roleDataCache, roleFormSchemas, eventId, subId,
+  onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
+  onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
+  onUpdateFormData, onMoveToGroup,
+}) => {
+  const [collapsed, setCollapsed] = useState(false);
+  const [showRoleSelect, setShowRoleSelect] = useState(false);
+  const [showDataInput, setShowDataInput] = useState(false);
+  const [formDataState, setFormDataState] = useState({});
+  const [showConnectDialog, setShowConnectDialog] = useState(false);
+  const [connectTarget, setConnectTarget] = useState('');
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [moveTargetId, setMoveTargetId] = useState('');
+  const [anchorEl, setAnchorEl] = useState(null);
+  const { snack, show: showSnack, hide: hideSnack } = useSnack();
+
+  const roles = node.data.roles || [];
+  const isGroup = !isSub;
+  const headerBg = isSub ? 'secondary.main' : 'primary.main';
+
+  // roleData初期化
+  useEffect(() => {
+    const init = {};
+    roles.forEach(r => {
+      init[r.uniqueId] = roleDataCache?.[node.id]?.[r.uniqueId] || r.data || [];
+    });
+    setFormDataState(init);
+  }, [roles, roleDataCache, node.id]);
+
+  const handleAddRole = (role) => {
+    const uniqueId = Date.now().toString();
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${node.id}/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: role.id, name: role.name, branchType: role.branchType || 'General', uniqueId }),
+    })
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+      .then(() => {
+        onAddRole(node.id, { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: [] });
+        showSnack(`${role.name} を追加`);
+      })
+      .catch(e => showSnack('追加エラー: ' + e.message, 'error'));
+  };
+
+  const handleConnect = () => {
+    const target = connectTarget.trim();
+    if (!target || target === node.id) { showSnack('接続先が無効', 'warning'); return; }
+    if (!allNodeIds.includes(target)) { showSnack('存在しないノードID', 'error'); return; }
+    const alreadyExists = edges.some(e => e.source === node.id && e.target === target);
+    if (alreadyExists) { showSnack('既に接続済み', 'warning'); return; }
+    onAddEdge({ source: node.id, target, id: `${node.id}-${target}` });
+    setConnectTarget('');
+    setShowConnectDialog(false);
+    showSnack(`→${target} 接続`);
+  };
+
+  const handleMoveBlock = () => {
+    const tid = moveTargetId.trim();
+    if (!tid) return;
+    onMoveToGroup(node.id, tid);
+    setShowMoveDialog(false);
+  };
+
+  // ドラッグ&ドロップ（HTMLドラッグAPI使用）
+  const handleDragStart = (e) => {
+    e.dataTransfer.setData('nodeId', node.id);
+    e.dataTransfer.setData('nodeIndex', index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const draggedId = e.dataTransfer.getData('nodeId');
+    const draggedIndex = parseInt(e.dataTransfer.getData('nodeIndex'), 10);
+    if (draggedId === node.id) return;
+    // インデックス差分で上/下移動を判定
+    const delta = index - draggedIndex;
+    if (Math.abs(delta) > 0) {
+      window.dispatchEvent(new CustomEvent('reorderNode', { detail: { draggedId, targetId: node.id } }));
+    }
+  };
+
+  return (
+    <Paper
+      draggable
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      elevation={2}
+      sx={{
+        mb: 1.5,
+        borderRadius: 2,
+        border: '2px solid',
+        borderColor: isSub ? 'secondary.light' : 'primary.light',
+        overflow: 'hidden',
+        transition: 'box-shadow 0.2s, border-color 0.2s',
+        '&:hover': { boxShadow: 6, borderColor: isSub ? 'secondary.main' : 'primary.main' },
+        position: 'relative',
+      }}
+    >
+      {/* ── ヘッダー ── */}
+      <Box sx={{
+        bgcolor: headerBg, px: 1.5, py: 0.75,
+        display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'grab',
+        '&:active': { cursor: 'grabbing' },
+      }}>
+        <DragIndicatorIcon sx={{ color: 'rgba(255,255,255,0.6)', fontSize: 16, flexShrink: 0 }} />
+
+        {/* ID バッジ */}
+        <Chip
+          label={node.id}
+          size="small"
+          sx={{
+            bgcolor: 'rgba(255,255,255,0.2)', color: 'white',
+            height: 20, fontSize: '0.7rem', fontWeight: 'bold', flexShrink: 0,
+            cursor: 'pointer',
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.35)' }
+          }}
+          onClick={(e) => { e.stopPropagation(); onEditId(node.id); }}
+        />
+
+        {/* ラベル/説明 */}
+        <Typography variant="caption" color="white" noWrap sx={{ flex: 1, opacity: 0.9 }}>
+          {node.data.description || (isSub ? `SubGroup Node` : `Group Node`)}
+        </Typography>
+
+        {/* roles カウント */}
+        {roles.length > 0 && (
+          <Chip label={`${roles.length} Role`} size="small"
+            sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(255,255,255,0.25)', color: 'white', flexShrink: 0 }} />
+        )}
+
+        {/* アクションボタン群 */}
+        <Box sx={{ display: 'flex', gap: 0, flexShrink: 0 }} onMouseDown={e => e.stopPropagation()}>
+          <Tooltip title="上へ">
+            <span>
+              <IconButton size="small" disabled={index === 0} onClick={onMoveUp}
+                sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)', '&:disabled': { color: 'rgba(255,255,255,0.3)' } }}>
+                <ArrowUpwardIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="下へ">
+            <span>
+              <IconButton size="small" disabled={index === totalNodes - 1} onClick={onMoveDown}
+                sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)', '&:disabled': { color: 'rgba(255,255,255,0.3)' } }}>
+                <ArrowDownwardIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={collapsed ? '展開' : '折り畳み'}>
+            <IconButton size="small" onClick={() => setCollapsed(!collapsed)}
+              sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)' }}>
+              {collapsed ? <ExpandMoreIcon sx={{ fontSize: 14 }} /> : <ExpandLessIcon sx={{ fontSize: 14 }} />}
+            </IconButton>
+          </Tooltip>
+          {/* ケバブメニュー */}
+          <IconButton size="small" sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)' }}
+            onClick={(e) => { e.stopPropagation(); setAnchorEl(e.currentTarget); }}>
+            <MoreVertIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Box>
+      </Box>
+
+      {/* ── ケバブメニュー ── */}
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
+        <MenuItem onClick={() => { onCopy(node.id); setAnchorEl(null); }}>
+          <ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />コピー
+        </MenuItem>
+        <MenuItem onClick={() => { onEditId(node.id); setAnchorEl(null); }}>
+          <EditIcon fontSize="small" sx={{ mr: 1 }} />ID / 説明を編集
+        </MenuItem>
+        <MenuItem onClick={() => { setShowConnectDialog(true); setAnchorEl(null); }}>
+          <LinkIcon fontSize="small" sx={{ mr: 1 }} />接続を追加
+        </MenuItem>
+        <MenuItem onClick={() => { setShowMoveDialog(true); setAnchorEl(null); }}>
+          <ArrowForwardIcon fontSize="small" sx={{ mr: 1 }} />別グループへ移動
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { onDelete(node.id); setAnchorEl(null); }} sx={{ color: 'error.main' }}>
+          <DeleteIcon fontSize="small" sx={{ mr: 1 }} />削除
+        </MenuItem>
+      </Menu>
+
+      {/* ── ボディ（折り畳み） ── */}
+      {!collapsed && (
+        <Box sx={{ px: 1.5, py: 1 }} onMouseDown={e => e.stopPropagation()}>
+
+          {/* 接続バッジ */}
+          <ConnectionBadge nodeId={node.id} edges={edges} onRemove={onRemoveEdge} />
+
+          {/* Role リスト */}
+          {roles.length > 0 && (
+            <Box sx={{ mt: 0.75, mb: 0.5 }}>
+              {roles.map((role, ri) => (
+                <Box key={role.uniqueId} sx={{
+                  display: 'flex', alignItems: 'center', px: 1, py: 0.4,
+                  mb: 0.4, borderRadius: 1, bgcolor: 'grey.100',
+                  border: '1px solid', borderColor: 'grey.300',
+                  gap: 0.5,
+                  '&:hover': { bgcolor: 'primary.50', borderColor: 'primary.200' },
+                }}>
+                  <DragIndicatorIcon sx={{ fontSize: 12, color: 'text.disabled', flexShrink: 0 }} />
+                  <Typography variant="caption" fontWeight="bold" noWrap sx={{ flex: 1 }}>
+                    {role.name}
+                  </Typography>
+                  {role.branchType && role.branchType !== 'General' && (
+                    <Chip label={role.branchType} size="small"
+                      sx={{ height: 14, fontSize: '0.55rem', flexShrink: 0 }} />
+                  )}
+                  <Tooltip title="削除">
+                    <IconButton size="small" color="error"
+                      onClick={() => onDeleteRole(node.id, role.uniqueId)} sx={{ p: 0.2, flexShrink: 0 }}>
+                      <DeleteIcon sx={{ fontSize: 12 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {/* アクションボタン */}
+          <Box sx={{ display: 'flex', gap: 0.75, mt: 0.75, flexWrap: 'wrap' }}>
+            {isGroup && (
+              <Button variant="outlined" size="small"
+                startIcon={<AccountTreeIcon sx={{ fontSize: 12 }} />}
+                onClick={() => onSubGroupOpen(node.id)}
+                sx={{ fontSize: '0.68rem', py: 0.3, px: 1, minWidth: 0, flex: 1 }}>
+                SubGroup
+              </Button>
+            )}
+            {isSub && (
+              <>
+                <Button variant="outlined" size="small" color="secondary"
+                  startIcon={<AddIcon sx={{ fontSize: 12 }} />}
+                  onClick={() => setShowRoleSelect(true)}
+                  sx={{ fontSize: '0.68rem', py: 0.3, px: 1, minWidth: 0, flex: 1 }}>
+                  Role追加
+                </Button>
+                {roles.length > 0 && (
+                  <Button variant="contained" size="small" color="secondary"
+                    onClick={() => setShowDataInput(true)}
+                    sx={{ fontSize: '0.68rem', py: 0.3, px: 1, minWidth: 0, flex: 1 }}>
+                    データ入力
+                  </Button>
+                )}
+              </>
+            )}
+            <Button variant="outlined" size="small"
+              startIcon={<LinkIcon sx={{ fontSize: 12 }} />}
+              onClick={() => setShowConnectDialog(true)}
+              sx={{ fontSize: '0.68rem', py: 0.3, px: 1, minWidth: 0 }}>
+              接続
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      {/* ── Role選択Drawer ── */}
+      <RoleSelectDrawer
+        open={showRoleSelect}
+        onClose={() => setShowRoleSelect(false)}
+        roles={globalRoles}
+        nodeId={node.id}
+        onAdd={handleAddRole}
+      />
+
+      {/* ── データ入力Drawer ── */}
+      <RoleDataDrawer
+        open={showDataInput}
+        onClose={() => setShowDataInput(false)}
+        nodeId={node.id}
+        roles={roles}
+        formDataState={formDataState}
+        setFormDataState={(updater) => {
+          const newState = typeof updater === 'function' ? updater(formDataState) : updater;
+          setFormDataState(newState);
+          onUpdateFormData(node.id, newState);
+        }}
+        roleFormSchemas={roleFormSchemas}
+        eventId={eventId}
+        subId={subId}
+        onSave={(uid, data) => onSaveRole(node.id, uid, data)}
+        onDeleteRole={(uid) => onDeleteRole(node.id, uid)}
+      />
+
+      {/* ── 接続追加ダイアログ ── */}
+      <Dialog open={showConnectDialog} onClose={() => setShowConnectDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <LinkIcon color="primary" />
+            接続先を指定（ノード {node.id} から）
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus fullWidth size="small"
+            label="接続先ノードID"
+            value={connectTarget}
+            onChange={e => setConnectTarget(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleConnect(); }}
+            helperText={`利用可能: ${allNodeIds.filter(id => id !== node.id).join(', ') || 'なし'}`}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowConnectDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleConnect} variant="contained" startIcon={<LinkIcon />}>接続</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── 別グループへ移動ダイアログ ── */}
+      <Dialog open={showMoveDialog} onClose={() => setShowMoveDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ArrowForwardIcon color="primary" />
+            別グループへ移動
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus fullWidth size="small"
+            label="移動先 グループID"
+            value={moveTargetId}
+            onChange={e => setMoveTargetId(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleMoveBlock(); }}
+            helperText="移動するとIDが更新されます"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowMoveDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleMoveBlock} variant="contained">移動</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar */}
+      <Snackbar open={snack.open} autoHideDuration={2000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+        <Alert onClose={hideSnack} severity={snack.severity} variant="filled" sx={{ minWidth: 180 }}>{snack.msg}</Alert>
+      </Snackbar>
+    </Paper>
+  );
+};
+
+// ============================================================
+// BlockCanvas（ブロック一覧ビュー）
+// ============================================================
+const BlockCanvas = ({
+  nodes, edges, isSub, globalRoles, roleDataCache, roleFormSchemas,
+  eventId, subId,
+  onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
+  onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
+  onUpdateFormData, onMoveToGroup,
+}) => {
+  const allNodeIds = nodes.map(n => n.id);
+
+  if (nodes.length === 0) {
+    return (
+      <Box sx={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', height: '60vh', color: 'text.secondary', gap: 2,
+      }}>
+        <AccountTreeIcon sx={{ fontSize: 64, opacity: 0.3 }} />
+        <Typography variant="h6" sx={{ opacity: 0.5 }}>ノードがありません</Typography>
+        <Typography variant="body2" sx={{ opacity: 0.4 }}>上の「追加」ボタンからノードを追加してください</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: 2 }}>
+      {nodes.map((node, index) => (
+        <BlockCard
+          key={node.id}
+          node={node}
+          index={index}
+          totalNodes={nodes.length}
+          isSub={isSub}
+          edges={edges}
+          allNodeIds={allNodeIds}
+          globalRoles={globalRoles}
+          roleDataCache={roleDataCache}
+          roleFormSchemas={roleFormSchemas}
+          eventId={eventId}
+          subId={subId}
+          onMoveUp={() => onReorder(index, index - 1)}
+          onMoveDown={() => onReorder(index, index + 1)}
+          onDelete={onDelete}
+          onCopy={onCopy}
+          onEditId={onEditId}
+          onSubGroupOpen={onSubGroupOpen}
+          onAddRole={onAddRole}
+          onDeleteRole={onDeleteRole}
+          onSaveRole={onSaveRole}
+          onAddEdge={onAddEdge}
+          onRemoveEdge={onRemoveEdge}
+          onUpdateFormData={onUpdateFormData}
+          onMoveToGroup={onMoveToGroup}
+        />
+      ))}
+    </Box>
+  );
+};
+
+// ============================================================
+// ScenarioEventTransition メイン
+// ============================================================
 function ScenarioEventTransition() {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const params = useParams();
   const eventId = params.eventId;
   const subId = params.subId;
+
   const [isLoading, setIsLoading] = useState(true);
+  const [tabs, setTabs] = useState([{ id: 'main', label: 'Group遷移', type: 'group' }]);
+  const [activeTab, setActiveTab] = useState('main');
+  const [tabData, setTabData] = useState({ main: { nodes: [], edges: [] } });
+
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editNodeId, setEditNodeId] = useState(null);
-  const [newId, setNewId] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [tabs, setTabs] = useState([{ id: 'main', label: 'Group遷移図', type: 'group' }]);
-  const [activeTab, setActiveTab] = useState('main');
-  const [tabData, setTabData] = useState({ main: { nodes: [], edges: [] } });
+  const [editNewId, setEditNewId] = useState('');
+
   const [copiedNode, setCopiedNode] = useState(null);
   const [globalRoles, setGlobalRoles] = useState([]);
   const [roleDataCache, setRoleDataCache] = useState({});
-  const [roleFormSchemas, setRoleFormSchemas] = useState({}); // 修正: スキーマキャッシュ
+  const [roleFormSchemas, setRoleFormSchemas] = useState({});
 
+  const { snack, show: showSnack, hide: hideSnack } = useSnack();
+
+  const currentTabData = tabData[activeTab] || { nodes: [], edges: [] };
+  const isSub = activeTab.startsWith('subgroup-');
+  const parentId = isSub ? activeTab.replace('subgroup-', '') : null;
+
+  // ── グローバルRole取得 ──
   useEffect(() => {
     fetch('/api/scenario-role')
       .then(res => res.json())
-      .then(rolesData => setGlobalRoles(rolesData))
-      .catch(error => console.error('Error fetching roles:', error));
+      .then(d => setGlobalRoles(d))
+      .catch(err => console.error('Role取得エラー:', err));
   }, []);
 
-  // 修正: ロールスキーマを一括ロード
+  // ── スキーマ一括ロード（重複排除済み） ──
   useEffect(() => {
-    const loadSchemas = async () => {
+    if (!globalRoles.length) return;
+    globalRoles.forEach(async (role) => {
+      if (roleFormSchemas[role.name]) return; // 既にある
       try {
-        const promises = globalRoles.map(async (role) => {
-          const res = await fetch(`/api/role-form-schema/${role.name}`);
-          if (res.ok) {
-            const schema = await res.json();
-            return { roleName: role.name, schema };
-          }
-          return null;
-        });
-        const results = await Promise.all(promises);
-        const schemas = results.reduce((acc, curr) => {
-          if (curr) acc[curr.roleName] = curr.schema;
-          return acc;
-        }, {});
-        setRoleFormSchemas(schemas);
-      } catch (error) {
-        console.error('Error loading role form schemas:', error);
+        const schema = await fetchSchemaOnce(role.name);
+        setRoleFormSchemas(prev => ({ ...prev, [role.name]: schema }));
+      } catch (e) {
+        console.error(`スキーマ取得エラー (${role.name}):`, e);
       }
-    };
-    if (globalRoles.length > 0) {
-      loadSchemas();
-    }
+    });
   }, [globalRoles]);
 
+  // ── 初期データロード ──
   useEffect(() => {
-    const handleUpdateRoleDataCache = (event) => {
-      const { nodeId, uniqueId, formData } = event.detail;
-      setRoleDataCache(prev => ({
-        ...prev,
-        [nodeId]: {
-          ...prev[nodeId],
-          [uniqueId]: formData
-        }
-      }));
-    };
-    const handleUpdateRoleFormSchema = (event) => {
-      const { roleName, schema } = event.detail;
-      setRoleFormSchemas(prev => ({ ...prev, [roleName]: schema }));
-    };
-    window.addEventListener('updateRoleDataCache', handleUpdateRoleDataCache);
-    window.addEventListener('updateRoleFormSchema', handleUpdateRoleFormSchema);
-    return () => {
-      window.removeEventListener('updateRoleDataCache', handleUpdateRoleDataCache);
-      window.removeEventListener('updateRoleFormSchema', handleUpdateRoleFormSchema);
-    };
-  }, []);
-
-  const debouncedSaveCurrentTab = useMemo(() => debounce((tabDataArg, activeTabArg, eventIdArg, subIdArg) => {
-    if (!tabDataArg[activeTabArg] || !eventIdArg || !subIdArg) {
-      console.error('Cannot save tab: tabData or eventId/subId is undefined');
-      return;
-    }
+    if (!eventId || !subId) { setIsLoading(false); return; }
+    const ctrl = new AbortController();
     setIsLoading(true);
-    const parentId = activeTabArg.startsWith('subgroup-') ? activeTabArg.split('-')[1] : null;
-    const saveData = {
-      nodes: tabDataArg[activeTabArg].nodes.map(n => ({
-        id: n.id,
-        type: n.type,
-        position: n.position,
-        data: {
-          label: n.data.label,
-          description: n.data.description,
-          roles: n.data.roles,
-          subgroups: n.data.subgroups,
-          isSubGroup: n.data.isSubGroup
-        },
-        draggable: n.draggable
-      })),
-      edges: tabDataArg[activeTabArg].edges
-    };
-    const saveUrl = activeTabArg.startsWith('subgroup-')
-      ? `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition/${parentId}/subgroup`
-      : `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition`;
-    fetch(saveUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(saveData),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, { signal: ctrl.signal })
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(result => {
-        console.log('Save response:', result);
-        if (activeTabArg.startsWith('subgroup-')) {
-          setTabData(prev => ({
-            ...prev,
-            main: {
-              ...prev.main,
-              nodes: prev.main.nodes.map(node =>
-                node.id === parentId ? {
-                  ...node,
-                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: saveData } }
-                } : node
-              )
-            }
-          }));
-        }
-        alert(result.message);
-      })
-      .catch(error => {
-        console.error('Error saving:', error);
-        alert('保存エラー: ' + error.message);
-      })
-      .finally(() => setIsLoading(false));
-  }, 500), []);
-
-  const saveCurrentTab = useCallback(() => {
-    debouncedSaveCurrentTab(tabData, activeTab, eventId, subId);
-  }, [debouncedSaveCurrentTab, tabData, activeTab, eventId, subId]);
-
-  const updateNodeId = useCallback((oldId, newId) => {
-    if (oldId === newId) return;
-    const currentNodes = tabData[activeTab].nodes;
-    if (currentNodes.some(n => n.id === newId)) {
-      alert('IDが重複しています');
-      return;
-    }
-    setIsLoading(true);
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
-    let updatedNodes = currentNodes.map(node =>
-      node.id === oldId ? {
-        ...node,
-        id: newId,
-        data: {
-          ...node.data,
-          label: activeTab.startsWith('subgroup-') ? `Group: ${parentId} / Sub: ${newId}` : newId,
-          subgroups: node.data.subgroups || {}
-        }
-      } : node
-    );
-    const updatedEdges = tabData[activeTab].edges.map(edge => ({
-      ...edge,
-      source: edge.source === oldId ? newId : edge.source,
-      target: edge.target === oldId ? newId : edge.target
-    }));
-    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } };
-    if (activeTab.startsWith('subgroup-')) {
-      newTabData.main = {
-        ...tabData.main,
-        nodes: tabData.main.nodes.map(node => {
-          if (node.id === parentId) {
-            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
-            const newSubNodes = currentSubData.nodes.map(n =>
-              n.id === oldId ? {
-                ...n,
-                id: newId,
-                data: { ...n.data, label: `Group: ${parentId} / Sub: ${newId}` }
-              } : n
-            );
-            const newSubEdges = currentSubData.edges.map(e => ({
-              ...e,
-              source: e.source === oldId ? newId : e.source,
-              target: e.target === oldId ? newId : e.target
-            }));
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                subgroups: {
-                  ...node.data.subgroups,
-                  [parentId]: { nodes: newSubNodes, edges: newSubEdges }
-                }
-              }
-            };
-          }
-          return node;
-        })
-      };
-    }
-    setTabData(newTabData);
-    setNodes(updatedNodes);
-    setEdges(updatedEdges);
-    saveCurrentTab();
-  }, [tabData, activeTab, setTabData, setNodes, setEdges, saveCurrentTab]);
-
-  const nodeTypes = useMemo(() => ({
-    customGroup: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} roles={globalRoles} roleDataCache={roleDataCache} roleFormSchemas={roleFormSchemas} />,
-    subGroupNode: (props) => <CustomGroupNode {...props} saveCurrentTab={saveCurrentTab} roles={globalRoles} roleDataCache={roleDataCache} roleFormSchemas={roleFormSchemas} />
-  }), [saveCurrentTab, globalRoles, roleDataCache, roleFormSchemas]);
-
-  const memoizedNodes = useMemo(() => nodes.map(node => ({
-    ...node,
-    data: { ...node.data, saveCurrentTab }
-  })), [nodes, saveCurrentTab]);
-
-  const memoizedEdges = useMemo(() => edges.map(edge => ({
-    ...edge,
-    id: `${edge.source}-${edge.target}`, // 修正: エッジIDを明示
-    animated: true,
-    style: { strokeDasharray: '5,5', stroke: 'cyan', strokeWidth: 3 }
-  })), [edges]);
-
-  const addOnShrinkToNodes = (nodeList, isSub = false) => {
-    return nodeList.map(node => ({
-      id: node.id,
-      type: node.type,
-      position: node.position,
-      data: {
-        label: node.data.label,
-        description: node.data.description || '',
-        roles: node.data.roles || [],
-        subgroups: isSub ? {} : node.data.subgroups || {},
-        isSubGroup: isSub || node.type === 'subGroupNode',
-        onTabSwitch: node.type === 'customGroup' ? (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId) : undefined,
-        saveCurrentTab,
-      },
-      draggable: true,
-    }));
-  };
-
-  useEffect(() => {
-    const handleUpdateNodeRoles = (event) => {
-      const { id, newRoles } = event.detail;
-      console.log('updateNodeRoles event:', { id, newRoles });
-      setTabData(prev => {
-        const updatedNodes = prev[activeTab].nodes.map(node =>
-          node.id === id ? { ...node, data: { ...node.data, roles: newRoles } } : node
+        const nodes = result.nodes || [];
+        const edges = (result.edges || []).filter(e =>
+          nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target)
         );
-        const newTabData = { ...prev, [activeTab]: { ...prev[activeTab], nodes: updatedNodes } };
-        if (activeTab.startsWith('subgroup-')) {
-          const parentId = activeTab.split('-')[1];
-          newTabData.main = {
-            ...prev.main,
-            nodes: prev.main.nodes.map(node =>
-              node.id === parentId ? {
-                ...node,
-                data: {
-                  ...node.data,
-                  subgroups: {
-                    ...node.data.subgroups,
-                    [parentId]: { nodes: updatedNodes, edges: prev[activeTab].edges }
-                  }
-                }
-              } : node
-            )
-          };
-        }
-        return newTabData;
-      });
-      setNodes(prev => prev.map(node =>
-        node.id === id ? { ...node, data: { ...node.data, roles: newRoles } } : node
-      ));
-      saveCurrentTab();
-    };
-
-    const handleDeleteNode = (event) => {
-      handleDeleteNode(event.detail);
-    };
-
-    const handleCopyNode = (event) => {
-      handleCopyNode(event.detail);
-    };
-
-    const handleEditNodeId = (event) => {
-      handleOpenEditDialog(event.detail);
-    };
-
-    window.addEventListener('updateNodeRoles', handleUpdateNodeRoles);
-    window.addEventListener('deleteNode', handleDeleteNode);
-    window.addEventListener('copyNode', handleCopyNode);
-    window.addEventListener('editNodeId', handleEditNodeId);
-
-    return () => {
-      window.removeEventListener('updateNodeRoles', handleUpdateNodeRoles);
-      window.removeEventListener('deleteNode', handleDeleteNode);
-      window.removeEventListener('copyNode', handleCopyNode);
-      window.removeEventListener('editNodeId', handleEditNodeId);
-    };
-  }, [activeTab, tabData, saveCurrentTab]);
-
-  useEffect(() => {
-    if (!eventId || !subId) {
-      console.error('Cannot fetch transition: eventId or subId is undefined');
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      setIsLoading(false);
-      return;
-    }
-    const abortController = new AbortController();
-    setIsLoading(true);
-    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, { signal: abortController.signal })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
+        setTabData(prev => ({ ...prev, main: { nodes, edges } }));
       })
-      .then(result => {
-        let loadedNodes = result.nodes || [];
-        loadedNodes = addOnShrinkToNodes(loadedNodes, false);
-        const validEdges = (result.edges || []).filter(edge =>
-          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
-        );
-        setTabData(prev => ({ ...prev, main: { nodes: loadedNodes, edges: validEdges } }));
-        setNodes(loadedNodes);
-        setEdges(validEdges);
-      })
-      .catch(error => {
-        if (error.name === 'AbortError') return;
-        console.error('Error fetching transition:', error);
-        setTabData(prev => ({ ...prev, main: { nodes: [], edges: [] } }));
-        setNodes([]);
-        setEdges([]);
-      })
+      .catch(e => { if (e.name !== 'AbortError') console.error('初期ロードエラー:', e); })
       .finally(() => setIsLoading(false));
-    return () => abortController.abort();
+    return () => ctrl.abort();
   }, [eventId, subId]);
 
-  const handleTabSwitch = useCallback((tabId, parentId = null) => {
-    if (tabId === activeTab) return;
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
+  // ── ドラッグ&ドロップ並び替えイベント ──
+  useEffect(() => {
+    const handler = (e) => {
+      const { draggedId, targetId } = e.detail;
+      setTabData(prev => {
+        const cur = prev[activeTab] || { nodes: [], edges: [] };
+        const from = cur.nodes.findIndex(n => n.id === draggedId);
+        const to = cur.nodes.findIndex(n => n.id === targetId);
+        if (from < 0 || to < 0) return prev;
+        const newNodes = [...cur.nodes];
+        const [moved] = newNodes.splice(from, 1);
+        newNodes.splice(to, 0, moved);
+        return { ...prev, [activeTab]: { ...cur, nodes: newNodes } };
+      });
+    };
+    window.addEventListener('reorderNode', handler);
+    return () => window.removeEventListener('reorderNode', handler);
+  }, [activeTab]);
+
+  // ── debounce保存 ──
+  const debouncedSave = useMemo(() => debounce((tabDataArg, activeTabArg, eventIdArg, subIdArg) => {
+    if (!tabDataArg[activeTabArg] || !eventIdArg || !subIdArg) return;
     setIsLoading(true);
-    const existingTab = tabs.find(t => t.id === tabId);
+    const pid = activeTabArg.startsWith('subgroup-') ? activeTabArg.replace('subgroup-', '') : null;
+    const cur = tabDataArg[activeTabArg];
+    const saveData = {
+      nodes: cur.nodes.map(n => ({
+        id: n.id, type: n.type || (activeTabArg === 'main' ? 'customGroup' : 'subGroupNode'),
+        position: n.position || { x: 0, y: 0 },
+        data: { label: n.data.label, description: n.data.description || '', roles: n.data.roles || [], subgroups: n.data.subgroups || {}, isSubGroup: n.data.isSubGroup },
+        draggable: true,
+      })),
+      edges: cur.edges,
+    };
+    const url = pid
+      ? `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition/${pid}/subgroup`
+      : `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition`;
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveData) })
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+      .catch(e => console.error('保存エラー:', e))
+      .finally(() => setIsLoading(false));
+  }, 600), []);
+
+  const saveCurrentTab = useCallback(() => {
+    debouncedSave(tabData, activeTab, eventId, subId);
+  }, [debouncedSave, tabData, activeTab, eventId, subId]);
+
+  // ── タブ切り替え ──
+  const handleTabSwitch = useCallback((tabId, pid = null) => {
+    if (tabId === activeTab) return;
+    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return; }
+
     if (tabId.startsWith('subgroup-')) {
-      if (existingTab) {
+      const pId = pid || tabId.replace('subgroup-', '');
+      const existingTab = tabs.find(t => t.id === tabId);
+      if (existingTab && tabData[tabId]) {
         setActiveTab(tabId);
-        const parentNode = tabData.main.nodes.find(n => n.id === parentId);
-        const subGroupData = parentNode?.data.subgroups?.[parentId] || { nodes: [], edges: [] };
-        const loadedNodes = addOnShrinkToNodes(subGroupData.nodes, true);
-        const validEdges = subGroupData.edges.filter(edge =>
-          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
-        );
-        setNodes(loadedNodes);
-        setEdges(validEdges);
-        setTabData(prev => ({ ...prev, [tabId]: { nodes: loadedNodes, edges: validEdges } }));
-        setTimeout(() => {
-          const revalidatedEdges = validEdges.filter(edge =>
-            loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
-          );
-          if (revalidatedEdges.length !== validEdges.length) {
-            console.warn('Invalid edges detected in tab switch:', { tabId, invalidEdges: validEdges.length - revalidatedEdges.length });
-            setEdges(revalidatedEdges);
-            setTabData(prev => ({
-              ...prev,
-              [tabId]: { ...prev[tabId], edges: revalidatedEdges }
-            }));
-          }
-        }, 0);
-        setIsLoading(false);
         return;
       }
-      const newTab = { id: tabId, label: `SubGroup: ${parentId}`, type: 'subgroup', parentId };
-      setTabs(prev => {
-        if (!prev.find(t => t.id === tabId)) return [...prev, newTab];
-        return prev;
-      });
-      fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${parentId}/subgroup`)
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          return res.json();
-        })
+      setIsLoading(true);
+      const newTab = { id: tabId, label: `Sub: ${pId}`, type: 'subgroup', parentId: pId };
+      setTabs(prev => prev.find(t => t.id === tabId) ? prev : [...prev, newTab]);
+      fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${pId}/subgroup`)
+        .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
         .then(result => {
-          let loadedNodes = result.nodes || [];
-          loadedNodes = addOnShrinkToNodes(loadedNodes, true);
-          const validEdges = (result.edges || []).filter(edge =>
-            loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
+          const nodes = result.nodes || [];
+          const edges = (result.edges || []).filter(e =>
+            nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target)
           );
-          setTabData(prev => ({
-            ...prev,
-            [tabId]: { nodes: loadedNodes, edges: validEdges },
-            main: {
-              ...prev.main,
-              nodes: prev.main.nodes.map(node =>
-                node.id === parentId ? {
-                  ...node,
-                  data: { ...node.data, subgroups: { ...node.data.subgroups, [parentId]: { nodes: loadedNodes, edges: validEdges } } }
-                } : node
-              )
-            }
-          }));
-          setNodes(loadedNodes);
-          setEdges(validEdges);
+          setTabData(prev => ({ ...prev, [tabId]: { nodes, edges } }));
           setActiveTab(tabId);
         })
-        .catch(error => {
-          console.error('Error fetching subgroup:', error);
-          setTabData(prev => ({ ...prev, [tabId]: { nodes: [], edges: [] } }));
-          setNodes([]);
-          setEdges([]);
-          setActiveTab(tabId);
-        })
+        .catch(e => console.error('SubGroupロードエラー:', e))
         .finally(() => setIsLoading(false));
     } else {
       setActiveTab(tabId);
-      const currentTabData = tabData[tabId] || { nodes: [], edges: [] };
-      const loadedNodes = addOnShrinkToNodes(currentTabData.nodes, false);
-      const validEdges = currentTabData.edges.filter(edge =>
-        loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
-      );
-      setNodes(loadedNodes);
-      setEdges(validEdges);
-      setTabData(prev => ({ ...prev, [tabId]: { nodes: loadedNodes, edges: validEdges } }));
-      setTimeout(() => {
-        const revalidatedEdges = validEdges.filter(edge =>
-          loadedNodes.some(n => n.id === edge.source) && loadedNodes.some(n => n.id === edge.target)
-        );
-        if (revalidatedEdges.length !== validEdges.length) {
-          console.warn('Invalid edges detected in main tab switch:', { tabId, invalidEdges: validEdges.length - revalidatedEdges.length });
-          setEdges(revalidatedEdges);
-          setTabData(prev => ({
-            ...prev,
-            [tabId]: { ...prev[tabId], edges: revalidatedEdges }
-          }));
-        }
-      }, 0);
-      setIsLoading(false);
     }
-  }, [eventId, subId, activeTab, tabData, tabs]);
+  }, [eventId, subId, activeTab, tabs, tabData]);
 
   const handleTabClose = (tabId) => {
     if (tabId === 'main') return;
     setTabs(prev => prev.filter(t => t.id !== tabId));
+    setTabData(prev => { const { [tabId]: _, ...rest } = prev; return rest; });
+    if (activeTab === tabId) setActiveTab('main');
+  };
+
+  // ── ノード操作 ──
+  const updateTabData = (updater) => {
     setTabData(prev => {
-      const { [tabId]: _, ...rest } = prev;
-      return rest;
+      const updated = typeof updater === 'function' ? updater(prev) : updater;
+      return updated;
     });
-    if (activeTab === tabId) {
-      handleTabSwitch('main');
-    }
   };
 
-  const onConnect = (params) => {
-    console.log('onConnect called with params:', params);
-    const sourceEdges = edges.filter(edge => edge.source === params.source);
-    if (sourceEdges.length > 0) {
-      alert('1つのノードから複数の接続はできません');
-      return;
-    }
-    const targetEdges = edges.filter(edge => edge.target === params.target);
-    if (targetEdges.length > 0) {
-      alert('1つのノードに複数の接続はできません');
-      return;
-    }
-    const newEdge = {
-      ...params,
-      id: `${params.source}-${params.target}`, // 修正: エッジIDを明示
-      animated: true,
-      style: { strokeDasharray: '5,5', stroke: 'cyan', strokeWidth: 3 }
-    };
-    setEdges(eds => {
-      const updatedEdges = addEdge(newEdge, eds);
-      console.log('New edges after addEdge:', updatedEdges);
-      return updatedEdges;
-    });
-    setTabData(prev => ({
-      ...prev,
-      [activeTab]: { nodes: prev[activeTab].nodes, edges: [...prev[activeTab].edges, newEdge] }
-    }));
-    adjustTargetIds(params.source, params.target);
-    saveCurrentTab();
-  };
-
-  const adjustTargetIds = useCallback((sourceId, targetId, visited = new Set()) => {
-    console.log('adjustTargetIds called with:', { sourceId, targetId, visited });
-    if (visited.has(targetId)) return;
-    visited.add(targetId);
-
-    const currentNodes = tabData[activeTab]?.nodes || [];
-    const sourceNode = currentNodes.find(n => n.id === sourceId);
-    const targetNode = currentNodes.find(n => n.id === targetId);
-
-    if (!sourceNode || !targetNode) {
-      console.warn('Source or target node not found:', { sourceId, targetId });
-      return;
-    }
-
-    const sourceNum = parseInt(sourceId, 10);
-    if (isNaN(sourceNum)) {
-      console.warn('Source ID is not a number:', sourceId);
-      return;
-    }
-
-    let newTargetId = (sourceNum + 1).toString();
-    while (currentNodes.some(n => n.id === newTargetId && n.id !== targetId)) {
-      newTargetId = (parseInt(newTargetId, 10) + 1).toString();
-    }
-
-    if (newTargetId !== targetId) {
-      console.log('Updating node ID from', targetId, 'to', newTargetId);
-      updateNodeId(targetId, newTargetId);
-      const updatedEdges = (tabData[activeTab]?.edges || []).map(edge => ({
-        ...edge,
-        source: edge.source === targetId ? newTargetId : edge.source,
-        target: edge.target === targetId ? newTargetId : edge.target,
-        id: `${edge.source === targetId ? newTargetId : edge.source}-${edge.target === targetId ? newTargetId : edge.target}` // 修正: エッジID更新
-      }));
-      setEdges(updatedEdges);
-      setTabData(prev => ({
-        ...prev,
-        [activeTab]: {
-          ...prev[activeTab],
-          edges: updatedEdges
-        }
-      }));
-    }
-
-    const nextEdges = (tabData[activeTab]?.edges || []).filter(e => e.source === newTargetId);
-    console.log('Next edges to process:', nextEdges);
-    nextEdges.forEach(edge => {
-      adjustTargetIds(newTargetId, edge.target, visited);
-    });
-  }, [tabData, activeTab, updateNodeId]);
-
-  const handleOpenAddDialog = () => {
-    setAddDialogOpen(true);
-    setNewId('');
-    setNewDescription('');
-  };
-
-  const handleCloseAddDialog = () => {
-    setAddDialogOpen(false);
+  const handleReorder = (from, to) => {
+    if (to < 0 || to >= currentTabData.nodes.length) return;
+    const newNodes = [...currentTabData.nodes];
+    const [moved] = newNodes.splice(from, 1);
+    newNodes.splice(to, 0, moved);
+    updateTabData(prev => ({ ...prev, [activeTab]: { ...prev[activeTab], nodes: newNodes } }));
+    setTimeout(saveCurrentTab, 0);
   };
 
   const handleAddNode = () => {
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
-    if (!newId.trim()) {
-      alert('IDを入力してください（数値推奨）');
-      return;
-    }
-    if (tabData[activeTab].nodes.find(node => node.id === newId)) {
-      alert('IDが重複しています');
-      return;
-    }
-    const newNodeId = newId.trim();
-    const nodeType = activeTab.startsWith('subgroup-') ? 'subGroupNode' : 'customGroup';
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
-    const label = activeTab.startsWith('subgroup-') ? `Group: ${parentId} / Sub: ${newNodeId}` : newNodeId;
+    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return; }
+    const currentNodes = currentTabData.nodes;
+    const newId = getNextNodeId(currentNodes);
     const newNode = {
-      id: newNodeId,
-      type: nodeType,
-      position: { x: Math.random() * 400, y: Math.random() * 400 },
+      id: newId,
+      type: isSub ? 'subGroupNode' : 'customGroup',
+      position: { x: 0, y: 0 },
       data: {
-        label: label,
-        description: newDescription.trim() || '',
+        label: isSub ? `Group: ${parentId} / Sub: ${newId}` : newId,
+        description: newDescription.trim(),
         roles: [],
-        subgroups: nodeType === 'customGroup' ? {} : {},
-        isSubGroup: activeTab.startsWith('subgroup-'),
-        onTabSwitch: nodeType === 'customGroup' ? (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId) : undefined,
-        saveCurrentTab,
+        subgroups: {},
+        isSubGroup: isSub,
       },
-      draggable: true,
     };
-    let updatedNodes = [...(tabData[activeTab]?.nodes || []), newNode];
-    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: tabData[activeTab]?.edges || [] } };
-    if (activeTab.startsWith('subgroup-')) {
-      newTabData.main = {
-        ...tabData.main,
-        nodes: tabData.main.nodes.map(node => {
-          if (node.id === parentId) {
-            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
-            const newSubNodes = [...currentSubData.nodes, newNode];
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                subgroups: {
-                  ...node.data.subgroups,
-                  [parentId]: { nodes: newSubNodes, edges: currentSubData.edges }
-                }
-              }
-            };
-          }
-          return node;
-        })
-      };
-    }
-    setTabData(newTabData);
-    setNodes(updatedNodes);
-    saveCurrentTab();
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: { ...prev[activeTab], nodes: [...prev[activeTab].nodes, newNode] }
+    }));
+    setAddDialogOpen(false);
+    setNewDescription('');
+    setTimeout(saveCurrentTab, 0);
+    showSnack(`ノード ${newId} を追加`);
   };
 
   const handleDeleteNode = (nodeId) => {
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
-    setIsLoading(true);
-    const parentId = activeTab.startsWith('subgroup-') ? activeTab.split('-')[1] : null;
-    let updatedNodes = tabData[activeTab]?.nodes.filter(node => node.id !== nodeId) || [];
-    const currentEdges = tabData[activeTab]?.edges.filter(edge => edge.source !== nodeId && edge.target !== nodeId) || [];
-    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: currentEdges } };
-    if (activeTab.startsWith('subgroup-')) {
-      newTabData.main = {
-        ...tabData.main,
-        nodes: tabData.main.nodes.map(node => {
-          if (node.id === parentId) {
-            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
-            const newSubNodes = currentSubData.nodes.filter(n => n.id !== nodeId);
-            const newSubEdges = currentSubData.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                subgroups: {
-                  ...node.data.subgroups,
-                  [parentId]: { nodes: newSubNodes, edges: newSubEdges }
-                }
-              }
-            };
-          }
-          return node;
-        })
+    updateTabData(prev => {
+      const cur = prev[activeTab];
+      return {
+        ...prev,
+        [activeTab]: {
+          nodes: cur.nodes.filter(n => n.id !== nodeId),
+          edges: cur.edges.filter(e => e.source !== nodeId && e.target !== nodeId),
+        }
       };
-    }
-    setTabData(newTabData);
-    setNodes(updatedNodes);
-    setEdges(currentEdges);
-    saveCurrentTab();
+    });
+    setTimeout(saveCurrentTab, 0);
+    showSnack(`ノード ${nodeId} を削除`);
   };
 
   const handleCopyNode = (nodeId) => {
-    const nodeToCopy = (tabData[activeTab]?.nodes || []).find(n => n.id === nodeId);
-    if (nodeToCopy) {
-      const isSub = activeTab.startsWith('subgroup-');
-      setCopiedNode({
-        ...nodeToCopy,
-        type: isSub ? 'subGroupNode' : 'customGroup',
-        data: {
-          ...nodeToCopy.data,
-          subgroups: isSub ? {} : nodeToCopy.data.subgroups || {}
-        }
-      });
-    } else {
-      alert('ノードが見つかりません');
-    }
+    const node = currentTabData.nodes.find(n => n.id === nodeId);
+    if (node) { setCopiedNode(node); showSnack(`ノード ${nodeId} をコピー`); }
   };
 
   const handlePasteNode = () => {
-    if (!copiedNode) {
-      alert('コピーされたノードがありません');
-      return;
-    }
-    if (!eventId || !subId) {
-      alert('エラー: Event IDまたはSub IDが未定義です。');
-      return;
-    }
-    setIsLoading(true);
-    const currentNodes = tabData[activeTab].nodes;
-    const isSub = activeTab.startsWith('subgroup-');
-    const expectedType = isSub ? 'subGroupNode' : 'customGroup';
-    if (copiedNode.type !== expectedType) {
-      alert('このタブでは異なるタイプのノードをペーストできません');
-      setIsLoading(false);
-      return;
-    }
-    const ids = currentNodes.map(n => parseInt(n.id, 10)).filter(id => !isNaN(id));
-    const maxId = ids.length > 0 ? Math.max(...ids) : 0;
-    const newNodeId = (maxId + 1).toString();
-    const parentId = isSub ? activeTab.split('-')[1] : null;
-    const label = isSub ? `Group: ${parentId} / Sub: ${newNodeId}` : newNodeId;
+    if (!copiedNode) { showSnack('コピーなし', 'warning'); return; }
+    const newId = getNextNodeId(currentTabData.nodes);
     const newNode = {
       ...copiedNode,
-      id: newNodeId,
+      id: newId,
       type: isSub ? 'subGroupNode' : 'customGroup',
-      position: { x: copiedNode.position.x + 20, y: copiedNode.position.y + 20 },
       data: {
         ...copiedNode.data,
-        label: label,
-        subgroups: isSub ? {} : copiedNode.data.subgroups || {},
+        label: isSub ? `Group: ${parentId} / Sub: ${newId}` : newId,
         isSubGroup: isSub,
-        onTabSwitch: isSub ? undefined : (nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId),
-        saveCurrentTab,
+        subgroups: {},
+        roles: copiedNode.data.roles?.map(r => ({ ...r, uniqueId: `${Date.now()}-${r.uniqueId}` })) || [],
       }
     };
-    let updatedNodes = [...currentNodes, newNode];
-    let newTabData = { ...tabData, [activeTab]: { nodes: updatedNodes, edges: tabData[activeTab].edges } };
-    if (isSub) {
-      newTabData.main = {
-        ...tabData.main,
-        nodes: tabData.main.nodes.map(node => {
-          if (node.id === parentId) {
-            const currentSubData = node.data.subgroups[parentId] || { nodes: [], edges: [] };
-            const newSubNodes = [...currentSubData.nodes, newNode];
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                subgroups: {
-                  ...node.data.subgroups,
-                  [parentId]: { nodes: newSubNodes, edges: currentSubData.edges }
-                }
-              }
-            };
-          }
-          return node;
-        })
-      };
-    }
-    setTabData(newTabData);
-    setNodes(updatedNodes);
-    saveCurrentTab();
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: { ...prev[activeTab], nodes: [...prev[activeTab].nodes, newNode] }
+    }));
+    setTimeout(saveCurrentTab, 0);
+    showSnack(`ノード ${newId} としてペースト`);
   };
 
   const handleOpenEditDialog = (nodeId) => {
-    const node = tabData[activeTab].nodes.find(n => n.id === nodeId);
+    const node = currentTabData.nodes.find(n => n.id === nodeId);
     if (node) {
       setEditNodeId(nodeId);
-      setNewId(node.id);
+      setEditNewId(nodeId);
       setNewDescription(node.data.description || '');
       setEditDialogOpen(true);
     }
   };
 
-  const handleCloseEditDialog = () => {
+  const handleEditNode = () => {
+    const newId = editNewId.trim();
+    const currentNodes = currentTabData.nodes;
+
+    // ID変更チェック
+    if (newId && newId !== editNodeId && currentNodes.some(n => n.id === newId)) {
+      showSnack('IDが重複しています', 'error'); return;
+    }
+
+    updateTabData(prev => {
+      const cur = prev[activeTab];
+      const updatedNodes = cur.nodes.map(n => {
+        if (n.id !== editNodeId) return n;
+        return {
+          ...n,
+          id: newId || editNodeId,
+          data: {
+            ...n.data,
+            description: newDescription.trim(),
+            label: isSub
+              ? `Group: ${parentId} / Sub: ${newId || editNodeId}`
+              : (newId || editNodeId),
+          }
+        };
+      });
+      const updatedEdges = cur.edges.map(e => ({
+        ...e,
+        source: e.source === editNodeId ? (newId || editNodeId) : e.source,
+        target: e.target === editNodeId ? (newId || editNodeId) : e.target,
+        id: `${e.source === editNodeId ? (newId || editNodeId) : e.source}-${e.target === editNodeId ? (newId || editNodeId) : e.target}`,
+      }));
+      return { ...prev, [activeTab]: { nodes: updatedNodes, edges: updatedEdges } };
+    });
+
     setEditDialogOpen(false);
-    setEditNodeId(null);
+    setTimeout(saveCurrentTab, 0);
+    showSnack('更新しました');
   };
 
-  const handleEditNode = () => {
-    if (!newId.trim()) {
-      alert('IDを入力してください（数値推奨）');
-      return;
-    }
-    updateNodeId(editNodeId, newId.trim());
-    const updatedNodes = tabData[activeTab].nodes.map(node =>
-      node.id === newId ? { ...node, data: { ...node.data, description: newDescription.trim() } } : node
+  // ── Role操作 ──
+  const handleAddRole = (nodeId, newRole) => {
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: {
+        ...prev[activeTab],
+        nodes: prev[activeTab].nodes.map(n =>
+          n.id === nodeId ? { ...n, data: { ...n.data, roles: [...(n.data.roles || []), newRole] } } : n
+        )
+      }
+    }));
+    setTimeout(saveCurrentTab, 0);
+  };
+
+  const handleDeleteRole = (nodeId, uniqueId) => {
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: {
+        ...prev[activeTab],
+        nodes: prev[activeTab].nodes.map(n =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, roles: n.data.roles.filter(r => r.uniqueId !== uniqueId) } }
+            : n
+        )
+      }
+    }));
+    setTimeout(saveCurrentTab, 0);
+  };
+
+  const handleSaveRole = (nodeId, uniqueId, formData) => {
+    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return; }
+    fetch(`/api/save-role-data/${eventId}/${subId}/${nodeId}/${uniqueId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ formData }),
+    })
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+      .then(() => {
+        setRoleDataCache(prev => ({
+          ...prev,
+          [nodeId]: { ...(prev[nodeId] || {}), [uniqueId]: formData }
+        }));
+        updateTabData(prev => ({
+          ...prev,
+          [activeTab]: {
+            ...prev[activeTab],
+            nodes: prev[activeTab].nodes.map(n =>
+              n.id === nodeId
+                ? { ...n, data: { ...n.data, roles: n.data.roles.map(r => r.uniqueId === uniqueId ? { ...r, data: formData } : r) } }
+                : n
+            )
+          }
+        }));
+      })
+      .catch(e => showSnack('保存エラー: ' + e.message, 'error'));
+  };
+
+  const handleUpdateFormData = (nodeId, newState) => {
+    // フォームデータをキャッシュに反映（保存はhandleSaveRoleで行う）
+    setRoleDataCache(prev => {
+      const nodeCache = prev[nodeId] || {};
+      const updated = { ...nodeCache, ...newState };
+      return { ...prev, [nodeId]: updated };
+    });
+  };
+
+  // ── 接続操作 ──
+  const handleAddEdge = (edge) => {
+    const alreadyExists = currentTabData.edges.some(e => e.source === edge.source && e.target === edge.target);
+    if (alreadyExists) { showSnack('既に接続済み', 'warning'); return; }
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: { ...prev[activeTab], edges: [...prev[activeTab].edges, edge] }
+    }));
+    setTimeout(saveCurrentTab, 0);
+  };
+
+  const handleRemoveEdge = (edge) => {
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: {
+        ...prev[activeTab],
+        edges: prev[activeTab].edges.filter(e => !(e.source === edge.source && e.target === edge.target))
+      }
+    }));
+    setTimeout(saveCurrentTab, 0);
+    showSnack(`接続 ${edge.source}→${edge.target} を削除`);
+  };
+
+  // ── グループ間移動（IDを更新して移動） ──
+  const handleMoveToGroup = (nodeId, targetGroupId) => {
+    // 現在のタブから取り除き、別グループのSubGroupタブへ追加
+    const node = currentTabData.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    const targetTabId = `subgroup-${targetGroupId}`;
+    const targetTabData = tabData[targetTabId] || { nodes: [], edges: [] };
+    const newId = getNextNodeId(targetTabData.nodes);
+
+    const newNode = {
+      ...node,
+      id: newId,
+      data: {
+        ...node.data,
+        label: `Group: ${targetGroupId} / Sub: ${newId}`,
+        isSubGroup: true,
+      }
+    };
+
+    updateTabData(prev => {
+      const cur = prev[activeTab];
+      const targetCur = prev[targetTabId] || { nodes: [], edges: [] };
+      return {
+        ...prev,
+        [activeTab]: {
+          nodes: cur.nodes.filter(n => n.id !== nodeId),
+          edges: cur.edges.filter(e => e.source !== nodeId && e.target !== nodeId),
+        },
+        [targetTabId]: {
+          nodes: [...targetCur.nodes, newNode],
+          edges: targetCur.edges,
+        }
+      };
+    });
+    setTimeout(saveCurrentTab, 0);
+    showSnack(`ノード ${nodeId} → グループ ${targetGroupId} に移動 (新ID: ${newId})`);
+  };
+
+  // ── 接続一覧表示（サマリー） ──
+  const renderConnectionSummary = () => {
+    const { edges, nodes } = currentTabData;
+    if (!edges.length) return null;
+    return (
+      <Box sx={{ px: 2, pb: 1 }}>
+        <Typography variant="caption" color="text.secondary" fontWeight="bold">接続一覧</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.4 }}>
+          {edges.map((e, i) => (
+            <Chip
+              key={i}
+              label={`${e.source} → ${e.target}`}
+              size="small"
+              onDelete={() => handleRemoveEdge(e)}
+              icon={<ArrowForwardIcon sx={{ fontSize: 12 }} />}
+              sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(0,200,255,0.1)', borderColor: 'cyan.400' }}
+              variant="outlined"
+            />
+          ))}
+        </Box>
+      </Box>
     );
-    setTabData(prev => ({ ...prev, [activeTab]: { nodes: updatedNodes, edges: prev[activeTab].edges } }));
-    setNodes(updatedNodes);
-    saveCurrentTab();
-    handleCloseEditDialog();
   };
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: '#0f0f1e' }}>
+      {/* ローディング */}
       <Backdrop open={isLoading} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
         <CircularProgress color="inherit" />
       </Backdrop>
-      <AppBar position="static">
-        <Tabs value={activeTab} onChange={(e, newValue) => handleTabSwitch(newValue)} sx={{ bgcolor: 'primary.main' }}>
-          {tabs.map(tab => (
-            <Tab
-              key={tab.id}
-              value={tab.id}
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <Typography>{tab.label}</Typography>
+
+      {/* ── タブバー ── */}
+      <AppBar position="static" sx={{ bgcolor: '#1a1a35' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          <Tabs
+            value={activeTab}
+            onChange={(e, v) => handleTabSwitch(v)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              flex: 1, minHeight: 38,
+              '& .MuiTab-root': { minHeight: 38, py: 0, fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)' },
+              '& .Mui-selected': { color: 'white !important' },
+              '& .MuiTabs-indicator': { bgcolor: 'cyan' },
+            }}
+          >
+            {tabs.map(tab => (
+              <Tab key={tab.id} value={tab.id} label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  {tab.type === 'subgroup' ? <AccountTreeIcon sx={{ fontSize: 12 }} /> : null}
+                  <span>{tab.label}</span>
                   {tab.id !== 'main' && (
-                    <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleTabClose(tab.id); }}>
-                      <CloseIcon />
+                    <IconButton size="small" sx={{ p: 0.1, color: 'inherit', ml: 0.25 }}
+                      onClick={(e) => { e.stopPropagation(); handleTabClose(tab.id); }}>
+                      <CloseIcon sx={{ fontSize: 11 }} />
                     </IconButton>
                   )}
                 </Box>
-              }
-            />
-          ))}
-        </Tabs>
-        <Box sx={{ p: 1, display: 'flex', gap: 1 }}>
-          <Button variant="contained" color="secondary" onClick={handleOpenAddDialog} disabled={isLoading}>
+              } />
+            ))}
+          </Tabs>
+        </Box>
+
+        {/* ── ツールバー ── */}
+        <Box sx={{
+          px: 1.5, py: 0.75, display: 'flex', gap: 1, alignItems: 'center',
+          bgcolor: '#12122a', borderBottom: '1px solid rgba(255,255,255,0.08)'
+        }}>
+          <Button variant="contained" size="small" color="primary"
+            startIcon={<AddIcon />}
+            onClick={() => { setAddDialogOpen(true); setNewDescription(''); }}
+            disabled={isLoading}
+            sx={{ fontSize: '0.72rem', bgcolor: '#2563eb' }}>
             ノード追加
           </Button>
-          <Button variant="contained" color="secondary" onClick={handlePasteNode} disabled={isLoading || !copiedNode}>
-            ノードペースト
-          </Button>
-          <Button variant="contained" color="primary" onClick={saveCurrentTab} disabled={isLoading}>
+
+          <Tooltip title={copiedNode ? `ペースト: ノード ${copiedNode.id}` : 'コピーなし'}>
+            <span>
+              <Button variant="outlined" size="small"
+                startIcon={<ContentPasteIcon />}
+                onClick={handlePasteNode}
+                disabled={isLoading || !copiedNode}
+                sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+                ペースト
+              </Button>
+            </span>
+          </Tooltip>
+
+          {copiedNode && (
+            <Chip
+              label={`コピー中: ${copiedNode.id}`}
+              size="small"
+              onDelete={() => setCopiedNode(null)}
+              sx={{ bgcolor: 'rgba(255,255,255,0.15)', color: 'white', fontSize: '0.65rem', height: 22 }}
+            />
+          )}
+
+          <Box sx={{ flex: 1 }} />
+
+          {/* ノード数・接続数サマリー */}
+          <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.5)' }}>
+            {currentTabData.nodes.length} ノード / {currentTabData.edges.length} 接続
+          </Typography>
+
+          <Button variant="contained" size="small" color="success"
+            startIcon={<SaveIcon />}
+            onClick={saveCurrentTab}
+            disabled={isLoading}
+            sx={{ fontSize: '0.72rem' }}>
             保存
           </Button>
         </Box>
       </AppBar>
-      <Box sx={{ flexGrow: 1, height: 'calc(100vh - 64px)' }}>
-        <ReactFlow
-          nodes={memoizedNodes}
-          edges={memoizedEdges}
-          onNodesChange={(changes) => {
-            onNodesChange(changes);
-            setTabData(prev => {
-              const updated = applyNodeChanges(changes, prev[activeTab].nodes);
-              const newTabData = { ...prev, [activeTab]: { ...prev[activeTab], nodes: updated } };
-              if (activeTab.startsWith('subgroup-')) {
-                const parentId = activeTab.split('-')[1];
-                newTabData.main = {
-                  ...prev.main,
-                  nodes: prev.main.nodes.map(node =>
-                    node.id === parentId ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        subgroups: {
-                          ...node.data.subgroups,
-                          [parentId]: { nodes: updated, edges: prev[activeTab].edges }
-                        }
-                      }
-                    } : node
-                  )
-                };
-              }
-              return newTabData;
-            });
-            if (changes.some(change => change.type === 'add' || change.type === 'remove')) {
-              saveCurrentTab();
-            }
-          }}
-          onEdgesChange={(changes) => {
-            onEdgesChange(changes);
-            saveCurrentTab();
-          }}
-          onConnect={onConnect}
-          nodeTypes={nodeTypes}
-          style={{ backgroundColor: 'black' }}
-          fitView
-          fitViewOptions={{ padding: 0.2 }}
-          nodesDraggable={true}
-          minZoom={0.5}
-          maxZoom={2}
-        >
-          <Background variant="lines" color="white" gap={20} size={1} />
-          <Controls />
-        </ReactFlow>
+
+      {/* ── メインコンテンツ ── */}
+      <Box sx={{ flex: 1, overflow: 'auto' }}>
+        {/* 接続サマリー */}
+        {renderConnectionSummary()}
+
+        <BlockCanvas
+          nodes={currentTabData.nodes}
+          edges={currentTabData.edges}
+          isSub={isSub}
+          globalRoles={globalRoles}
+          roleDataCache={roleDataCache}
+          roleFormSchemas={roleFormSchemas}
+          eventId={eventId}
+          subId={subId}
+          onReorder={handleReorder}
+          onDelete={handleDeleteNode}
+          onCopy={handleCopyNode}
+          onEditId={handleOpenEditDialog}
+          onSubGroupOpen={(nodeId) => handleTabSwitch(`subgroup-${nodeId}`, nodeId)}
+          onAddRole={handleAddRole}
+          onDeleteRole={handleDeleteRole}
+          onSaveRole={handleSaveRole}
+          onAddEdge={handleAddEdge}
+          onRemoveEdge={handleRemoveEdge}
+          onUpdateFormData={handleUpdateFormData}
+          onMoveToGroup={handleMoveToGroup}
+        />
       </Box>
-      <Dialog open={addDialogOpen} onClose={handleCloseAddDialog}>
-        <DialogTitle>ノード追加</DialogTitle>
+
+      {/* ── ノード追加ダイアログ ── */}
+      <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddIcon color="primary" />
+            ノード追加
+          </Box>
+        </DialogTitle>
         <DialogContent>
+          <Alert severity="info" sx={{ mb: 2, py: 0.5 }}>
+            次のID: <strong>{getNextNodeId(currentTabData.nodes)}</strong>（自動採番）
+          </Alert>
           <TextField
-            label="ID（数値推奨）"
-            value={newId}
-            onChange={(e) => setNewId(e.target.value)}
-            fullWidth
-            margin="normal"
-          />
-          <TextField
-            label="説明"
+            autoFocus fullWidth size="small"
+            label="説明（任意）"
             value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            fullWidth
-            margin="normal"
+            onChange={e => setNewDescription(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAddNode(); }}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseAddDialog}>キャンセル</Button>
+          <Button onClick={() => setAddDialogOpen(false)} color="inherit">キャンセル</Button>
           <Button onClick={handleAddNode} variant="contained">追加</Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog}>
-        <DialogTitle>ノード編集</DialogTitle>
+
+      {/* ── ノード編集ダイアログ ── */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <EditIcon color="primary" />
+            ノード編集
+          </Box>
+        </DialogTitle>
         <DialogContent>
-          <TextField
-            label="ID（数値推奨）"
-            value={newId}
-            onChange={(e) => setNewId(e.target.value)}
-            fullWidth
-            margin="normal"
-          />
-          <TextField
-            label="説明"
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            fullWidth
-            margin="normal"
-          />
+          <Stack spacing={1.5} sx={{ mt: 0.5 }}>
+            <TextField
+              fullWidth size="small"
+              label="ノードID"
+              value={editNewId}
+              onChange={e => setEditNewId(e.target.value)}
+              helperText="変更するとエッジのIDも自動更新されます"
+            />
+            <TextField
+              autoFocus fullWidth size="small"
+              label="説明"
+              value={newDescription}
+              onChange={e => setNewDescription(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleEditNode(); }}
+            />
+          </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseEditDialog}>キャンセル</Button>
+          <Button onClick={() => setEditDialogOpen(false)} color="inherit">キャンセル</Button>
           <Button onClick={handleEditNode} variant="contained">保存</Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Snackbar ── */}
+      <Snackbar open={snack.open} autoHideDuration={3000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+        <Alert onClose={hideSnack} severity={snack.severity} variant="filled" sx={{ minWidth: 220 }}>
+          {snack.msg}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

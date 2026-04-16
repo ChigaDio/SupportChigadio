@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   TextField,
@@ -8,15 +8,72 @@ import {
   Typography,
   CircularProgress,
   IconButton,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText
+  Paper,
+  Chip,
+  Tooltip,
+  Divider
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+
+// Vector のラベル定義
+const VECTOR_AXIS_LABELS = {
+  vector2: ['X', 'Y'],
+  vector3: ['X', 'Y', 'Z'],
+  vector4: ['X', 'Y', 'Z', 'W'],
+};
+
+// 数値入力コンポーネント（マイナス・小数点対応、文字列で管理）
+const NumericInput = ({ label, value, onChange, isFloat = false, sx = {} }) => {
+  const [inputStr, setInputStr] = useState(String(value ?? 0));
+
+  useEffect(() => {
+    // 外部からの値変化に追従（ただし入力中は上書きしない）
+    const parsed = isFloat ? parseFloat(inputStr) : parseInt(inputStr, 10);
+    if (!isNaN(parsed) && parsed !== value) {
+      setInputStr(String(value ?? 0));
+    }
+  }, [value]);
+
+  const handleChange = (e) => {
+    const raw = e.target.value;
+    // 途中入力として許可するパターン: "-", "-.", ".", "-.0", "0.", etc.
+    const allowPattern = isFloat ? /^-?(\d*\.?\d*)?$/ : /^-?\d*$/;
+    if (!allowPattern.test(raw)) return;
+    setInputStr(raw);
+    const parsed = isFloat ? parseFloat(raw) : parseInt(raw, 10);
+    if (!isNaN(parsed)) {
+      onChange(parsed);
+    } else if (raw === '' || raw === '-') {
+      onChange(0);
+    }
+  };
+
+  const handleBlur = () => {
+    // フォーカスを外れたとき、空や単なる"-"なら0に正規化
+    const parsed = isFloat ? parseFloat(inputStr) : parseInt(inputStr, 10);
+    if (isNaN(parsed) || inputStr === '-') {
+      setInputStr('0');
+      onChange(0);
+    } else {
+      setInputStr(String(parsed));
+      onChange(parsed);
+    }
+  };
+
+  return (
+    <TextField
+      label={label}
+      value={inputStr}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      inputProps={{ inputMode: isFloat ? 'decimal' : 'numeric' }}
+      sx={sx}
+    />
+  );
+};
 
 const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
   const [formData, setFormData] = useState(initialData || []);
@@ -24,17 +81,11 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
   const [classDataSchemas, setClassDataSchemas] = useState({});
   const [isLoading, setIsLoading] = useState(true);
 
-  // デフォルト値を取得する関数
-  const getDefaultValue = (type, arraySize) => {
+  const getDefaultValue = useCallback((type, arraySize) => {
     const baseDefault = () => {
       switch (type.toLowerCase()) {
-        case 'int': return 0;
-        case 'float': return 0.0;
-        case 'double': return 0.0;
-        case 'short': return 0;
-        case 'long': return 0;
-        case 'decimal': return 0.0;
-        case 'byte': return 0;
+        case 'int': case 'short': case 'long': case 'byte': return 0;
+        case 'float': case 'double': case 'decimal': return 0.0;
         case 'char': return '';
         case 'bool': return false;
         case 'string': return '';
@@ -42,31 +93,21 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
         case 'vector3': return [0, 0, 0];
         case 'vector4': return [0, 0, 0, 0];
         default:
-          if (type in enumValues && enumValues[type].length > 0) {
-            return `${type}ID.None`;  
-          }
-          if (type in classDataSchemas && classDataSchemas[type].length > 0) {
-            return `${type}ID.None`;  
-          }
+          if (type in enumValues && enumValues[type].length > 0) return `${type}ID.None`;
+          if (type in classDataSchemas && classDataSchemas[type].length > 0) return `${type}ID.None`;
           return '';
       }
     };
-
-    if (arraySize === undefined || arraySize === 0) {
-      return baseDefault();
-    } else if (arraySize > 0) {
-      return Array.from({ length: arraySize }, () => baseDefault());
-    } else if (arraySize === -1) {
-      return []; // 修正: 動的配列の初期値を空配列に設定
-    }
+    if (arraySize === undefined || arraySize === 0) return baseDefault();
+    if (arraySize > 0) return Array.from({ length: arraySize }, () => baseDefault());
+    if (arraySize === -1) return [];
     return baseDefault();
-  };
+  }, [enumValues, classDataSchemas]);
 
-  // 初期データ設定
   useEffect(() => {
     if (!isLoading) {
       const formattedData = schema.fields.map(field => {
-        const initialItem = initialData.find(d => d.name === field.name);
+        const initialItem = (initialData || []).find(d => d.name === field.name);
         return {
           name: field.name,
           value: initialItem ? initialItem.value : getDefaultValue(field.type, field.arraySize),
@@ -76,20 +117,16 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
       setFormData(formattedData);
       onChange(formattedData);
     }
-  }, [initialData, schema, onChange, enumValues, classDataSchemas, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialData, schema, isLoading]);
 
-  // 必要な enum-id, class-data-id, class-data を取得
   useEffect(() => {
     setIsLoading(true);
-
-    // schema.fields から必要な type を抽出（ネストを含むため、再帰的に集める）
     const collectTypes = (fields) => {
       const types = new Set();
       fields.forEach(field => {
         types.add(field.type);
-        if (field.subFields) {
-          collectTypes(field.subFields).forEach(t => types.add(t));
-        }
+        if (field.subFields) collectTypes(field.subFields).forEach(t => types.add(t));
       });
       return types;
     };
@@ -102,71 +139,35 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
           fetch('/api/class-data-id'),
           fetch('/api/class-data')
         ]);
-
-        if (!enumListRes.ok) {
-          console.warn(`enum-id取得に失敗: ${enumListRes.status}`);
-        }
-        if (!classIdListRes.ok) {
-          console.warn(`class-id-data取得に失敗: ${classIdListRes.status}`);
-        }
-        if (!classDataListRes.ok) {
-          console.warn(`class-data取得に失敗: ${classDataListRes.status}`);
-        }
-
-        const enumList = enumListRes.ok && enumListRes.headers.get('content-type')?.includes('application/json') ? await enumListRes.json() : [];
-        const classIdList = classIdListRes.ok && classIdListRes.headers.get('content-type')?.includes('application/json') ? await classIdListRes.json() : [];
-        const classDataList = classDataListRes.ok && classDataListRes.headers.get('content-type')?.includes('application/json') ? await classDataListRes.json() : [];
+        const enumList = enumListRes.ok ? await enumListRes.json() : [];
+        const classIdList = classIdListRes.ok ? await classIdListRes.json() : [];
+        const classDataList = classDataListRes.ok ? await classDataListRes.json() : [];
 
         const enumPromises = enumList
-          .filter(enumItem => types.includes(enumItem.name))
-          .map(async enumItem => {
-            const res = await fetch(`/api/enum/${encodeURIComponent(enumItem.name)}`);
-            if (!res.ok) {
-              console.warn(`enum値取得に失敗: ${enumItem.name} (${res.status})`);
-              return { [enumItem.name]: [] };
-            }
-            if (!res.headers.get('content-type')?.includes('application/json')) {
-              console.error(`enum ${enumItem.name} のレスポンスがJSONではありません`);
-              return { [enumItem.name]: [] };
-            }
-            const data = await res.json();
-            return { [enumItem.name]: data || [] };
+          .filter(e => types.includes(e.name))
+          .map(async e => {
+            const res = await fetch(`/api/enum/${encodeURIComponent(e.name)}`);
+            const data = res.ok ? await res.json() : [];
+            return { [e.name]: data || [] };
           });
 
         const classIdPromises = classIdList
-          .filter(classIdItem => types.includes(classIdItem.name))
-          .map(async classIdItem => {
-            const res = await fetch(`/api/class-data-id/${encodeURIComponent(classIdItem.name)}`);
-            if (!res.ok) {
-              console.warn(`classId値取得に失敗: ${classIdItem.name} (${res.status})`);
-              return { [classIdItem.name]: [] };
-            }
-            if (!res.headers.get('content-type')?.includes('application/json')) {
-              console.error(`classId ${classIdItem.name} のレスポンスがJSONではありません`);
-              return { [classIdItem.name]: [] };
-            }
-            const data = await res.json();
-            return { [classIdItem.name]: data.rows.map(row => row.enum_property) || [] };
+          .filter(c => types.includes(c.name))
+          .map(async c => {
+            const res = await fetch(`/api/class-data-id/${encodeURIComponent(c.name)}`);
+            const data = res.ok ? await res.json() : { rows: [] };
+            return { [c.name]: (data.rows || []).map(r => r.enum_property) };
           });
 
         const classDataPromises = classDataList
-          .filter(classDataItem => types.includes(classDataItem.name))
-          .map(async classDataItem => {
-            const res = await fetch(`/api/class-data/${encodeURIComponent(classDataItem.name)}`);
-            if (!res.ok) {
-              console.warn(`classData値取得に失敗: ${classDataItem.name} (${res.status})`);
-              return { [classDataItem.name]: [] };
-            }
-            if (!res.headers.get('content-type')?.includes('application/json')) {
-              console.error(`classData ${classDataItem.name} のレスポンスがJSONではありません`);
-              return { [classDataItem.name]: [] };
-            }
-            const data = await res.json();
-            return { [classDataItem.name]: data || [] };
+          .filter(c => types.includes(c.name))
+          .map(async c => {
+            const res = await fetch(`/api/class-data/${encodeURIComponent(c.name)}`);
+            const data = res.ok ? await res.json() : [];
+            return { [c.name]: data || [] };
           });
 
         const results = await Promise.all([...enumPromises, ...classIdPromises, ...classDataPromises]);
-
         const valuesMap = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
 
         const enumMap = {};
@@ -179,19 +180,18 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
           }
         });
 
-        setEnumValues(prev => ({ ...prev, ...enumMap })); // 修正: 既存のデータを保持
-        setClassDataSchemas(prev => ({ ...prev, ...classDataMap })); // 修正: 既存のデータを保持
-        setIsLoading(false);
+        setEnumValues(prev => ({ ...prev, ...enumMap }));
+        setClassDataSchemas(prev => ({ ...prev, ...classDataMap }));
       } catch (error) {
-        console.error('型オプションまたは値の取得エラー:', error);
-        setEnumValues({});
-        setClassDataSchemas({});
+        console.error('型オプション取得エラー:', error);
+      } finally {
         setIsLoading(false);
       }
     };
 
     loadData();
-  }, [JSON.stringify(schema.fields)]); // 修正: 依存配列をJSON文字列で比較して無限ループを防止
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(schema.fields)]);
 
   const handleChange = (name, value, arraySize) => {
     setFormData(prev => {
@@ -206,313 +206,308 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
   const renderField = (field, parentPath = '', indexPath = []) => {
     const key = parentPath ? `${parentPath}.${field.name}` : field.name;
     let currentValue = formData.find(d => d.name === (parentPath || field.name))?.value;
-
-    indexPath.forEach(idx => {
-      currentValue = currentValue ? currentValue[idx] : undefined;
-    });
-    if (currentValue === undefined) {
-      currentValue = getDefaultValue(field.type, field.arraySize);
-    }
+    indexPath.forEach(idx => { currentValue = currentValue ? currentValue[idx] : undefined; });
+    if (currentValue === undefined) currentValue = getDefaultValue(field.type, field.arraySize);
 
     if (field.warning) {
-      return <Box key={key} sx={{ color: 'red' }}>{field.warning}</Box>;
+      return <Box key={key} sx={{ color: 'error.main', p: 1, bgcolor: 'error.50', borderRadius: 1 }}>{field.warning}</Box>;
     }
 
     if (isLoading) {
       return (
-        <Box key={key} sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-          <CircularProgress size={20} sx={{ mr: 1 }} />
-          <Typography>Loading options...</Typography>
+        <Box key={key} sx={{ display: 'flex', alignItems: 'center', mb: 1, gap: 1 }}>
+          <CircularProgress size={16} />
+          <Typography variant="caption" color="text.secondary">Loading...</Typography>
         </Box>
       );
     }
 
     const renderSingle = (value, onValueChange) => {
-if (enumValues[field.type] && enumValues[field.type].length > 0) {
-  const options = [
-    { value: `${field.type}ID.None`, label: 'None' },
-    ...enumValues[field.type].map(v => {
-      const val = typeof v === 'object' ? (v.property || v.enum_property || v) : v;
-      return { value: `${field.type}ID.${val}`, label: val };
-    })
-  ];
+      // Enum
+      if (enumValues[field.type] && enumValues[field.type].length > 0) {
+        const options = [
+          { value: `${field.type}ID.None`, label: 'None' },
+          ...enumValues[field.type].map(v => {
+            const val = typeof v === 'object' ? (v.property || v.enum_property || v) : v;
+            return { value: `${field.type}ID.${val}`, label: val };
+          })
+        ];
+        return (
+          <Autocomplete
+            key={key}
+            options={options}
+            getOptionLabel={(option) => option.label}
+            value={options.find(opt => opt.value === value) || null}
+            onChange={(e, newValue) => onValueChange(newValue ? newValue.value : `${field.type}ID.None`)}
+            renderInput={params => (
+              <TextField {...params} label={field.label || field.name} size="small" />
+            )}
+            fullWidth
+            isOptionEqualToValue={(option, val) => option.value === val?.value}
+          />
+        );
+      }
 
-  return (
-    <Autocomplete
-      key={key}
-      options={options}
-      getOptionLabel={(option) => option.label}
-      value={options.find(opt => opt.value === value) || null}
-      onChange={(e, newValue) => onValueChange(newValue ? newValue.value : `${field.type}ID.None`)}
-      renderInput={params => <TextField {...params} label={field.label || field.name} sx={{ mb: 1 }} />}
-      fullWidth
-      isOptionEqualToValue={(option, val) => option.value === val?.value}
-    />
-  );
-
-}
-
+      // ClassData (nested)
       if (classDataSchemas[field.type] && classDataSchemas[field.type].length > 0) {
         const subSchema = {
           fields: classDataSchemas[field.type].map(sub => ({
             ...sub,
             label: sub.label || sub.name,
-            arraySize: sub.arraySize !== undefined ? sub.arraySize : 0, // 修正: arraySizeを明示
+            arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
           })),
         };
         const subInitialData = Object.entries(value || {}).map(([n, v]) => ({
-          name: n,
-          value: v,
+          name: n, value: v,
           arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
         }));
-
-        // 修正: クラスデータの初期値が空の場合、デフォルト値を生成
-        if (!value || Object.keys(value).length === 0) {
-          const defaultValue = getDefaultValue(field.type, field.arraySize);
-          handleChange(field.name, defaultValue, field.arraySize);
-          return (
-            <Box key={key} sx={{ border: 1, p: 1, mb: 1 }}>
-              <Typography variant="subtitle2">{field.label || field.name} (Class Data)</Typography>
-              <BaseRoleInputForm
-                schema={subSchema}
-                initialData={subSchema.fields.map(f => ({
-                  name: f.name,
-                  value: defaultValue[f.name],
-                  arraySize: f.arraySize,
-                }))}
-                onChange={(subData) => {
-                  const newObj = subData.reduce((acc, { name, value }) => {
-                    acc[name] = value;
-                    return acc;
-                  }, {});
-                  onValueChange(newObj);
-                }}
-              />
-            </Box>
-          );
-        }
-
         return (
-          <Box key={key} sx={{ border: 1, p: 1, mb: 1 }}>
-            <Typography variant="subtitle2">{field.label || field.name} (Class Data)</Typography>
+          <Paper key={key} variant="outlined" sx={{ p: 1.5, mb: 1, bgcolor: 'grey.50' }}>
+            <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+              {field.label || field.name} <Chip label="Class" size="small" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
+            </Typography>
             <BaseRoleInputForm
               schema={subSchema}
               initialData={subInitialData}
               onChange={(subData) => {
-                const newObj = subData.reduce((acc, { name, value }) => {
-                  acc[name] = value;
-                  return acc;
-                }, {});
+                const newObj = subData.reduce((acc, { name, value }) => { acc[name] = value; return acc; }, {});
                 onValueChange(newObj);
               }}
             />
-          </Box>
+          </Paper>
         );
       }
 
-      switch (field.type.toLowerCase()) {
-        case 'string':
-        case 'char':
-          return (
-            <TextField
-              key={key}
-              label={field.label || field.name}
-              value={currentValue}
-              onChange={e => onValueChange(e.target.value)}
-              fullWidth
-              sx={{ mb: 1 }}
-            />
-          );
+      const typeLower = field.type.toLowerCase();
 
-        case 'int':
-        case 'short':
-        case 'long':
-        case 'byte':
-          return (
-            <TextField
-              key={key}
-              type="number"
-              label={field.label || field.name}
-              value={currentValue}
-              onChange={e => onValueChange(parseInt(e.target.value) || 0)}
-              fullWidth
-              sx={{ mb: 1 }}
-            />
-          );
+      // String / Char
+      if (typeLower === 'string' || typeLower === 'char') {
+        return (
+          <TextField
+            key={key}
+            label={field.label || field.name}
+            value={value ?? ''}
+            onChange={e => onValueChange(e.target.value)}
+            fullWidth
+            size="small"
+          />
+        );
+      }
 
-        case 'float':
-        case 'double':
-        case 'decimal':
-          return (
-            <TextField
-              key={key}
-              type="number"
-              step="0.01"
-              label={field.label || field.name}
-              value={currentValue}
-              onChange={e => onValueChange(parseFloat(e.target.value) || 0.0)}
-              fullWidth
-              sx={{ mb: 1 }}
-            />
-          );
+      // Integer types
+      if (['int', 'short', 'long', 'byte'].includes(typeLower)) {
+        return (
+          <NumericInput
+            key={key}
+            label={field.label || field.name}
+            value={value ?? 0}
+            onChange={onValueChange}
+            isFloat={false}
+            sx={{ width: '100%' }}
+          />
+        );
+      }
 
-        case 'bool':
-          return (
-            <FormControlLabel
-              key={key}
-              control={
-                <Checkbox
-                  checked={currentValue === true || currentValue === 'true'}
-                  onChange={e => onValueChange(e.target.checked)}
-                />
-              }
-              label={field.label || field.name}
-              sx={{ mb: 1 }}
-            />
-          );
+      // Float types
+      if (['float', 'double', 'decimal'].includes(typeLower)) {
+        return (
+          <NumericInput
+            key={key}
+            label={field.label || field.name}
+            value={value ?? 0}
+            onChange={onValueChange}
+            isFloat={true}
+            sx={{ width: '100%' }}
+          />
+        );
+      }
 
-        case 'vector2':
-        case 'vector3':
-        case 'vector4':
-          const dim = parseInt(field.type.replace('vector', '')) || 2;
-          return (
-            <Box key={key} sx={{ display: 'flex', gap: 1, mb: 1 }}>
-              {Array.from({ length: dim }).map((_, i) => (
-                <TextField
-                  key={`${key}.${i}`}
-                  label={`Dim${i + 1}`}
-                  type="number"
-                  value={currentValue[i] || 0}
-                  onChange={e => {
-                    const newVal = [...(currentValue || Array(dim).fill(0))];
-                    newVal[i] = parseFloat(e.target.value) || 0;
-                    onValueChange(newVal);
+      // Bool
+      if (typeLower === 'bool') {
+        return (
+          <FormControlLabel
+            key={key}
+            control={
+              <Checkbox
+                checked={value === true || value === 'true'}
+                onChange={e => onValueChange(e.target.checked)}
+                size="small"
+              />
+            }
+            label={
+              <Typography variant="body2">{field.label || field.name}</Typography>
+            }
+          />
+        );
+      }
+
+      // Vector2 / Vector3 / Vector4 → 変数名.X, 変数名.Y, ...
+      if (typeLower === 'vector2' || typeLower === 'vector3' || typeLower === 'vector4') {
+        const axisLabels = VECTOR_AXIS_LABELS[typeLower];
+        const dim = axisLabels.length;
+        const varName = field.label || field.name;
+        return (
+          <Box key={key} sx={{ mb: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
+              {varName}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {axisLabels.map((axis, i) => (
+                <NumericInput
+                  key={`${key}.${axis}`}
+                  label={`${varName}.${axis}`}
+                  value={Array.isArray(value) ? (value[i] ?? 0) : 0}
+                  onChange={(newVal) => {
+                    const newArr = Array.isArray(value) ? [...value] : Array(dim).fill(0);
+                    newArr[i] = newVal;
+                    onValueChange(newArr);
                   }}
+                  isFloat={true}
                   sx={{ flex: 1 }}
                 />
               ))}
             </Box>
-          );
-
-        default:
-          return (
-            <TextField
-              key={key}
-              label={field.label || field.name}
-              value={currentValue}
-              onChange={e => onValueChange(e.target.value)}
-              fullWidth
-              sx={{ mb: 1 }}
-            />
-          );
+          </Box>
+        );
       }
+
+      // Default fallback
+      return (
+        <TextField
+          key={key}
+          label={field.label || field.name}
+          value={value ?? ''}
+          onChange={e => onValueChange(e.target.value)}
+          fullWidth
+          size="small"
+        />
+      );
     };
 
     const arraySize = field.arraySize !== undefined ? field.arraySize : 0;
+
+    // Non-array
     if (arraySize === 0) {
       return (
-        <Box key={key} sx={{ mb: 1 }}>
+        <Box key={key} sx={{ mb: 1.5 }}>
           {renderSingle(currentValue, newValue => handleChange(field.name, newValue, arraySize))}
         </Box>
       );
-    } else {
-      const isDynamic = arraySize === -1;
-      const fixedLength = isDynamic ? undefined : arraySize;
-      let arrayValue = Array.isArray(currentValue)
-        ? currentValue
-        : isDynamic
-        ? [] // 修正: 動的配列の初期値を空配列に設定
+    }
+
+    // Array (fixed or dynamic)
+    const isDynamic = arraySize === -1;
+    const fixedLength = isDynamic ? undefined : arraySize;
+    let arrayValue = Array.isArray(currentValue)
+      ? currentValue
+      : isDynamic
+        ? []
         : Array.from({ length: fixedLength }, () => getDefaultValue(field.type, 0));
 
-      const handleArrayChange = (newArray) => {
-        handleChange(field.name, newArray, arraySize);
-      };
+    const handleArrayChange = (newArray) => handleChange(field.name, newArray, arraySize);
+    const addItem = () => { if (isDynamic) handleArrayChange([...arrayValue, getDefaultValue(field.type, 0)]); };
+    const removeItem = (index) => { if (isDynamic) handleArrayChange(arrayValue.filter((_, i) => i !== index)); };
+    const onDragEnd = (result) => {
+      if (!result.destination || !isDynamic) return;
+      const newArray = [...arrayValue];
+      const [removed] = newArray.splice(result.source.index, 1);
+      newArray.splice(result.destination.index, 0, removed);
+      handleArrayChange(newArray);
+    };
 
-      const addItem = () => {
-        if (isDynamic) {
-          handleArrayChange([...arrayValue, getDefaultValue(field.type, 0)]);
-        }
-      };
-
-      const removeItem = (index) => {
-        if (isDynamic) {
-          const newArray = arrayValue.filter((_, i) => i !== index);
-          handleArrayChange(newArray);
-        }
-      };
-
-      const onDragEnd = (result) => {
-        if (!result.destination || !isDynamic) return;
-        const newArray = [...arrayValue];
-        const [removed] = newArray.splice(result.source.index, 1);
-        newArray.splice(result.destination.index, 0, removed);
-        handleArrayChange(newArray);
-      };
-
-      return (
-        <Box key={key} sx={{ mb: 2, border: 1, p: 1 }}>
-          <Typography variant="subtitle2">{field.label || field.name} (Array, size: {isDynamic ? 'Dynamic' : fixedLength})</Typography>
-          {arrayValue.length === 0 && isDynamic ? (
-            <Typography>No items yet. Add one below.</Typography> // 修正: 動的配列が空の場合のメッセージ
-          ) : (
-            <DragDropContext onDragEnd={onDragEnd}>
-              <Droppable droppableId={key}>
-                {(provided) => (
-                  <List {...provided.droppableProps} ref={provided.innerRef}>
-                    {arrayValue.map((itemValue, index) => (
-                      <Draggable key={`${key}-${index}`} draggableId={`${key}-${index}`} index={index} isDragDisabled={!isDynamic}>
-                        {(provided) => (
-                          <ListItem
-                            ref={provided.innerRef}
-                            {...provided.draggableProps}
-                            secondaryAction={
-                              isDynamic ? (
-                                <IconButton onClick={() => removeItem(index)}>
-                                  <RemoveIcon />
-                                </IconButton>
-                              ) : null
-                            }
-                          >
-                            <ListItemIcon {...provided.dragHandleProps}>
-                              {isDynamic ? <DragHandleIcon /> : null}
-                            </ListItemIcon>
-                            <ListItemText
-                              primary={
-                                <Box>
-                                  {renderSingle(itemValue, (newItemValue) => {
-                                    const newArray = [...arrayValue];
-                                    newArray[index] = newItemValue;
-                                    handleArrayChange(newArray);
-                                  })}
-                                </Box>
-                              }
-                            />
-                          </ListItem>
-                        )}
-                      </Draggable>
-                    ))}
-                    {provided.placeholder}
-                  </List>
-                )}
-              </Droppable>
-            </DragDropContext>
-          )}
-          {isDynamic && (
-            <IconButton onClick={addItem}>
-              <AddIcon />
-            </IconButton>
-          )}
+    return (
+      <Paper key={key} variant="outlined" sx={{ mb: 2, p: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, gap: 1 }}>
+          <Typography variant="subtitle2">{field.label || field.name}</Typography>
+          <Chip
+            label={isDynamic ? `Dynamic Array (${arrayValue.length})` : `Array[${fixedLength}]`}
+            size="small"
+            color={isDynamic ? 'secondary' : 'default'}
+            sx={{ height: 18, fontSize: '0.65rem' }}
+          />
         </Box>
-      );
-    }
+        {arrayValue.length === 0 && isDynamic ? (
+          <Typography variant="caption" color="text.secondary">
+            アイテムがありません。下の＋ボタンで追加してください。
+          </Typography>
+        ) : (
+          <DragDropContext onDragEnd={onDragEnd}>
+            <Droppable droppableId={key}>
+              {(provided) => (
+                <Box {...provided.droppableProps} ref={provided.innerRef}>
+                  {arrayValue.map((itemValue, index) => (
+                    <Draggable
+                      key={`${key}-${index}`}
+                      draggableId={`${key}-${index}`}
+                      index={index}
+                      isDragDisabled={!isDynamic}
+                    >
+                      {(provided) => (
+                        <Box
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 0.5,
+                            mb: 0.5,
+                            p: 0.5,
+                            bgcolor: 'background.paper',
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: 'divider',
+                          }}
+                        >
+                          {isDynamic && (
+                            <Box {...provided.dragHandleProps} sx={{ color: 'text.disabled', cursor: 'grab', display: 'flex', alignItems: 'center' }}>
+                              <DragHandleIcon fontSize="small" />
+                            </Box>
+                          )}
+                          <Box sx={{ flex: 1 }}>
+                            {renderSingle(itemValue, (newItemValue) => {
+                              const newArray = [...arrayValue];
+                              newArray[index] = newItemValue;
+                              handleArrayChange(newArray);
+                            })}
+                          </Box>
+                          {isDynamic && (
+                            <Tooltip title="削除">
+                              <IconButton size="small" color="error" onClick={() => removeItem(index)}>
+                                <RemoveIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
+                      )}
+                    </Draggable>
+                  ))}
+                  {provided.placeholder}
+                </Box>
+              )}
+            </Droppable>
+          </DragDropContext>
+        )}
+        {isDynamic && (
+          <Box sx={{ mt: 1 }}>
+            <Tooltip title="アイテムを追加">
+              <IconButton size="small" color="primary" onClick={addItem}>
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
+      </Paper>
+    );
   };
 
   return (
-    <Box sx={{ p: 2 }}>
-      {console.log('schema.fields:', schema.fields)} {/* デバッグ用ログ */}
-      {schema.fields.map(field => (
-        <Box key={field.name} sx={{ mb: 1 }}>
+    <Box sx={{ p: 1 }}>
+      {schema.fields.map((field, index) => (
+        <Box key={field.name}>
           {renderField(field)}
+          {index < schema.fields.length - 1 && field.arraySize !== 0 && (
+            <Divider sx={{ mb: 1 }} />
+          )}
         </Box>
       ))}
     </Box>

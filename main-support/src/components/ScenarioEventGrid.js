@@ -1,592 +1,516 @@
 import React, { useState, useEffect } from 'react';
-import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, IconButton } from '@mui/material';
+import {
+  Box, Typography, TextField, Button, IconButton,
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  Paper, Chip, Tooltip, Collapse, Divider, InputAdornment,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Alert, Snackbar
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import SearchIcon from '@mui/icons-material/Search';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import BuildIcon from '@mui/icons-material/Build';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useNavigate } from 'react-router-dom';
+
+// スナックバー通知
+const useSnackbar = () => {
+  const [snack, setSnack] = useState({ open: false, message: '', severity: 'success' });
+  const show = (message, severity = 'success') => setSnack({ open: true, message, severity });
+  const hide = () => setSnack(s => ({ ...s, open: false }));
+  return { snack, show, hide };
+};
+
+// イベント行コンポーネント
+const EventRow = ({ event, subEvents, onAddSub, onDeleteEvent, onDeleteSub, onEditEvent, navigate }) => {
+  const [expanded, setExpanded] = useState(true);
+  const [editName, setEditName] = useState(event.name);
+  const [editDesc, setEditDesc] = useState(event.description || '');
+  const [editMode, setEditMode] = useState(false);
+
+  return (
+    <>
+      {/* 親イベント行 */}
+      <TableRow
+        sx={{
+          bgcolor: 'primary.50',
+          '& td': { borderBottom: 'none' },
+          '&:hover': { bgcolor: 'primary.100' },
+        }}
+      >
+        <TableCell sx={{ pl: 1, width: 40 }}>
+          <IconButton size="small" onClick={() => setExpanded(e => !e)}>
+            {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        </TableCell>
+        <TableCell>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip label={event.id} size="small" color="primary" variant="outlined" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }} />
+            {editMode ? (
+              <TextField
+                size="small"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                onBlur={() => {
+                  onEditEvent(event.id, { name: editName, description: editDesc });
+                  setEditMode(false);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    onEditEvent(event.id, { name: editName, description: editDesc });
+                    setEditMode(false);
+                  }
+                  if (e.key === 'Escape') setEditMode(false);
+                }}
+                autoFocus
+                sx={{ minWidth: 200 }}
+              />
+            ) : (
+              <Typography
+                variant="body2"
+                fontWeight="bold"
+                sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+                onClick={() => navigate(`/scenario-event/${event.id}`)}
+              >
+                {event.name}
+              </Typography>
+            )}
+          </Box>
+        </TableCell>
+        <TableCell>
+          {editMode ? (
+            <TextField
+              size="small"
+              value={editDesc}
+              onChange={e => setEditDesc(e.target.value)}
+              onBlur={() => {
+                onEditEvent(event.id, { name: editName, description: editDesc });
+                setEditMode(false);
+              }}
+              fullWidth
+            />
+          ) : (
+            <Typography variant="body2" color="text.secondary">{event.description || '—'}</Typography>
+          )}
+        </TableCell>
+        <TableCell>
+          <Chip label={`サブ ${subEvents.length}件`} size="small" variant="outlined" />
+        </TableCell>
+        <TableCell align="right">
+          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
+            <Tooltip title="編集">
+              <IconButton size="small" onClick={() => setEditMode(e => !e)}>
+                <EditIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="サブイベント追加">
+              <IconButton size="small" color="primary" onClick={() => onAddSub(event.id)}>
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="削除">
+              <IconButton size="small" color="error" onClick={() => onDeleteEvent(event.id)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </TableCell>
+      </TableRow>
+
+      {/* サブイベント行 */}
+      {subEvents.map((sub) => (
+        <TableRow
+          key={sub.id}
+          sx={{
+            display: expanded ? 'table-row' : 'none',
+            bgcolor: 'background.paper',
+            '&:hover': { bgcolor: 'grey.50' },
+          }}
+        >
+          <TableCell sx={{ pl: 1 }} />
+          <TableCell>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 2 }}>
+              <Box sx={{ width: 2, height: 24, bgcolor: 'primary.light', borderRadius: 1 }} />
+              <Chip label={`#${sub.subId}`} size="small" sx={{ fontFamily: 'monospace', height: 20 }} />
+              <Typography
+                variant="body2"
+                sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline', color: 'primary.main' } }}
+                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}`)}
+              >
+                {sub.name}
+              </Typography>
+            </Box>
+          </TableCell>
+          <TableCell />
+          <TableCell>
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<AccountTreeIcon />}
+                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/transition`)}
+                sx={{ fontSize: '0.7rem', py: 0.25 }}
+              >
+                遷移図
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<MenuBookIcon />}
+                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/story`)}
+                sx={{ fontSize: '0.7rem', py: 0.25 }}
+              >
+                物語設定
+              </Button>
+            </Box>
+          </TableCell>
+          <TableCell align="right">
+            <Tooltip title="削除">
+              <IconButton size="small" color="error" onClick={() => onDeleteSub(event.id, sub.subId)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </TableCell>
+        </TableRow>
+      ))}
+    </>
+  );
+};
 
 function ScenarioEventGrid() {
   const navigate = useNavigate();
-  const [data, setData] = useState([]);
+  const [events, setEvents] = useState([]); // [{ id, name, description, subEvents: [{subId, name}] }]
   const [filterText, setFilterText] = useState('');
-  const [newId, setNewId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const { snack, show: showSnack, hide: hideSnack } = useSnackbar();
+
+  // 追加ダイアログ
+  const [openDialog, setOpenDialog] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [openDialog, setOpenDialog] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [idError, setIdError] = useState(false);
-  const [selectedEventId, setSelectedEventId] = useState(null);
-  const [newSubName, setNewSubName] = useState('');
-  const [openSubDialog, setOpenSubDialog] = useState(false);
-  const apiRef = useGridApiRef();
 
-  // Fetch data
+  // サブ追加ダイアログ
+  const [selectedEventId, setSelectedEventId] = useState(null);
+  const [openSubDialog, setOpenSubDialog] = useState(false);
+  const [newSubName, setNewSubName] = useState('');
+
+  // データ取得
   useEffect(() => {
     fetch('/api/scenario-event')
-      .then(response => {
-        if (!response.ok) {
-          console.warn(`HTTP error! status: ${response.status}`);
-          return [];
-        }
-        return response.json();
-      })
-      .then(fetchedData => {
-        console.log('Fetched scenario event data:', fetchedData);
-        if (Array.isArray(fetchedData)) {
-          const treeData = [];
-          fetchedData.forEach(event => {
-            treeData.push({
-              id: event.id,
-              eventId: event.id,
-              name: event.name,
-              description: event.description,
-              path: [event.id],
-              isParent: true
-            });
-            event.subEvents.forEach(sub => {
-              treeData.push({
-                id: `${event.id}-${sub.subId}`,
-                eventId: event.id,
-                subEventId: sub.subId,
-                name: sub.name,
-                path: [event.id, sub.subId.toString()],
-                parentId: event.id,
-                subId: sub.subId,
-                isSub: true
-              });
-            });
-          });
-          console.log('Processed tree data:', treeData);
-          setData(treeData);
-        } else {
-          setData([]);
-        }
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        if (Array.isArray(data)) setEvents(data);
         setLoading(false);
       })
-      .catch(error => {
-        console.error('Error fetching scenario events:', error);
-        setData([]);
-        setLoading(false);
-      });
+      .catch(() => setLoading(false));
   }, []);
 
-  // Filter data based on search input
-  const filteredData = data.filter(row => {
+  // フィルタ
+  const filteredEvents = events.filter(event => {
     if (!filterText.trim()) return true;
-    const searchLower = filterText.toLowerCase();
-    if (row.isParent) {
-      return (
-        row.eventId.toLowerCase().includes(searchLower) ||
-        row.name.toLowerCase().includes(searchLower)
-      );
-    } else if (row.isSub) {
-      // Include sub-event if its parent matches or it matches directly
-      const parent = data.find(parent => parent.id === row.parentId);
-      return (
-        row.subEventId.toString().toLowerCase().includes(searchLower) ||
-        row.name.toLowerCase().includes(searchLower) ||
-        (parent && (
-          parent.eventId.toLowerCase().includes(searchLower) ||
-          parent.name.toLowerCase().includes(searchLower)
-        ))
-      );
-    }
-    return false;
+    const q = filterText.toLowerCase();
+    return (
+      event.id.toLowerCase().includes(q) ||
+      event.name.toLowerCase().includes(q) ||
+      (event.subEvents || []).some(s => s.name.toLowerCase().includes(q))
+    );
   });
 
-  // Validate ID
-  const validateId = (value) => {
-    const regex = /^[a-zA-Z0-9-]{1,25}$/;
-    return regex.test(value);
-  };
-
-  // Handle ID change
-  const handleIdChange = (e) => {
-    const value = e.target.value;
-    setNewId(value);
-    setIdError(!validateId(value));
-  };
-
-  // Add new event
-  const handleAddEvent = () => {
-    setOpenDialog(true);
-  };
-
+  // イベント追加（IDは自動採番）
   const handleCreateEvent = () => {
-    if (!newId.trim() || idError) {
-      alert('有効なIDを入力してください (英数字とハイフンのみ、1-25文字)');
-      return;
-    }
-    if (!newName.trim()) {
-      alert('イベント名を入力してください');
-      return;
-    }
+    if (!newName.trim()) { showSnack('イベント名を入力してください', 'error'); return; }
+    // 自動ID生成: 既存の数値IDの最大値+1、または既存IDリストから
+    const numericIds = events.map(e => parseInt(e.id, 10)).filter(n => !isNaN(n));
+    const autoId = numericIds.length > 0 ? (Math.max(...numericIds) + 1).toString() : '1';
+
     fetch('/api/scenario-event', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: newId, name: newName, description: newDescription }),
+      body: JSON.stringify({ id: autoId, name: newName, description: newDescription }),
     })
-      .then(response => {
-        if (!response.ok) {
-          return response.text().then(text => {
-            throw new Error(`HTTP error! status: ${response.status}, body: ${text}`);
-          });
-        }
-        return response.json();
-      })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(result => {
-        alert(result.message);
-        const newEvent = {
-          id: newId,
-          eventId: newId,
-          name: newName,
-          description: newDescription,
-          path: [newId],
-          isParent: true
-        };
-        setData([...data, newEvent]);
-        setNewId('');
+        showSnack(result.message || 'イベントを追加しました');
+        setEvents(prev => [...prev, { id: autoId, name: newName, description: newDescription, subEvents: [] }]);
         setNewName('');
         setNewDescription('');
-        setIdError(false);
         setOpenDialog(false);
       })
-      .catch(error => {
-        console.error('Error adding event:', error);
-        alert('イベント追加エラー: ' + error.message);
-      });
+      .catch(err => showSnack('イベント追加エラー: ' + err.message, 'error'));
   };
 
-  // Delete event
+  // イベント編集
+  const handleEditEvent = (id, { name, description }) => {
+    fetch(`/api/scenario-event/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(() => {
+        setEvents(prev => prev.map(e => e.id === id ? { ...e, name, description } : e));
+        showSnack('更新しました');
+      })
+      .catch(() => showSnack('更新エラー', 'error'));
+  };
+
+  // イベント削除
   const handleDeleteEvent = (id) => {
-    if (window.confirm(`イベント ${id} を削除しますか？`)) {
-      fetch(`/api/scenario-event/${id}`, {
-        method: 'DELETE',
+    if (!window.confirm(`イベント「${id}」を削除しますか？`)) return;
+    fetch(`/api/scenario-event/${id}`, { method: 'DELETE' })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => {
+        showSnack(result.message || '削除しました');
+        setEvents(prev => prev.filter(e => e.id !== id));
       })
-        .then(response => {
-          if (!response.ok) {
-            return response.text().then(text => {
-              throw new Error(`HTTP error! status: ${response.status}, body: ${text}`);
-            });
-          }
-          return response.json();
-        })
-        .then(result => {
-          alert(result.message);
-          setData(data.filter(item => item.id !== id && !item.id.startsWith(`${id}-`)));
-        })
-        .catch(error => {
-          console.error('Error deleting event:', error);
-          alert('イベント削除エラー: ' + error.message);
-        });
-    }
+      .catch(() => showSnack('削除エラー', 'error'));
   };
 
-  const handleFixAll = () => {
-  if (window.confirm('全てのイベントの Role データを修正しますか？')) {
-    fetch('/api/fix-all-events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    })
-      .then(response => {
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        return response.json();
-      })
-      .then(result => {
-        alert(result.message);
-        // オプション: データ再取得
-        window.location.reload();
-      })
-      .catch(error => {
-        console.error('Error fixing all:', error);
-        alert('修正エラー: ' + error.message);
-      });
-  }
-};
-
-const handleGenerateAllBin = () => {
-  if (window.confirm('全てのイベントバイナリを生成しますか？ (先に Fix 実行)')) {
-    fetch('/api/generate-all-event-bin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    })
-      .then(response => {
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        return response.json();
-      })
-      .then(result => {
-        alert(result.message);
-      })
-      .catch(error => {
-        console.error('Error generating bin:', error);
-        alert('生成エラー: ' + error.message);
-      });
-  }
-};
-
-  // Add sub event
-  const handleAddSubEvent = (eventId) => {
-    setSelectedEventId(eventId);
-    setOpenSubDialog(true);
-  };
-
+  // サブイベント追加（IDは自動採番）
   const handleCreateSubEvent = () => {
-    if (!newSubName.trim()) {
-      alert('サブイベント名を入力してください');
-      return;
-    }
+    if (!newSubName.trim()) { showSnack('サブイベント名を入力してください', 'error'); return; }
     fetch(`/api/scenario-event/${selectedEventId}/sub`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newSubName }),
     })
-      .then(response => {
-        if (!response.ok) {
-          return response.text().then(text => {
-            throw new Error(`HTTP error! status: ${response.status}, body: ${text}`);
-          });
-        }
-        return response.json();
-      })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(result => {
-        alert(result.message);
-        const newSub = {
-          id: `${selectedEventId}-${result.subId}`,
-          eventId: selectedEventId,
-          subEventId: result.subId,
-          name: newSubName,
-          path: [selectedEventId, result.subId.toString()],
-          parentId: selectedEventId,
-          subId: result.subId,
-          isSub: true
-        };
-        setData([...data, newSub]);
+        showSnack(result.message || 'サブイベントを追加しました');
+        setEvents(prev => prev.map(e =>
+          e.id === selectedEventId
+            ? { ...e, subEvents: [...(e.subEvents || []), { subId: result.subId, name: newSubName }] }
+            : e
+        ));
         setNewSubName('');
         setOpenSubDialog(false);
       })
-      .catch(error => {
-        console.error('Error adding sub event:', error);
-        alert('サブイベント追加エラー: ' + error.message);
-      });
+      .catch(() => showSnack('サブイベント追加エラー', 'error'));
   };
 
-  // Delete sub event
-  const handleDeleteSubEvent = (eventId, subId) => {
-    if (window.confirm(`サブイベント ${subId} を削除しますか？`)) {
-      fetch(`/api/scenario-event/${eventId}/sub/${subId}`, {
-        method: 'DELETE',
+  // サブイベント削除
+  const handleDeleteSub = (eventId, subId) => {
+    if (!window.confirm(`サブイベント #${subId} を削除しますか？`)) return;
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}`, { method: 'DELETE' })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => {
+        showSnack(result.message || '削除しました');
+        setEvents(prev => prev.map(e =>
+          e.id === eventId
+            ? { ...e, subEvents: (e.subEvents || []).filter(s => s.subId !== subId) }
+            : e
+        ));
       })
-        .then(response => {
-          if (!response.ok) {
-            return response.text().then(text => {
-              throw new Error(`HTTP error! status: ${response.status}, body: ${text}`);
-            });
-          }
-          return response.json();
-        })
-        .then(result => {
-          alert(result.message);
-          setData(data.filter(item => item.id !== `${eventId}-${subId}`));
-        })
-        .catch(error => {
-          console.error('Error deleting sub event:', error);
-          alert('サブイベント削除エラー: ' + error.message);
-        });
-    }
+      .catch(() => showSnack('削除エラー', 'error'));
   };
 
-  // Handle cell edit
-  const handleCellEditStop = (params, event) => {
-    const { id, field, value } = params;
-    const row = data.find(row => row.id === id);
-    if (!row || value === row[field]) return;
-
-    const updatedData = data.map(row =>
-      row.id === id ? { ...row, [field]: value } : row
-    );
-    setData(updatedData);
-
-    if (row.isParent) {
-      fetch(`/api/scenario-event/${row.eventId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value }),
-      })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          return response.json();
-        })
-        .then(result => {
-          alert(result.message);
-        })
-        .catch(error => {
-          console.error('Error updating event:', error);
-          alert('イベント更新エラー: ' + error.message);
-          setData(data); // Revert on error
-        });
-    } else if (row.isSub) {
-      fetch(`/api/scenario-event/${row.eventId}/sub/${row.subId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value }),
-      })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          return response.json();
-        })
-        .then(result => {
-          alert(result.message);
-        })
-        .catch(error => {
-          console.error('Error updating sub event:', error);
-          alert('サブイベント更新エラー: ' + error.message);
-          setData(data); // Revert on error
-        });
-    }
+  const handleFixAll = () => {
+    if (!window.confirm('全てのイベントの Role データを修正しますか？')) return;
+    fetch('/api/fix-all-events', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => { showSnack(result.message || '修正完了'); window.location.reload(); })
+      .catch(() => showSnack('修正エラー', 'error'));
   };
 
-  const columns = [
-    { field: 'eventId', headerName: 'イベントID', width: 200 },
-    { field: 'subEventId', headerName: 'サブイベントID', width: 150 },
-{
-  field: 'name',
-  headerName: '名前',
-  width: 300,
-  editable: true,
-  renderCell: (params) => {
-    // path が [parentId] または [parentId, subId, ...] になっている想定
-    const path = Array.isArray(params.row.path) ? params.row.path : [];
-    const depth = Math.max(0, path.length - 1);
-
-    // 簡易ツリー線（縦線＋枝）
-    const lines = [];
-    for (let i = 1; i <= depth; i++) {
-      lines.push(
-        <div
-          key={`v-${i}`}
-          style={{
-            position: 'absolute',
-            left: `${(i - 1) * 20 + 8}px`,
-            top: 0,
-            bottom: 0,
-            width: '1px',
-            backgroundColor: '#d0d0d0',
-            pointerEvents: 'none',
-          }}
-        />
-      );
-    }
-
-    return (
-      <div style={{ position: 'relative', paddingLeft: `${depth * 20 + 12}px`, width: '100%', display: 'flex', alignItems: 'center' }}>
-        {/* 縦線（すべての先祖レベルで表示） */}
-        {lines}
-        {/* 横線（現在の深さの枝） */}
-        {depth > 0 && (
-          <div style={{
-            position: 'absolute',
-            left: `${depth * 20 - 8}px`,
-            top: '50%',
-            width: '12px',
-            height: '1px',
-            backgroundColor: '#d0d0d0',
-            transform: 'translateY(-50%)',
-            pointerEvents: 'none',
-          }} />
-        )}
-
-        <Button
-          variant="text"
-          onClick={() => {
-            if (params.row.isParent) {
-              navigate(`/scenario-event/${params.row.eventId}`);
-            } else {
-              navigate(`/scenario-event/${params.row.parentId}/sub/${params.row.subId}`);
-            }
-          }}
-          sx={{ minWidth: 'auto', textTransform: 'none' }}
-        >
-          {params.value}
-        </Button>
-      </div>
-    );
-  }
-},
-
-    { field: 'description', headerName: '説明', width: 300, editable: true },
-    {
-      field: 'actions',
-      headerName: 'アクション',
-      width: 250,
-      renderCell: (params) => {
-        if (params.row.isParent) {
-          return (
-            <>
-              <Button
-                variant="contained"
-                color="primary"
-                size="small"
-                startIcon={<AddIcon />}
-                onClick={() => handleAddSubEvent(params.row.eventId)}
-                sx={{ mr: 1 }}
-              >
-                サブ追加
-              </Button>
-              <Button
-                variant="contained"
-                color="error"
-                size="small"
-                onClick={() => handleDeleteEvent(params.row.eventId)}
-              >
-                削除
-              </Button>
-            </>
-          );
-        } else if (params.row.isSub) {
-          return (
-            <>
-              <Button
-                variant="contained"
-                color="secondary"
-                size="small"
-                sx={{ mr: 1 }}
-                onClick={() => navigate(`/scenario-event/${params.row.parentId}/sub/${params.row.subId}/transition`)}
-              >
-                遷移図
-              </Button>
-              <Button
-                variant="contained"
-                color="secondary"
-                size="small"
-                sx={{ mr: 1 }}
-                onClick={() => navigate(`/scenario-event/${params.row.parentId}/sub/${params.row.subId}/story`)}
-              >
-                物語設定
-              </Button>
-              <IconButton color="error" onClick={() => handleDeleteSubEvent(params.row.parentId, params.row.subId)}>
-                <DeleteIcon />
-              </IconButton>
-            </>
-          );
-        }
-        return null;
-      },
-    },
-  ];
+  const handleGenerateAllBin = () => {
+    if (!window.confirm('全てのイベントバイナリを生成しますか？')) return;
+    fetch('/api/generate-all-event-bin', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => showSnack(result.message || '生成完了'))
+      .catch(() => showSnack('生成エラー', 'error'));
+  };
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        シナリオイベント
-      </Typography>
-      <Box sx={{ mb: 2, display: 'flex', alignItems: 'center' }}>
-        <TextField
-          label="検索 (IDまたは名前)"
-          variant="outlined"
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          sx={{ width: 300, mr: 2 }}
-        />
-        <Button variant="contained" onClick={handleAddEvent} sx={{ mr: 1 }}>
-          追加
-        </Button>
-        <Button variant="contained" color="secondary" onClick={handleFixAll} sx={{ mr: 1 }}>
-          Fix
-        </Button>
-        <Button variant="contained" color="primary" onClick={handleGenerateAllBin}>
-          全bin生成
-        </Button>
+    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
+      {/* ヘッダー */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 3, gap: 2 }}>
+        <MenuBookIcon sx={{ fontSize: 32, color: 'primary.main' }} />
+        <Typography variant="h5" fontWeight="bold">シナリオイベント</Typography>
+        <Chip label={`${events.length} イベント`} size="small" color="primary" />
       </Box>
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>
-        <DialogTitle>新しいイベントの作成</DialogTitle>
+
+      {/* ツールバー */}
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <TextField
+            placeholder="IDまたは名前で検索..."
+            size="small"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            sx={{ minWidth: 240 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <Divider orientation="vertical" flexItem />
+          <Tooltip title="新しいイベントを追加（IDは自動採番）">
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              size="small"
+              onClick={() => setOpenDialog(true)}
+            >
+              イベント追加
+            </Button>
+          </Tooltip>
+          <Tooltip title="全Roleデータを修正">
+            <Button
+              variant="outlined"
+              startIcon={<BuildIcon />}
+              size="small"
+              color="warning"
+              onClick={handleFixAll}
+            >
+              Fix All
+            </Button>
+          </Tooltip>
+          <Tooltip title="全バイナリを生成">
+            <Button
+              variant="outlined"
+              startIcon={<FileDownloadIcon />}
+              size="small"
+              onClick={handleGenerateAllBin}
+            >
+              全bin生成
+            </Button>
+          </Tooltip>
+        </Box>
+      </Paper>
+
+      {/* テーブル */}
+      {loading ? (
+        <Box sx={{ textAlign: 'center', py: 6 }}>
+          <Typography color="text.secondary">読み込み中...</Typography>
+        </Box>
+      ) : filteredEvents.length === 0 ? (
+        <Box sx={{ textAlign: 'center', py: 6 }}>
+          <Typography color="text.secondary">
+            {filterText ? '検索結果がありません' : 'イベントがありません。「イベント追加」から作成してください。'}
+          </Typography>
+        </Box>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: 'grey.100' }}>
+                <TableCell width={40} />
+                <TableCell><Typography variant="caption" fontWeight="bold">ID / 名前</Typography></TableCell>
+                <TableCell><Typography variant="caption" fontWeight="bold">説明</Typography></TableCell>
+                <TableCell><Typography variant="caption" fontWeight="bold">サブイベント / アクション</Typography></TableCell>
+                <TableCell align="right"><Typography variant="caption" fontWeight="bold">操作</Typography></TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filteredEvents.map((event) => (
+                <EventRow
+                  key={event.id}
+                  event={event}
+                  subEvents={event.subEvents || []}
+                  onAddSub={(id) => { setSelectedEventId(id); setOpenSubDialog(true); }}
+                  onDeleteEvent={handleDeleteEvent}
+                  onDeleteSub={handleDeleteSub}
+                  onEditEvent={handleEditEvent}
+                  navigate={navigate}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* イベント追加ダイアログ */}
+      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddIcon color="primary" />
+            新しいイベントを作成
+          </Box>
+        </DialogTitle>
         <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            IDは自動で採番されます（現在: {(() => {
+              const ids = events.map(e => parseInt(e.id, 10)).filter(n => !isNaN(n));
+              return ids.length > 0 ? Math.max(...ids) + 1 : 1;
+            })()}）
+          </Alert>
           <TextField
             autoFocus
             margin="dense"
-            label="ID (英数字とハイフンのみ、1-25文字)"
+            label="イベント名 *"
             fullWidth
-            variant="standard"
-            value={newId}
-            onChange={handleIdChange}
-            error={idError}
-            helperText={idError ? '無効なIDです' : ''}
-          />
-          <TextField
-            margin="dense"
-            label="イベント名"
-            fullWidth
-            variant="standard"
+            variant="outlined"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateEvent(); }}
+            size="small"
           />
           <TextField
             margin="dense"
             label="説明"
             fullWidth
-            variant="standard"
+            variant="outlined"
             value={newDescription}
             onChange={(e) => setNewDescription(e.target.value)}
+            size="small"
+            sx={{ mt: 1.5 }}
           />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpenDialog(false)}>キャンセル</Button>
-          <Button onClick={handleCreateEvent} disabled={idError || !newId.trim()}>作成</Button>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setOpenDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleCreateEvent} variant="contained" disabled={!newName.trim()}>
+            作成
+          </Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={openSubDialog} onClose={() => setOpenSubDialog(false)}>
-        <DialogTitle>新しいサブイベントの作成</DialogTitle>
+
+      {/* サブイベント追加ダイアログ */}
+      <Dialog open={openSubDialog} onClose={() => setOpenSubDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddIcon color="secondary" />
+            サブイベントを追加
+          </Box>
+        </DialogTitle>
         <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            サブイベントIDは自動で採番されます。
+          </Alert>
           <TextField
             autoFocus
             margin="dense"
-            label="サブイベント名"
+            label="サブイベント名 *"
             fullWidth
-            variant="standard"
+            variant="outlined"
             value={newSubName}
             onChange={(e) => setNewSubName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSubEvent(); }}
+            size="small"
           />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpenSubDialog(false)}>キャンセル</Button>
-          <Button onClick={handleCreateSubEvent}>作成</Button>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setOpenSubDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleCreateSubEvent} variant="contained" color="secondary" disabled={!newSubName.trim()}>
+            追加
+          </Button>
         </DialogActions>
       </Dialog>
-      {loading ? (
-        <Typography>読み込み中...</Typography>
-      ) : (
-        <div style={{ height: 600, width: '100%' }}>
-          <DataGrid
-            rows={filteredData}
-            columns={columns}
-            treeData
-            getTreeDataPath={(row) => row.path}
-            groupingColDef={{
-              headerName: '階層',
-              hideDescendantCount: true,
-              width: 150,
-              renderCell: (params) => (
-                <div style={{ paddingLeft: `${params.rowNode.depth * 20}px` }}>
-                  {params.rowNode.depth > 0 ? '└─ ' : ''}{params.row.eventId || params.row.subEventId}
-                </div>
-              )
-            }}
-            pageSizeOptions={[5]}
-            getRowId={(row) => row.id}
-            onCellEditStop={handleCellEditStop}
-            sx={{
-              '& .MuiDataGrid-row': {
-                '& .MuiDataGrid-cell': {
-                  borderLeft: '1px solid rgba(0,0,0,0.1)',
-                },
-              },
-            }}
-          />
-        </div>
-      )}
+
+      {/* スナックバー通知 */}
+      <Snackbar open={snack.open} autoHideDuration={3000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+        <Alert onClose={hideSnack} severity={snack.severity} variant="filled" sx={{ minWidth: 240 }}>
+          {snack.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

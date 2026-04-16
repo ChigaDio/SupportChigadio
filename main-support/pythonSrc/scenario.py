@@ -315,7 +315,17 @@ public class ScenarioMasterExecuteAction
     public bool IsExecuteFinish { get; private set; }
     private ScenarioExecuteData executeData = new ScenarioExecuteData();
     public ScenarioExecuteData ExecuteData {  get { return executeData; } }
-
+    public void SetExecuteGroupID(int value)
+    {
+        if (value <= 0 || value >= scenarioActionList.Count) return;
+        executeGroupID = value;
+    }
+    public void SetExecuteSubGroupID(int value)
+    {
+        if(value <= 0 || value >= scenarioActionList.Find(id => id.GroupID == executeGroupID).ScenarioActionListCount()) return;
+        executeSubGroupID = value;
+    }
+    
     private List<ScenarioGroupExecuteAction> FindGroupActionList(int groupID)
     {
         return scenarioActionList.FindAll(data => data.GroupID == groupID);
@@ -403,6 +413,7 @@ using System.Threading;
 public class ScenarioGroupExecuteAction
 {
     private List<ScenarioSubGroupExecuteAction> scenarioActionList = new List<ScenarioSubGroupExecuteAction>();
+    public int ScenarioActionListCount() => scenarioActionList.Count;
     public int GroupID { get; private set; }
 
     public List<ScenarioSubGroupExecuteAction> FindSubGroupActionList(int subGroupID)
@@ -598,15 +609,19 @@ public class ScenarioSubGroupExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioEventBinaryHeader.cs")):
         # Generate ScenarioEventBinaryHeader class
         factory_content = """
+
 using Cysharp.Threading.Tasks;
+using DG.Tweening.Plugins.Core.PathCore;
+using GameCore.Tables;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using UnityEngine;
-using UnityEngine.AddressableAssets;                    // ← 追加
-using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace GameCore.Scenario
 {
@@ -633,7 +648,7 @@ namespace GameCore.Scenario
             }
         }
 
-        public static long GetEventSeekPos(string eventName, string subName)
+        public static long GetEventSeekPos(string eventName,string subName)
         {
             var find = _events.Find(data => data.EventId == eventName);
             var findSub = find.SubEvents.Find(data => data.SubEventName == subName);
@@ -645,109 +660,147 @@ namespace GameCore.Scenario
             var findSub = find.SubEvents.Find(data => data.SubEventId == subID);
             return findSub.SubEventOffset;
         }
-
-        /// <summary>
-        /// ALL_SCENARIO_EVENTS_BIN を読み込む（Addressable対応追加）
-        /// </summary>
-        public static async UniTask ReadHeaderAsync(bool addressable = false, Action action = null)
+        public static async UniTask ReadHeaderAsync(Action action = null, bool addressable = false)
         {
-            if (!addressable)
+            Stream stream = null;
+            AsyncOperationHandle<TextAsset> handle = default;
+
+            try
             {
-                // 従来の同期ファイル読み込み
-                using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
-                using (var reader = new BinaryReader(stream, Encoding.UTF8))
+                (stream, handle) = await GetDataStreamAsync(addressable);
+
+                using var reader = new BinaryReader(stream, Encoding.UTF8);
+
+                int eventCount = reader.ReadInt32();
+                if (eventCount <= 0)
+                    throw new InvalidDataException($"Invalid event count: {eventCount}");
+
+                Events.Clear();
+
+                for (int i = 0; i < eventCount; i++)
                 {
-                    await ReadHeaderFromReader(reader, action);
+                    var eventInfo = await ReadScenarioEventInfoAsync(reader, stream);
+                    Events.Add(eventInfo);
+
+                    await UniTask.Yield(); // 1フレームに1イベント処理（重い場合のフリーズ防止）
                 }
+
+                action?.Invoke();
             }
-            else
+            finally
             {
-                // ====================== Addressableの場合 ======================
-                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_SCENARIO_EVENTS_BIN);
+                stream?.Dispose();
 
-                TextAsset textAsset = await handle.ToUniTask();   // UniTaskで非同期待機
-
-                if (textAsset == null)
-                {
-                    Debug.LogError($"Failed to load Addressable binary: {SupportFiles.ALL_SCENARIO_EVENTS_BIN}");
-                    if (handle.IsValid()) Addressables.Release(handle);
-                    return;
-                }
-
-                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
-                using (var reader = new BinaryReader(ms, Encoding.UTF8))
-                {
-                    await ReadHeaderFromReader(reader, action);
-                }
-
-                Addressables.Release(handle);   // 必ず解放
+                if (handle.IsValid())
+                    Addressables.Release(handle);
             }
         }
 
         /// <summary>
-        /// 実際の読み込みロジック（FileStream / MemoryStream 共通）
+        /// Addressable または FileStream から Stream と Handle を取得
         /// </summary>
-        private static async UniTask ReadHeaderFromReader(BinaryReader reader, Action action = null)
+        private static async UniTask<(Stream stream, AsyncOperationHandle<TextAsset> handle)> GetDataStreamAsync(bool addressable)
         {
-            int eventCount = reader.ReadInt32();
-
-            if (eventCount <= 0)
+            if (addressable)
             {
-                throw new InvalidDataException($"Invalid event count: {eventCount}");
+                var handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE);
+                TextAsset textAsset = await handle.ToUniTask();
+
+                if (textAsset == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    throw new InvalidOperationException("Failed to load scenario event binary from Addressables.");
+                }
+
+                return (new MemoryStream(textAsset.bytes), handle);
+            }
+            else
+            {
+                var stream = new FileStream(
+                    SupportFiles.ALL_SCENARIO_EVENTS_BIN,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read);
+
+                return (stream, default);
+            }
+        }
+
+        /// <summary>
+        /// 1つのイベント（サブイベント含む）を読み込む
+        /// </summary>
+        private static async UniTask<ScenarioEventInfo> ReadScenarioEventInfoAsync(BinaryReader reader, Stream baseStream)
+        {
+            // Event ID
+            string eventId = ReadLengthPrefixedString(reader, baseStream, "event ID");
+
+            // Event Name
+            string eventName = ReadLengthPrefixedString(reader, baseStream, "event name");
+
+            // Event Offset
+            long eventOffset = reader.ReadInt64();
+            ValidateOffset(eventOffset, baseStream, "event offset");
+
+            // Sub Events
+            int subEventCount = reader.ReadInt32();
+            ValidateCount(subEventCount, 1000, "subEvent count", baseStream);
+
+            var subEvents = new List<ScenarioSubEventInfo>(subEventCount);
+
+            for (int j = 0; j < subEventCount; j++)
+            {
+                int subEventId = reader.ReadInt32();
+                string subEventName = ReadLengthPrefixedString(reader, baseStream, "subEvent name");
+
+                long subEventOffset = reader.ReadInt64();
+                ValidateOffset(subEventOffset, baseStream, "subEvent offset");
+
+                subEvents.Add(new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset));
+
+                await UniTask.Yield(PlayerLoopTiming.Initialization);
             }
 
-            Events.Clear();
-            for (int i = 0; i < eventCount; i++)
+            return new ScenarioEventInfo(eventId, eventName, eventOffset, subEvents);
+        }
+
+        /// <summary>
+        /// 長さプレフィックス付きの文字列を安全に読み込む
+        /// </summary>
+        private static string ReadLengthPrefixedString(BinaryReader reader, Stream baseStream, string fieldName)
+        {
+            int length = reader.ReadInt32();
+            ValidateCount(length, 1000, $"{fieldName} length", baseStream);
+
+            if (length == 0)
+                return string.Empty;
+
+            byte[] bytes = reader.ReadBytes(length);
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        /// <summary>
+        /// カウント値（長さや個数）のバリデーション
+        /// </summary>
+        private static void ValidateCount(int count, int max, string fieldName, Stream stream)
+        {
+            if (count < 0 || count > max)
             {
-                int idLength = reader.ReadInt32();
-                if (idLength < 0 || idLength > 1000)
-                {
-                    throw new InvalidDataException($"Invalid event ID length: {idLength} at position {reader.BaseStream.Position - 4}");
-                }
-                string eventId = Encoding.UTF8.GetString(reader.ReadBytes(idLength));
-
-                int nameLength = reader.ReadInt32();
-                if (nameLength < 0 || nameLength > 1000)
-                {
-                    throw new InvalidDataException($"Invalid event name length: {nameLength} at position {reader.BaseStream.Position - 4}");
-                }
-                string eventName = Encoding.UTF8.GetString(reader.ReadBytes(nameLength));
-
-                long eventOffset = reader.ReadInt64();
-                if (eventOffset < 0 || eventOffset > reader.BaseStream.Length)
-                {
-                    throw new InvalidDataException($"Invalid event offset: {eventOffset} at position {reader.BaseStream.Position - 8}");
-                }
-
-                int subEventCount = reader.ReadInt32();
-                if (subEventCount < 0 || subEventCount > 1000)
-                {
-                    throw new InvalidDataException($"Invalid subEvent count: {subEventCount} at position {reader.BaseStream.Position - 4}");
-                }
-
-                var subEvents = new List<ScenarioSubEventInfo>();
-                for (int j = 0; j < subEventCount; j++)
-                {
-                    int subEventId = reader.ReadInt32();
-                    int subNameLength = reader.ReadInt32();
-                    if (subNameLength < 0 || subNameLength > 1000)
-                    {
-                        throw new InvalidDataException($"Invalid subEvent name length: {subNameLength} at position {reader.BaseStream.Position - 4}");
-                    }
-                    string subEventName = Encoding.UTF8.GetString(reader.ReadBytes(subNameLength));
-                    long subEventOffset = reader.ReadInt64();
-                    if (subEventOffset < 0 || subEventOffset > reader.BaseStream.Length)
-                    {
-                        throw new InvalidDataException($"Invalid subEvent offset: {subEventOffset} at position {reader.BaseStream.Position - 8}");
-                    }
-                    subEvents.Add(new ScenarioSubEventInfo(subEventId, subEventName, subEventOffset));
-                }
-
-                Events.Add(new ScenarioEventInfo(eventId, eventName, eventOffset, subEvents));
-                await UniTask.Yield();   // 元の処理と同じくフレーム分割
+                throw new InvalidDataException(
+                    $"Invalid {fieldName}: {count} at position {stream.Position - 4}");
             }
-            await UniTask.Yield();
-            action?.Invoke();
+        }
+
+        /// <summary>
+        /// オフセット値のバリデーション
+        /// </summary>
+        private static void ValidateOffset(long offset, Stream stream, string fieldName)
+        {
+            if (offset < 0 || offset > stream.Length)
+            {
+                throw new InvalidDataException(
+                    $"Invalid {fieldName}: {offset} at position {stream.Position - 8}");
+            }
         }
 
         // イベント名とサブイベントIDからサブイベントのシーク座標を取得するメソッド
@@ -776,6 +829,7 @@ namespace GameCore.Scenario
         }
     }
 }
+
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioEventBinaryHeader.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
@@ -871,21 +925,46 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
+using Unity.VisualScripting;
 using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
 
 public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
 {
     public bool IsHeaderLoad { get; private set; } = false;
 
     private ScenarioMasterExecuteAction master = new ScenarioMasterExecuteAction();
+
+    private string event_play_name = "";
+    private string event_sub_name = "";
+    private bool is_event_change = false;
+
     public override void AwakeSingleton()
     {
         base.AwakeSingleton();
-
         ScenarioEventBinaryHeader.ReadHeaderAsync(() =>
         {
             IsHeaderLoad = true;
-        }).Forget();
+        }, addressable: SupportFiles.ADDRESSABLE_CHECK).Forget();
+    }
+
+    public void SetExecuteGroupID(int value) => master?.SetExecuteGroupID(value);
+    public void SetExecuteSubGroupID(int value) => master?.SetExecuteSubGroupID(value);
+
+    public void SetEventName(string value_event_name, string value_event_sub_name)
+    {
+        event_play_name = value_event_name;
+        event_sub_name = value_event_sub_name;
+        is_event_change = true;
+    }
+
+    public void SetEventNameID(string value_event_name, string value_event_sub_name,
+                               int value_group_id = 1, int value_sub_group_id = 1)
+    {
+        SetExecuteGroupID(value_group_id);
+        SetExecuteSubGroupID(value_sub_group_id);
+        SetEventName(value_event_name, value_event_sub_name);
     }
 
     /// <summary>
@@ -893,32 +972,45 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
     /// </summary>
     /// <param name="eventName">イベント名</param>
     /// <param name="eventSubName">サブイベント名</param>
+    /// <param name="addressable">trueの場合 Addressable から読み込む（TextAsset）</param>
     /// <param name="action">完了時に実行するアクション</param>
-    /// <param name="cts">外部キャンセルトークン。呼び出し元で Dispose する必要があります。</param>
-    public async UniTask ScenarioExecuteUpdate(string eventName, string eventSubName, Action<ScenarioExecuteData> action = null, CancellationTokenSource cts = null)
+    /// <param name="cts">外部キャンセルトークン</param>
+    public async UniTask ScenarioExecuteUpdate(
+        string eventName,
+        string eventSubName,
+        bool addressable = false,                    // ← 追加
+        Action<ScenarioExecuteData> action = null,
+        CancellationTokenSource cts = null)
     {
-        using var ct = new CancellationTokenSource();
+        using var localCts = new CancellationTokenSource();
         using var linkedCts = cts != null
-            ? CancellationTokenSource.CreateLinkedTokenSource(ct.Token, cts.Token, this.GetCancellationTokenOnDestroy())
-            : CancellationTokenSource.CreateLinkedTokenSource(ct.Token, this.GetCancellationTokenOnDestroy());
+            ? CancellationTokenSource.CreateLinkedTokenSource(localCts.Token, cts.Token, this.GetCancellationTokenOnDestroy())
+            : CancellationTokenSource.CreateLinkedTokenSource(localCts.Token, this.GetCancellationTokenOnDestroy());
+
+
+        event_play_name = eventName;
+        event_sub_name = eventSubName;
+        is_event_change = true;
 
         try
         {
-            var seekPos = ScenarioEventBinaryHeader.GetEventSeekPos(eventName, eventSubName);
-            using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
-            using (var reader = new BinaryReader(stream, Encoding.UTF8))
+            while (!master.IsExecuteFinish && !linkedCts.IsCancellationRequested && is_event_change)
             {
-                stream.Seek(seekPos, SeekOrigin.Begin);
-                master.SetUp(reader);
-                await UniTask.Yield(cancellationToken: linkedCts.Token);
+                master.AllRelease();
+                is_event_change = false;
 
-                while (!master.IsExecuteFinish && !linkedCts.Token.IsCancellationRequested)
+                var seekPos = ScenarioEventBinaryHeader.GetEventSeekPos(event_play_name, event_sub_name);
+
+                if (addressable)
                 {
-                    await master.OnInitializeAsync(linkedCts);
-                    await master.OnExecuteAsync(linkedCts);
-                    await master.OnFinalizeAsync(linkedCts);
-                    await UniTask.Yield(cancellationToken: linkedCts.Token);
+                    await LoadAndExecuteWithAddressable(seekPos, linkedCts);
                 }
+                else
+                {
+                    await LoadAndExecuteWithFileStream(seekPos, linkedCts);
+                }
+
+                await UniTask.Yield(PlayerLoopTiming.Update, linkedCts.Token);
             }
         }
         catch (OperationCanceledException)
@@ -929,7 +1021,66 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         finally
         {
             action?.Invoke(master.ExecuteData);
-            await UniTask.Yield(cancellationToken: linkedCts.Token);
+            master.AllRelease();
+            is_event_change = false;
+            await UniTask.Yield(PlayerLoopTiming.Update, linkedCts.Token);
+        }
+    }
+
+    // ====================== 非Addressable（従来通り） ======================
+    private async UniTask LoadAndExecuteWithFileStream(long seekPos, CancellationTokenSource token)
+    {
+        using (var stream = new FileStream(SupportFiles.ALL_SCENARIO_EVENTS_BIN, FileMode.Open, FileAccess.Read))
+        using (var reader = new BinaryReader(stream, Encoding.UTF8))
+        {
+            stream.Seek(seekPos, SeekOrigin.Begin);
+            master.SetUp(reader);
+
+            await ExecuteScenarioLoop(token);
+        }
+    }
+
+    // ====================== Addressable版 ======================
+    private async UniTask LoadAndExecuteWithAddressable(long seekPos, CancellationTokenSource token)
+    {
+        AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE);
+
+        TextAsset textAsset = await handle.ToUniTask(cancellationToken: token.Token);
+
+        if (textAsset == null)
+        {
+            Debug.LogError($"Failed to load Addressable scenario binary: {SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE}");
+            if (handle.IsValid()) Addressables.Release(handle);
+            return;
+        }
+
+        try
+        {
+            using (var ms = new MemoryStream(textAsset.bytes))
+            using (var reader = new BinaryReader(ms, Encoding.UTF8))
+            {
+                ms.Seek(seekPos, SeekOrigin.Begin);
+                master.SetUp(reader);
+
+                await ExecuteScenarioLoop(token);
+            }
+        }
+        finally
+        {
+            if (handle.IsValid()) Addressables.Release(handle);
+        }
+    }
+
+    // ====================== 共通の実行ループ ======================
+    private async UniTask ExecuteScenarioLoop(CancellationTokenSource token)
+    {
+        while (!master.IsExecuteFinish && !token.IsCancellationRequested)
+        {
+            await master.OnInitializeAsync(token);   // CancellationToken対応を推奨
+            await master.OnExecuteAsync(token);
+            await master.OnFinalizeAsync(token);
+
+            await UniTask.Yield(PlayerLoopTiming.Update, token.Token);
         }
     }
 }
@@ -1393,6 +1544,8 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                             for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
                                 field = inner_fields[field_idx]
                                 _, field_type = inner_schema_fields[field_idx]
+                                if(field_type == "Fade"):
+                                    print("Fade type found, skipping value packing for this field.")
                                 arraySize = field.get('arraySize',0)
                                 if arraySize == 0:
                                     sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
