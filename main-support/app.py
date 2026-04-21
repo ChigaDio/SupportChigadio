@@ -2343,116 +2343,99 @@ def generate_class_cs(name):
         return jsonify({"error": str(e)}), 500
     
 def generate_binary_data(name, json_data):
-    binary_data = bytearray()
+    import io
+    f = io.BytesIO()
+
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
-    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
-    
-    binary_data.extend(struct.pack('i', len(rows)))
-    binary_data.extend(struct.pack('i', len(columns)))
-    
+    basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data = get_type_lists()
+
+    f.write(struct.pack('i', len(rows)))
+    f.write(struct.pack('i', len(columns)))
+
+    if name == "MobGuest":
+        print("aaa")
+
     for col in columns:
         name_encoded = col['name'].encode('utf-8')
         type_encoded = col['type'].encode('utf-8')
-        binary_data.extend(struct.pack('i', len(name_encoded)))
-        binary_data.extend(name_encoded)
-        binary_data.extend(struct.pack('i', len(type_encoded)))
-        binary_data.extend(type_encoded)
-    
+        f.write(struct.pack('i', len(name_encoded)))
+        f.write(name_encoded)
+        f.write(struct.pack('i', len(type_encoded)))
+        f.write(type_encoded)
+
     for row in rows:
-        binary_data.extend(struct.pack('i', row.get('id', 0)))
+        f.write(struct.pack('i', row.get('id', 0)))
         for col in columns:
             cell = row['data'].get(col['name'], {})
             value = cell.get('value') if isinstance(cell, dict) else cell
-            type_ = col['type'].lower()
-            type_id = col['type'] + 'ID'
-            
+
             if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
-                binary_data.extend(struct.pack('i', 0))
+                f.write(struct.pack('i', 0))
                 continue
-            if type_ in TYPE_MAP:
-                if type_ == 'string':
-                    encoded = value.encode('utf-8') if isinstance(value, str) else b''
-                    binary_data.extend(struct.pack('i', len(encoded)) + encoded)
-                elif type_ == 'vector2':
-                    binary_data.extend(struct.pack('ff', *value if isinstance(value, (list, tuple)) and len(value) >= 2 else [0.0, 0.0]))
-                elif type_ == 'vector3':
-                    binary_data.extend(struct.pack('fff', *value if isinstance(value, (list, tuple)) and len(value) >= 3 else [0.0, 0.0, 0.0]))
-                else:
-                    binary_data.extend(struct.pack(TYPE_MAP[type_]['pack'], value if value is not None else TYPE_MAP[type_].get('default', 0)))
-            elif type_id in enum_data:
-                property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                actual_id = next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)
-                binary_data.extend(struct.pack('i', actual_id))
-            elif type_id in class_data_id:
-                property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                actual_id = next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)
-                binary_data.extend(struct.pack('i', actual_id))
-            elif col['type'] in unity_types or col['type'] in class_list:
-                write_binary_field_extend(binary_data, value, col['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
-            else:
-                binary_data.extend(struct.pack('i', 0))
-    
-    return binary_data
+
+            write_binary_field(
+                f, value, col['type'],
+                basic_types, unity_types, enum_list, class_list,
+                class_data_id_list, enum_data, class_data_id, class_data
+            )
+
+    return f.getvalue()
 
 @app.route('/api/generate-all-binary', methods=['POST'])
 def generate_all_binary():
     try:
         all_binary_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'all_class_data.bytes')
-        header = bytearray()
-        data_sections = bytearray()
-        
+
         list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
         with open(list_path, 'r', encoding='utf-8') as f:
             class_list = json.load(f)
-        
-        header.extend(struct.pack('i', len(class_list)))
-        
-        offsets = {}
-        current_offset = 4 + sum(4 + 4 + len(item['name'].encode('utf-8')) + 8 + 4 for item in class_list)
-        
+
+        # ① 先にすべてのセクションを生成しておく
+        sections = {}
         for item in class_list:
             name = item['name']
-            id_ = item['id']
-            name_encoded = name.encode('utf-8')
-            
-            header.extend(struct.pack('i', id_))
-            header.extend(struct.pack('i', len(name_encoded)))
-            header.extend(name_encoded)
-            header.extend(struct.pack('q', 0))
-            header.extend(struct.pack('i', 0))
-            
             file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f'{name}.json')
             with open(file_path, 'r', encoding='utf-8') as f:
                 json_data = json.load(f)
-            section = generate_binary_data(name, json_data)
-            
+            sections[name] = generate_binary_data(name, json_data)
+
+        # ② ヘッダーサイズを正確に計算
+        # 構造: [count:4] + 各エントリ[id:4][name_len:4][name:N][offset:8][size:4]
+        header_size = 4  # count
+        for item in class_list:
+            name_len = len(item['name'].encode('utf-8'))
+            header_size += 4 + 4 + name_len + 8 + 4
+
+        # ③ オフセットを計算
+        current_offset = header_size
+        offsets = {}
+        for item in class_list:
+            name = item['name']
             offsets[name] = current_offset
-            current_offset += len(section)
-            data_sections.extend(section)
-        
+            current_offset += len(sections[name])
+
+        # ④ ヘッダーを構築
+        header = bytearray()
+        header.extend(struct.pack('i', len(class_list)))
+        for item in class_list:
+            name = item['name']
+            name_encoded = name.encode('utf-8')
+            header.extend(struct.pack('i', item['id']))
+            header.extend(struct.pack('i', len(name_encoded)))
+            header.extend(name_encoded)
+            header.extend(struct.pack('q', offsets[name]))   # 正しいオフセット
+            header.extend(struct.pack('i', len(sections[name])))  # 正しいサイズ
+
+        # ⑤ 1回で書き込む
         with open(all_binary_path, 'wb') as f:
             f.write(header)
-            f.write(data_sections)
-        
-        with open(all_binary_path, 'r+b') as f:
-            pos = 4
             for item in class_list:
-                name = item['name']
-                name_len = len(name.encode('utf-8'))
-                pos += 4 + 4 + name_len
-                
-                f.seek(pos)
-                f.write(struct.pack('q', offsets[name]))
-                
-                pos += 8
-                section_size = len(generate_binary_data(name, json_data))
-                f.write(struct.pack('i', section_size))
-                
-                pos += 4
-        
+                f.write(sections[item['name']])
+
         logger.info("Generated all_class_data.bytes")
         return jsonify({"message": "All binary generated successfully"})
+
     except Exception as e:
         logger.error(f"Error generating all binary: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -2858,7 +2841,7 @@ def generate_class_data_id_cs(name):
                 elif type_str.lower() in ['vector2', 'vector3']:
                     type_str = type_str.capitalize()
                 if "[]" in col['type']:
-                    type_str += "[]"
+                    type_str = f"List<{type_str}>"
                 lf.write(f"            private {type_str} {col['name']};\n")
                 lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
                 
@@ -2879,7 +2862,7 @@ def generate_class_data_id_cs(name):
                 #配列対応
                 array_size = 0
                 if "[]" in col['type']:
-                    array_size = len(rows[0]['data'][col['name']]['value']) if rows and 'data' in rows[0] and col['name'] in rows[0]['data'] else 0
+                    array_size = -1
                 if array_size == -1:
                     col['type'] = col['type'].replace("[]", "")
                     lf.write(f"                int count{i} = reader.ReadInt32();\n")
@@ -3102,6 +3085,14 @@ namespace GameCore.Tables
     
 #バイナリ書き込み
 def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
+    
+    if type_str.endswith('[]'):
+        inner_type = type_str[:-2]
+        values = value if isinstance(value, list) else []
+        f.write(struct.pack('i', len(values)))
+        for v in values:
+            write_binary_field(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+        return
     type_lower = type_str.lower()
 
     if type_lower in TYPE_MAP:
@@ -3134,6 +3125,11 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
             elif type_lower == 'bool':
                 safe_value = bool(safe_value)
             f.write(struct.pack(TYPE_MAP[type_lower]['pack'], safe_value))
+            
+    elif type_str + 'ID' in class_data_id:
+        property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+        actual_id = next((row['id'] for row in class_data_id[type_str + 'ID']['rows'] if row['enum_property'] == property_name), 0)
+        f.write(struct.pack('i', actual_id))
 
     elif type_str in enum_list:
         #数値ではなければ
