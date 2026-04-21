@@ -983,12 +983,12 @@ function ClassDataIdDetailGrid() {
                 case 'string':
                   return value != null ? String(value) : '';
                 case 'vector2': {
-                  const p = value ? JSON.parse(value) : [0, 0];
+                  const p = value ? [value[0], value[1]] : [0, 0];
                   if (!Array.isArray(p) || p.length !== 2) throw new Error('不正なVector2形式');
                   return p;
                 }
                 case 'vector3': {
-                  const p = value ? JSON.parse(value) : [0, 0, 0];
+                  const p = value ? [value[0], value[1], value[2]] : [0, 0, 0];
                   if (!Array.isArray(p) || p.length !== 3) throw new Error('不正なVector3形式');
                   return p;
                 }
