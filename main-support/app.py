@@ -6190,18 +6190,20 @@ def generate_tags_load_script():
             # -------------------------
             # 非同期
             # -------------------------
-            add(f"public static async UniTask LoadAsync{tag_name}()")
+            add(f"public static async UniTask LoadAsync{tag_name}(Action action = null)")
             add("{")
             indent += 1
         
-            add("await ClassDataIDCore.Instance.LoadClassDataAsync((reader, header) =>")
+            add("await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
         
             for item_name in tagged_items:
-                add(f"header.GetData<{item_name}Table>(GameCore.Enums.TableID.{tag_name}, reader);")
+                add(f"header.GetData<GameCore.Tables.{item_name}Table>(GameCore.Enums.TableID.{item_name}, reader);")
                 add("await UniTask.Yield();")
         
+            add("action?.Invoke();")
+            add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
         
@@ -6212,7 +6214,7 @@ def generate_tags_load_script():
             # -------------------------
             # 同期
             # -------------------------
-            add(f"public static void Load{tag_name}()")
+            add(f"public static void Load{tag_name}(Action action = null)")
             add("{")
             indent += 1
         
@@ -6220,13 +6222,15 @@ def generate_tags_load_script():
             add("{")
             indent += 1
         
-            add("await ClassDataIDCore.Instance.LoadClassDataAsync((reader, header) =>")
+            add("await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
         
             for item_name in tagged_items:
-                add(f"header.GetData<{item_name}Table>(GameCore.Enums.TableID.{tag_name}, reader);")
+                add(f"header.GetData<GameCore.Tables.{item_name}Table>(GameCore.Enums.TableID.{item_name}, reader);")
         
+            add("action?.Invoke();")
+            add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
         
@@ -6249,7 +6253,7 @@ using System;
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
         
-namespace GameCore.Enums.TableID
+namespace GameCore.Enums
 {{
     public static class TableIdUtils
     {{
