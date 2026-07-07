@@ -396,6 +396,12 @@ public class ScenarioMasterExecuteAction
             IsExecuteFinish = true;
         }
     }
+    
+    public void AllRelease()
+    {
+        executeGroupID = executeSubGroupID = 1;
+        scenarioActionList.Clear();
+    }
 }
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioMasterExecuteAction.cs"), 'w', encoding='utf-8') as f:
@@ -611,7 +617,6 @@ public class ScenarioSubGroupExecuteAction
         factory_content = """
 
 using Cysharp.Threading.Tasks;
-using DG.Tweening.Plugins.Core.PathCore;
 using GameCore.Tables;
 using System;
 using System.Collections.Generic;
