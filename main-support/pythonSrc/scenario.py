@@ -22,12 +22,12 @@ else:
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
-CLASS_DATA_ID = 'class-data-id'
+CLASS_DATA_ID = 'class_data_id'
 
-SCENARIO_DATA = 'scenario-data'
-SCENARIO_ROLE =  os.path.join(SCENARIO_DATA, 'scenario-role')
-SCENARIO_CONDITIONS_DATA = os.path.join(SCENARIO_DATA, 'scenario-conditions-data')
-SCENARIO_EVENT = os.path.join(SCENARIO_DATA, 'scenario-event-data')
+SCENARIO_DATA = 'scenario_data'
+SCENARIO_ROLE =  os.path.join(SCENARIO_DATA, 'scenario_role')
+SCENARIO_CONDITIONS_DATA = os.path.join(SCENARIO_DATA, 'scenario_conditions_data')
+SCENARIO_EVENT = os.path.join(SCENARIO_DATA, 'scenario_event_data')
 
 def generate_scenario_folder(parent_path : str):
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA)):
@@ -1104,8 +1104,8 @@ def get_enum_values():
         if os.path.exists(enum_path):
             with open(enum_path, 'r', encoding='utf-8') as ef:
                 enum_values[e['name']] = json.load(ef)
-    # class-data-idのenum_propertyも追加 (app.pyのget_json_data_id使用)
-    class_id_dir = os.path.join(DATA_DIR, 'class-data-id')
+    # class_data_idのenum_propertyも追加 (app.pyのget_json_data_id使用)
+    class_id_dir = os.path.join(DATA_DIR, 'class_data_id')
     class_id_list_path = os.path.join(class_id_dir, 'class_data_id_list.json')
     if os.path.exists(class_id_list_path):
         with open(class_id_list_path, 'r', encoding='utf-8') as f:
@@ -1123,7 +1123,7 @@ def get_type_lists():
     unity_types = ['GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 'Color', 'Rect', 'Bounds', 'Matrix4x4', 'AnimationCurve', 'Sprite', 'Texture', 'Material', 'Mesh', 'Rigidbody', 'Collider', 'AudioClip', 'ScriptableObject']
     enum_dir = os.path.join(DATA_DIR, 'enum')
     class_dir = os.path.join(DATA_DIR, 'class-data')
-    class_id_dir = os.path.join(DATA_DIR, 'class-data-id')
+    class_id_dir = os.path.join(DATA_DIR, 'class_data_id')
     enum_list = json.load(open(os.path.join(enum_dir, 'enum_list.json'))) if os.path.exists(os.path.join(enum_dir, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(class_dir, 'class_list.json'))) if os.path.exists(os.path.join(class_dir, 'class_list.json')) else []
     class_id_list = json.load(open(os.path.join(class_id_dir, 'class_data_id_list.json'))) if os.path.exists(os.path.join(class_id_dir, 'class_data_id_list.json')) else []
@@ -1184,7 +1184,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
                 field['options'] = []
                 field['warning'] = 'Enum options not found'
 
-        # class-data/class-data-id
+        # class-data/class_data_id
         elif var_type in get_type_lists()[3] or var_type in get_type_lists()[4]:
             field['type'] = var_type
             sub_schema = generate_role_form_schema(var_type, data_dir, depth + 1, max_depth)

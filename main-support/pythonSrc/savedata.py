@@ -13,8 +13,8 @@ else:
 # ディレクトリパスをプロジェクトルート基準に設定
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-SAVE_DATA_DIR = os.path.join(DATA_DIR, "save-data")
-SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom-data")
+SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
+SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
 def generate_base():
     if not os.path.exists(SAVE_DATA_DIR):

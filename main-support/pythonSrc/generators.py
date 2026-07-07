@@ -20,14 +20,14 @@ STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..",".." ,"data"))
 
 
-CLASS_DATA_ID = 'class-data-id'
-CLASS_DATA_MATRIX_ID = 'class-data-matrix-id'
+CLASS_DATA_ID = 'class_data_id'
+CLASS_DATA_MATRIX_ID = 'class_data_matrix_id'
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 ENUM = 'enum'
-CLASS_DATA = 'class-data'
-STATE_DATA = 'state-data'
+CLASS_DATA = 'class_data'
+STATE_DATA = 'state_data'
 
 SCRIPT = 'Script'
 OBJECTPOOL = 'ObjectPool'
@@ -39,8 +39,8 @@ SUBMODULE = "submodule"
 PLUGIN = "Plugin"
 
 
-SAVE_DATA_DIR = os.path.join(DATA_DIR, "save-data")
-SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom-data")
+SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
+SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
 # ========================
 # 1. 更新した TYPE_MAP（Pythonはそのまま、JSはDataView用に廃止 → 直接実装）
@@ -548,13 +548,13 @@ def generate_class_python(name, data, enum_list, class_list, class_id_list):
         f.write("from ..BaseCustomClassData import BaseCustomClassData\n")
         for uc in sorted(used_classes):
             if uc != name:  # 自分自身は不要
-                f.write(f"from ...class-data.{uc}.{uc} import {uc}\n")
+                f.write(f"from ...class_data.{uc}.{uc} import {uc}\n")
         for ec in sorted(enum_classes):
             if ec != name:
                 f.write(f"from ...enum.{ec.replace('ID', '')}.{ec} import {ec}\n")
         for tc in sorted(table_classes):
             if tc != name:
-                f.write(f"from ...class-data-id.{tc.replace('TableID', '')}.{tc} import {tc}\n")
+                f.write(f"from ...class_data_id.{tc.replace('TableID', '')}.{tc} import {tc}\n")
 
         f.write("\n")
         f.write(f"class Base{name}(BaseCustomClassData):\n")
@@ -619,7 +619,7 @@ def generate_class_js(name, data, enum_list, class_list, class_id_list):
                 f.write(f"import {{ {ec} }} from '../../enum/{ec.replace('ID', '')}/{ec}.js';\n")
         for tc in sorted(table_classes):
             if tc != name:
-                f.write(f"import {{ {tc} }} from '../../class-data-id/{tc.replace('TableID', '')}/{tc}.js';\n")
+                f.write(f"import {{ {tc} }} from '../../class_data_id/{tc.replace('TableID', '')}/{tc}.js';\n")
         f.write("\n")
         f.write(f"export class Base{name} extends BaseCustomClassData {{\n")
         f.write("    constructor() {\n")
@@ -896,13 +896,13 @@ def generate_row_python(name, columns, rows, enum_list, class_list, class_data_i
         for uc in sorted(used_classes):
             if uc != name:
                 # 相対パス（CLASS_DATA_ID/name/ から CLASS_DATA/uc/uc.py へ）
-                f.write(f"from ...class-data.{uc}.{uc} import {uc}\n")
+                f.write(f"from ...class_data.{uc}.{uc} import {uc}\n")
         for ec in sorted(enum_classes):
             if ec != name:
                 f.write(f"from ...enum.{ec.replace('ID', '')}.{ec} import {ec}\n")
         for tc in sorted(table_classes):
             if tc != name:
-                f.write(f"from ...class-data-id.{tc.replace('TableID', '')}.{tc} import {tc}\n")
+                f.write(f"from ...class_data_id.{tc.replace('TableID', '')}.{tc} import {tc}\n")
         f.write("\n")
         f.write(f"class {name}Row(BaseClassDataRow):\n")
         f.write("    def __init__(self):\n")
@@ -969,13 +969,13 @@ def generate_row_js(name, columns, rows, enum_list, class_list, class_data_id_li
         f.write("import { BaseClassDataRow } from '../BaseClassDataRow.js';\n")
         for uc in sorted(used_classes):
             if uc != name:
-                f.write(f"import {{ {uc} }} from '../../../class-data/{uc}/{uc}.js';\n")
+                f.write(f"import {{ {uc} }} from '../../../class_data/{uc}/{uc}.js';\n")
         for ec in sorted(enum_classes):
             if ec != name:
                 f.write(f"import {{ {ec} }} from '../../enum/{ec.replace('ID', '')}/{ec}.js';\n")
         for tc in sorted(table_classes):
             if tc != name:
-                f.write(f"import {{ {tc} }} from '../../class-data-id/{tc.replace('TableID', '')}/{tc}.js';\n")
+                f.write(f"import {{ {tc} }} from '../../class_data_id/{tc.replace('TableID', '')}/{tc}.js';\n")
         f.write("\n")
         f.write(f"export class {name}Row extends BaseClassDataRow {{\n")
         f.write("    constructor() {\n")

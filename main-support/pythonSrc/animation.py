@@ -15,8 +15,8 @@ else:
 
 # ディレクトリパスをプロジェクトルート基準に設定
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-ASSETS_DATA = os.path.join(DATA_DIR, "assets-data")
-ANIM_DATA = os.path.join(ASSETS_DATA, 'anim-data')
+ASSETS_DATA = os.path.join(DATA_DIR, "assets_data")
+ANIM_DATA = os.path.join(ASSETS_DATA, 'anim_data')
 ANIM_JSON = os.path.join(ANIM_DATA, 'assets_animator.json')
 
 def generate_base():

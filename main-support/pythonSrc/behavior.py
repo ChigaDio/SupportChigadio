@@ -7,7 +7,6 @@ import struct
 import sys
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image
 import shutil
 import uuid
 from flask import jsonify
@@ -22,7 +21,7 @@ else:
 
 # ディレクトリパスをプロジェクトルート基準に設定
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-BEHAVIOR_DATA = os.path.join(DATA_DIR, "behavior-data")
+BEHAVIOR_DATA = os.path.join(DATA_DIR, "behavior_data")
 
 def generate_csharp(path,code_str):
     if not os.path.exists(path):

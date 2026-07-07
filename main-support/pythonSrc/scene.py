@@ -14,7 +14,7 @@ else:
 
 # ディレクトリパス設定
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-SCENE_DATA_DIR = os.path.join(DATA_DIR, "scene-data")
+SCENE_DATA_DIR = os.path.join(DATA_DIR, "scene_data")
 SCENE_JSON = os.path.join(SCENE_DATA_DIR, "scenes.json")
 EDITOR_DIR = os.path.join(SCENE_DATA_DIR, "Editor")
 

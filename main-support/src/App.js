@@ -5,6 +5,8 @@ import Sidebar from './components/Sidebar';
 import Content from './components/Content';
 import EnumIdGrid from './components/EnumIdGrid';
 import EnumDetailGrid from './components/EnumDetailGrid';
+import ConstClassDataGrid from './components/ConstClassDataGrid';
+import ConstClassDataDetailGrid from './components/ConstClassDataDetailGrid';
 import ClassDataGrid from './components/ClassDataGrid';
 import ClassDataDetailGrid from './components/ClassDataDetailGrid';
 import ClassDataIdGrid from './components/ClassDataIdGrid';
@@ -44,6 +46,9 @@ function AppContent() {
       switch (subMenu) {
         case 'enum-id':
           navigate('/enum-id');
+          break;
+        case 'const-class-data':
+          navigate('/const-class-data');
           break;
         case 'class-data':
           navigate('/class-data');
@@ -121,6 +126,8 @@ function AppContent() {
           <Route path="/" element={<Content />} />
           <Route path="/enum-id" element={<EnumIdGrid />} />
           <Route path="/enum/:name" element={<EnumDetailGrid />} />
+          <Route path="/const-class-data" element={<ConstClassDataGrid />} />
+          <Route path="/const-class-data/:name" element={<ConstClassDataDetailGrid />} />
           <Route path="/class-data" element={<ClassDataGrid />} />
           <Route path="/class/:name" element={<ClassDataDetailGrid />} />
           <Route path="/class-data-id" element={<ClassDataIdGrid />} />

@@ -8,6 +8,7 @@ import sys
 from flask import Flask, send_file, send_from_directory, jsonify, request
 import os
 import json
+import textwrap
 
 import psutil
 import pythonSrc.generators as generators
@@ -51,15 +52,15 @@ STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
 
-CLASS_DATA_ID = 'class-data-id'
-CLASS_DATA_MATRIX_ID = 'class-data-matrix-id'
+CLASS_DATA_ID = 'class_data_id'
+CLASS_DATA_MATRIX_ID = 'class_data_matrix_id'
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=STATIC_FOLDER)
 ENUM = 'enum'
-CLASS_DATA = 'class-data'
-STATE_DATA = 'state-data'
+CLASS_DATA = 'class_data'
+STATE_DATA = 'state_data'
 
 SCRIPT = 'Script'
 OBJECTPOOL = 'ObjectPool'
@@ -71,9 +72,22 @@ PYTHON = "Python"
 SUBMODULE = "submodule"
 PLUGIN = "Plugin"
 
+CONST_CLASS_DATA = 'const_class_data'
+ 
+# ConstClassData で使用できる型と、C#での表現
+CONST_TYPE_MAP = {
+    'int':     {'cs_type': 'int',    'is_const': True,  'default': '0'},
+    'uint':    {'cs_type': 'uint',   'is_const': True,  'default': '0'},
+    'float':   {'cs_type': 'float',  'is_const': True,  'default': '0'},
+    'string':  {'cs_type': 'string', 'is_const': True,  'default': ''},
+    # Vector2 / Vector3 はC#のconstにできないため static readonly を使う
+    'vector2': {'cs_type': 'Vector2', 'is_const': False, 'default': [0, 0]},
+    'vector3': {'cs_type': 'Vector3', 'is_const': False, 'default': [0, 0, 0]},
+}
 
-SAVE_DATA_DIR = os.path.join(DATA_DIR, "save-data")
-SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom-data")
+
+SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
+SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
 def find_highest_assets_folder(base_folder = BASE_DIR):
     """
@@ -901,11 +915,11 @@ namespace GameCore
         public const string GAMEOBJECT_FOLDER = "gameobject";
 
         //dataID
-        public const string ID_FOLDER = "class-data-id";
+        public const string ID_FOLDER = "class_data_id";
         public const string ID_BIN_FILE = "all_class_data.bytes";
 
         //matrixID
-        public const string MATRIX_DATA_ID_FOLDER = "class-data-matrix-id";
+        public const string MATRIX_DATA_ID_FOLDER = "class_data_matrix_id";
         public const string MATRIX_ID_BIN_FILE = "all_class_data_matrix.bytes";
 
         // ファイル名（ここだけ定義すればOK）
@@ -914,8 +928,8 @@ namespace GameCore
         public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bytes";
 
         //Scenario
-        public const string SCENARIO_FOLDER = "scenario-data";
-        public const string SCENARIO_EVEMT_FOLDER = "scenario-event-data";
+        public const string SCENARIO_FOLDER = "scenario_data";
+        public const string SCENARIO_EVEMT_FOLDER = "scenario_event_data";
         public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bytes";
 
         // キャッシュ（最初に解決したパスを保持）
@@ -2545,6 +2559,7 @@ namespace GameCore.Tables
 """
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
+        generate_tags_load_script()
         return jsonify({"message": "C# header generated successfully"})
     except Exception as e:
         logger.error(f"Error generating C# header: {str(e)}")
@@ -5691,6 +5706,581 @@ def serve_static(path):
     if path != '' and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, 'index.html')
+
+def _validate_const_value(type_str, value):
+    """サーバー側でも型に応じた値のバリデーションを行う"""
+    if type_str in ('int', 'uint'):
+        try:
+            iv = int(value)
+        except (TypeError, ValueError):
+            return False
+        if type_str == 'uint' and iv < 0:
+            return False
+        return True
+    if type_str == 'float':
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return False
+        return True
+    if type_str == 'string':
+        return isinstance(value, str)
+    if type_str in ('vector2', 'vector3'):
+        expected_len = 2 if type_str == 'vector2' else 3
+        if not isinstance(value, (list, tuple)) or len(value) != expected_len:
+            return False
+        for v in value:
+            try:
+                float(v)
+            except (TypeError, ValueError):
+                return False
+        return True
+    return False
+ 
+ 
+def _format_cs_literal(type_str, value):
+    """C#のリテラル表現に変換"""
+    if type_str == 'int':
+        return str(int(value))
+    if type_str == 'uint':
+        return f"{int(value)}u"
+    if type_str == 'float':
+        return f"{float(value)}f"
+    if type_str == 'string':
+        escaped = str(value).replace('\\', '\\\\').replace('"', '\\"')
+        return f"\"{escaped}\""
+    if type_str == 'vector2':
+        x, y = value
+        return f"new Vector2({float(x)}f, {float(y)}f)"
+    if type_str == 'vector3':
+        x, y, z = value
+        return f"new Vector3({float(x)}f, {float(y)}f, {float(z)}f)"
+    return "null"
+ 
+ 
+# ------------------------------------------------------------
+# 2) ConstClassData 一覧管理（GET / POST / PATCH）
+#    ClassDataIdGrid の /api/class-data-id と同じパターン
+# ------------------------------------------------------------
+@app.route('/api/const-class-data', methods=['GET', 'POST', 'PATCH'])
+def manage_const_class_data():
+    const_class_dir = os.path.join(DATA_DIR, CONST_CLASS_DATA)
+    os.makedirs(const_class_dir, exist_ok=True)
+    file_path = os.path.join(const_class_dir, 'const_class_data_list.json')
+ 
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        except FileNotFoundError:
+            return jsonify([]), 200
+        except json.JSONDecodeError:
+            logger.error("const_class_data_list.jsonの形式が不正です")
+            return jsonify({"error": "const_class_data_list.jsonの形式が不正です"}), 500
+        except Exception as e:
+            logger.error(f"ConstClassDataリストの読み込みエラー: {str(e)}")
+            return jsonify({"error": f"データ読み込みエラー: {str(e)}"}), 500
+ 
+    elif request.method == 'POST':
+        try:
+            new_item = request.get_json()
+            if not new_item or not new_item.get('name'):
+                return jsonify({"error": "名前は必須です"}), 400
+            name = new_item['name']
+            if ':' in name:
+                return jsonify({"error": "名前に':'を含めることはできません"}), 400
+ 
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                data = []
+ 
+            if any(item['name'] == name for item in data):
+                return jsonify({"error": f"ConstClass {name} はすでに存在します"}), 400
+ 
+            max_id = max([item['id'] for item in data], default=0) + 1
+            new_entry = {"id": max_id, "name": name}
+            data.append(new_entry)
+ 
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+            # 定数データ用の空ファイルを作成
+            data_file_path = os.path.join(const_class_dir, name, f"{name}.json")
+            os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
+            with open(data_file_path, 'w', encoding='utf-8') as f:
+                json.dump({"constants": []}, f, ensure_ascii=False, indent=2)
+ 
+            logger.info(f"ConstClassDataを作成しました: {name}")
+            return jsonify({"message": f"ConstClass {name} を正常に作成しました", "data": new_entry}), 201
+ 
+        except Exception as e:
+            logger.error(f"ConstClassData作成エラー: {str(e)}")
+            return jsonify({"error": f"作成エラー: {str(e)}"}), 500
+ 
+    elif request.method == 'PATCH':
+        try:
+            delete_name = request.get_json().get('name')
+            if not delete_name:
+                return jsonify({"error": "削除する名前を指定してください"}), 400
+ 
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+ 
+            if not any(item['name'] == delete_name for item in data):
+                return jsonify({"error": f"ConstClass {delete_name} が見つかりません"}), 404
+ 
+            data = [item for item in data if item['name'] != delete_name]
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+            data_dir = os.path.join(const_class_dir, delete_name)
+            if os.path.exists(data_dir):
+                shutil.rmtree(data_dir)
+ 
+            logger.info(f"ConstClassDataを削除しました: {delete_name}")
+            return jsonify({"message": f"ConstClass {delete_name} を正常に削除しました"}), 200
+ 
+        except FileNotFoundError:
+            return jsonify({"error": "const_class_data_list.jsonが見つかりません"}), 404
+        except Exception as e:
+            logger.error(f"ConstClassData削除エラー: {str(e)}")
+            return jsonify({"error": f"削除エラー: {str(e)}"}), 500
+ 
+ 
+# ------------------------------------------------------------
+# 3) ConstClassData 詳細（定数リストの取得・保存・削除）
+# ------------------------------------------------------------
+@app.route('/api/const-class-data/<name>', methods=['GET', 'POST', 'DELETE'])
+def const_class_data_detail(name):
+    file_path = os.path.join(DATA_DIR, CONST_CLASS_DATA, name, f"{name}.json")
+ 
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        except FileNotFoundError:
+            return jsonify({"constants": []}), 200
+        except Exception as e:
+            logger.error(f"ConstClassData詳細読み込みエラー {name}: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+    elif request.method == 'POST':
+        try:
+            body = request.get_json()
+            constants = body.get('constants', [])
+ 
+            # サーバー側バリデーション
+            seen_names = set()
+            for c in constants:
+                if c.get('type') not in CONST_TYPE_MAP:
+                    return jsonify({"error": f"不正な型です: {c.get('type')}"}), 400
+                if not c.get('name') or not re.match(r'^[A-Za-z0-9_]+$', c['name']):
+                    return jsonify({"error": f"不正な定数名です: {c.get('name')}"}), 400
+                if c['name'] in seen_names:
+                    return jsonify({"error": f"定数名が重複しています: {c['name']}"}), 400
+                seen_names.add(c['name'])
+                if not _validate_const_value(c['type'], c.get('value')):
+                    return jsonify({"error": f"値が不正です（{c['name']}）: 数値のみ入力してください"}), 400
+ 
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump({"constants": constants}, f, ensure_ascii=False, indent=2)
+ 
+            logger.info(f"ConstClassDataを保存しました: {name}")
+            return jsonify({"message": f"{name} の定数データを保存しました"}), 200
+ 
+        except Exception as e:
+            logger.error(f"ConstClassData保存エラー {name}: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+    elif request.method == 'DELETE':
+        try:
+            os.remove(file_path)
+            return jsonify({"message": f"{name}.json deleted"}), 200
+        except FileNotFoundError:
+            return jsonify({"error": "File not found"}), 404
+        except Exception as e:
+            logger.error(f"ConstClassData削除エラー {name}: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+ 
+# ------------------------------------------------------------
+# 4) C# static class 生成
+# ------------------------------------------------------------
+def _write_const_class_cs(name, constants):
+    class_dir = os.path.join(DATA_DIR, CONST_CLASS_DATA, name)
+    os.makedirs(class_dir, exist_ok=True)
+    cs_path = os.path.join(class_dir, f"{name}ConstData.cs")
+ 
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write("using UnityEngine;\n\n")
+        f.write("namespace GameCore.Consts\n{\n")
+        f.write(f"    public static class {name}ConstData\n    {{\n")
+        for c in constants:
+            type_str = c['type']
+            info = CONST_TYPE_MAP[type_str]
+            literal = _format_cs_literal(type_str, c['value'])
+            if info['is_const']:
+                f.write(f"        // {c['comment']}\n")
+                f.write(f"        public const {info['cs_type']} {c['name']} = {literal};\n")
+            else:
+                # Vector2 / Vector3 は const 不可のため static readonly
+                f.write(f"        public static readonly {info['cs_type']} {c['name']} = {literal};\n")
+        f.write("    }\n}\n")
+    return cs_path
+ 
+ 
+@app.route('/api/generate-const-class/<name>', methods=['POST'])
+def generate_const_class_cs(name):
+    try:
+        body = request.get_json() or {}
+        constants = body.get('constants')
+ 
+        # bodyに定数が渡されなかった場合は保存済みデータを使用
+        if constants is None:
+            file_path = os.path.join(DATA_DIR, CONST_CLASS_DATA, name, f"{name}.json")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                constants = json.load(f).get('constants', [])
+ 
+        for c in constants:
+            if c.get('type') not in CONST_TYPE_MAP:
+                return jsonify({"error": f"不正な型です: {c.get('type')}"}), 400
+            if not _validate_const_value(c['type'], c.get('value')):
+                return jsonify({"error": f"値が不正です（{c.get('name')}）"}), 400
+ 
+        cs_path = _write_const_class_cs(name, constants)
+        logger.info(f"ConstClass C#を生成しました: {cs_path}")
+        return jsonify({"message": f"C#ファイルを生成しました: {cs_path}"}), 200
+ 
+    except Exception as e:
+        logger.error(f"ConstClass生成エラー {name}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+ 
+ 
+@app.route('/api/generate-all-const-class', methods=['POST'])
+def generate_all_const_class():
+    try:
+        list_path = os.path.join(DATA_DIR, CONST_CLASS_DATA, 'const_class_data_list.json')
+        if not os.path.exists(list_path):
+            return jsonify({"message": "ConstClassDataがありません"}), 200
+        with open(list_path, 'r', encoding='utf-8') as f:
+            class_list = json.load(f)
+ 
+        generated = []
+        for item in class_list:
+            name = item['name']
+            data_path = os.path.join(DATA_DIR, CONST_CLASS_DATA, name, f"{name}.json")
+            if not os.path.exists(data_path):
+                continue
+            with open(data_path, 'r', encoding='utf-8') as f:
+                constants = json.load(f).get('constants', [])
+            _write_const_class_cs(name, constants)
+            generated.append(name)
+ 
+        return jsonify({"message": f"{len(generated)}件の静的クラスを生成しました: {', '.join(generated)}"}), 200
+    except Exception as e:
+        logger.error(f"全ConstClass生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+ 
+ 
+# ============================================================
+# ClassDataID タグ機能
+# ============================================================
+#
+# タグは class_data_id ディレクトリ配下に tags.json として保存する:
+#   [{"id": 1, "name": "戦闘"}, {"id": 2, "name": "UI"}, ...]
+#
+# 各 ClassDataID エントリ（class_data_id_list.json の各要素）には
+# "tag" フィールド（タグ名。未設定は null）を追加する。
+# ------------------------------------------------------------
+ 
+@app.route('/api/class-data-id-tags', methods=['GET', 'POST', 'PATCH'])
+def manage_class_data_id_tags():
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    os.makedirs(tags_dir, exist_ok=True)
+    file_path = os.path.join(tags_dir, 'tags.json')
+ 
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        except FileNotFoundError:
+            return jsonify([]), 200
+        except Exception as e:
+            logger.error(f"タグリスト読み込みエラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+    elif request.method == 'POST':
+        try:
+            new_tag = request.get_json()
+            if not new_tag or not new_tag.get('name'):
+                return jsonify({"error": "タグ名は必須です"}), 400
+            name = new_tag['name']
+ 
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                data = []
+ 
+            if any(t['name'] == name for t in data):
+                return jsonify({"error": f"タグ {name} はすでに存在します"}), 400
+ 
+            max_id = max([t['id'] for t in data], default=0) + 1
+            new_entry = {"id": max_id, "name": name}
+            data.append(new_entry)
+ 
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+            return jsonify({"message": f"タグ {name} を作成しました", "data": new_entry}), 201
+        except Exception as e:
+            logger.error(f"タグ作成エラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+    elif request.method == 'PATCH':
+        # タグ削除。割り当て済みのClassDataIDエントリからも解除する
+        try:
+            delete_name = request.get_json().get('name')
+            if not delete_name:
+                return jsonify({"error": "削除するタグ名を指定してください"}), 400
+ 
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not any(t['name'] == delete_name for t in data):
+                return jsonify({"error": f"タグ {delete_name} が見つかりません"}), 404
+            data = [t for t in data if t['name'] != delete_name]
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+            # class_data_id_list.json 側の tag も解除
+            list_path = os.path.join(tags_dir, 'class_data_id_list.json')
+            if os.path.exists(list_path):
+                with open(list_path, 'r', encoding='utf-8') as f:
+                    list_data = json.load(f)
+                changed = False
+                for item in list_data:
+                    if item.get('tag') == delete_name:
+                        item['tag'] = None
+                        changed = True
+                if changed:
+                    with open(list_path, 'w', encoding='utf-8') as f:
+                        json.dump(list_data, f, ensure_ascii=False, indent=2)
+ 
+            return jsonify({"message": f"タグ {delete_name} を削除しました"}), 200
+        except FileNotFoundError:
+            return jsonify({"error": "tags.jsonが見つかりません"}), 404
+        except Exception as e:
+            logger.error(f"タグ削除エラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+ 
+ 
+@app.route('/api/class-data-id-tags/<int:tag_id>', methods=['PUT'])
+def rename_class_data_id_tag(tag_id):
+    """タグ名の変更（割り当て済みClassDataIDの tag フィールドも追従して更新）"""
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        new_name = request.get_json().get('name')
+        if not new_name:
+            return jsonify({"error": "新しいタグ名を指定してください"}), 400
+ 
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+ 
+        target = next((t for t in data if t['id'] == tag_id), None)
+        if not target:
+            return jsonify({"error": "指定されたタグが見つかりません"}), 404
+        if any(t['name'] == new_name and t['id'] != tag_id for t in data):
+            return jsonify({"error": f"タグ {new_name} はすでに存在します"}), 400
+ 
+        old_name = target['name']
+        target['name'] = new_name
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+        # class_data_id_list.json 側の tag 名も追従
+        list_path = os.path.join(tags_dir, 'class_data_id_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                list_data = json.load(f)
+            changed = False
+            for item in list_data:
+                if item.get('tag') == old_name:
+                    item['tag'] = new_name
+                    changed = True
+            if changed:
+                with open(list_path, 'w', encoding='utf-8') as f:
+                    json.dump(list_data, f, ensure_ascii=False, indent=2)
+ 
+        return jsonify({"message": f"タグ名を {old_name} から {new_name} に変更しました"}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"タグ名変更エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+ 
+ 
+@app.route('/api/class-data-id/<name>/tag', methods=['PUT'])
+def set_class_data_id_tag(name):
+    """特定のClassDataIDエントリにタグを割り当てる（tag=nullで未設定に戻す）"""
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+    try:
+        tag = request.get_json().get('tag')  # None も許容（未設定に戻す）
+ 
+        with open(list_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+ 
+        target = next((item for item in data if item['name'] == name), None)
+        if not target:
+            return jsonify({"error": f"ClassDataID {name} が見つかりません"}), 404
+ 
+        # タグが指定されている場合は存在確認
+        if tag is not None:
+            tags_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'tags.json')
+            if os.path.exists(tags_path):
+                with open(tags_path, 'r', encoding='utf-8') as f:
+                    tag_list = json.load(f)
+                if not any(t['name'] == tag for t in tag_list):
+                    return jsonify({"error": f"タグ {tag} が見つかりません"}), 404
+ 
+        target['tag'] = tag
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+ 
+        return jsonify({"message": f"{name} にタグを設定しました", "data": target}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "class_data_id_list.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"タグ割り当てエラー {name}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+def generate_tags_load_script():
+    """tags.json をロードしてタグ名を列挙するC#スクリプトを生成"""
+    tags_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'tags.json')
+    try:
+        tags = []
+        with open(tags_path, 'r', encoding='utf-8') as f:
+            tags = json.load(f)
+            
+        class_data_id_list = []
+        with open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'), 'r', encoding='utf-8') as f:
+            class_data_id_list = json.load(f)
+            
+        dict_tags_load_write_script = {}
+        
+        for tag in tags:
+            tag_name = tag["name"]
+            tagged_items = [
+                item["name"] for item in class_data_id_list
+                if item.get("tag") == tag_name
+            ]
+        
+            lines = []
+            indent = 0
+        
+            def add(text=""):
+                lines.append("    " * indent + text)
+        
+            # -------------------------
+            # 非同期
+            # -------------------------
+            add(f"public static async UniTask LoadAsync{tag_name}()")
+            add("{")
+            indent += 1
+        
+            add("await ClassDataIDCore.Instance.LoadClassDataAsync((reader, header) =>")
+            add("{")
+            indent += 1
+        
+            for item_name in tagged_items:
+                add(f"header.GetData<{item_name}Table>(GameCore.Enums.TableID.{tag_name}, reader);")
+                add("await UniTask.Yield();")
+        
+            indent -= 1
+            add("});")
+        
+            indent -= 1
+            add("}")
+            add()
+        
+            # -------------------------
+            # 同期
+            # -------------------------
+            add(f"public static void Load{tag_name}()")
+            add("{")
+            indent += 1
+        
+            add("UniTask.Action(async () =>")
+            add("{")
+            indent += 1
+        
+            add("await ClassDataIDCore.Instance.LoadClassDataAsync((reader, header) =>")
+            add("{")
+            indent += 1
+        
+            for item_name in tagged_items:
+                add(f"header.GetData<{item_name}Table>(GameCore.Enums.TableID.{tag_name}, reader);")
+        
+            indent -= 1
+            add("});")
+        
+            indent -= 1
+            add("}).Invoke();")
+        
+            indent -= 1
+            add("}")
+            add()
+        
+            dict_tags_load_write_script[tag_name] = lines
+        
+        append_str = "\n".join(
+            "\n".join(lines)
+            for lines in dict_tags_load_write_script.values()
+        )
+        
+        code_str =f"""
+using System;
+using Cysharp.Threading.Tasks;
+using System.Collections.Generic;
+        
+namespace GameCore.Enums.TableID
+{{
+    public static class TableIdUtils
+    {{
+{textwrap.indent(append_str, '        ')}
+    }}
+}}
+"""
+    
+        #ファイル書き込み
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'TableIdUtils.cs')
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+    
+        
+            
+        
+        
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"タグロードスクリプト生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+ 
+        target = next((item for item in data if item['name'] == name), None)
+        if not target:
+            return jsonify({"error": f"ClassDataID {name} が見つかりません"}), 404
+    except FileNotFoundError:
+        return jsonify({"error": "class_data_id_list.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"タグ割り当てエラー : {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 

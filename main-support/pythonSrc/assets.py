@@ -6,7 +6,6 @@ import struct
 import sys
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image
 import shutil
 import uuid
 
@@ -54,7 +53,7 @@ else:
 
 # ディレクトリパスをプロジェクトルート基準に設定
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
-ASSETS_DATA = os.path.join(DATA_DIR, "assets-data")
+ASSETS_DATA = os.path.join(DATA_DIR, "assets_data")
 SOUND_DATA = os.path.join(ASSETS_DATA, 'sound')
 SOUND_JSON = os.path.join(SOUND_DATA, 'assets_sound.json')
 TEXTURE_DATA = os.path.join(ASSETS_DATA, 'texture')

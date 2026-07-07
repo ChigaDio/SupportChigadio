@@ -6,7 +6,6 @@ import struct
 import sys
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image
 import shutil
 import uuid
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）

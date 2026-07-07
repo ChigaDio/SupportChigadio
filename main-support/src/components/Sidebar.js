@@ -14,10 +14,9 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
       name: 'GenerateTool',
       subItems: [
         { name: 'Enum ID', key: 'enum-id' },
+        { name: 'Const Class Data', key: 'const-class-data' },
         { name: 'Class Data', key: 'class-data' },
         { name: 'Class Data ID', key: 'class-data-id' },
-        { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
-        { name: 'State', key: 'state' },
         { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
         { name: 'State', key: 'state' },
         { name: 'Behavior', key: 'behavior' },
