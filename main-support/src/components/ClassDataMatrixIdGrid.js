@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
-import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Autocomplete } from '@mui/material';
+import {
+  Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Autocomplete,
+  Select, MenuItem, FormControl, Box, IconButton, Typography, Divider
+} from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { useNavigate } from 'react-router-dom';
+
+const NO_TAG = '__none__';
 
 function ClassDataMatrixIdGrid() {
   const [matrixData, setMatrixData] = useState([]);
@@ -10,13 +16,18 @@ function ClassDataMatrixIdGrid() {
   const [newRowId, setNewRowId] = useState('');
   const [newColId, setNewColId] = useState('');
   const [typeOptions, setTypeOptions] = useState([]);
+  const [tags, setTags] = useState([]); // [{id, name}]
+
+  const [openTagDialog, setOpenTagDialog] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [editingTagId, setEditingTagId] = useState(null);
+  const [editingTagName, setEditingTagName] = useState('');
+
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/class-data-matrix-id')
-      .then(response => response.json())
-      .then(data => setMatrixData(data))
-      .catch(error => console.error('データ取得エラー:', error));
+    fetchMatrixList();
+    fetchTags();
 
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
@@ -27,6 +38,22 @@ function ClassDataMatrixIdGrid() {
       })
       .catch(error => console.error('オプション取得エラー:', error));
   }, []);
+
+  const fetchMatrixList = () => {
+    fetch('/api/class-data-matrix-id')
+      .then(response => response.json())
+      .then(data => setMatrixData(Array.isArray(data) ? data : []))
+      .catch(error => console.error('データ取得エラー:', error));
+  };
+
+  const fetchTags = () => {
+    fetch('/api/class-data-matrix-id-tags')
+      .then(response => response.json())
+      .then(data => setTags(Array.isArray(data) ? data : []))
+      .catch(error => {
+        console.error('タグ取得エラー:', error);
+      });
+  };
 
   const handleCreate = async () => {
     if (!newName || !newRowId || !newColId) {
@@ -66,7 +93,7 @@ function ClassDataMatrixIdGrid() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '作成に失敗しました');
-      setMatrixData([...matrixData, { ...result.data, rowId: newRowId, colId: newColId }]); // レスポンスにrowId, colIdを追加
+      setMatrixData([...matrixData, { ...result.data, rowId: newRowId, colId: newColId, tag: null }]);
       setOpenDialog(false);
       setNewName('');
       setNewRowId('');
@@ -95,6 +122,99 @@ function ClassDataMatrixIdGrid() {
     }
   };
 
+  // --- タグ割り当て ---
+  const handleTagChange = (rowName, tagValue) => {
+    const tagToSave = tagValue === NO_TAG ? null : tagValue;
+    fetch(`/api/class-data-matrix-id/${encodeURIComponent(rowName)}/tag`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: tagToSave }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('タグの更新に失敗');
+        return response.json();
+      })
+      .then(() => {
+        setMatrixData(matrixData.map(item =>
+          item.name === rowName ? { ...item, tag: tagToSave } : item
+        ));
+      })
+      .catch(error => alert('タグ更新エラー: ' + error.message));
+  };
+
+  // --- タグ管理（新規追加・編集・削除） ---
+  const handleAddTag = () => {
+    if (!newTagName.trim()) {
+      alert('タグ名は必須です');
+      return;
+    }
+    fetch('/api/class-data-matrix-id-tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newTagName }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('タグの作成に失敗');
+        return response.json();
+      })
+      .then(result => {
+        if (result.error) throw new Error(result.error);
+        setTags([...tags, result.data]);
+        setNewTagName('');
+      })
+      .catch(error => alert('タグ作成エラー: ' + error.message));
+  };
+
+  const startEditTag = (tag) => {
+    setEditingTagId(tag.id);
+    setEditingTagName(tag.name);
+  };
+
+  const handleRenameTag = (tag) => {
+    if (!editingTagName.trim()) {
+      alert('タグ名は必須です');
+      return;
+    }
+    fetch(`/api/class-data-matrix-id-tags/${tag.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editingTagName }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('タグの更新に失敗');
+        return response.json();
+      })
+      .then(() => {
+        setTags(tags.map(t => (t.id === tag.id ? { ...t, name: editingTagName } : t)));
+        setMatrixData(matrixData.map(item =>
+          item.tag === tag.name ? { ...item, tag: editingTagName } : item
+        ));
+        setEditingTagId(null);
+        setEditingTagName('');
+      })
+      .catch(error => alert('タグ更新エラー: ' + error.message));
+  };
+
+  const handleDeleteTag = (tag) => {
+    if (!window.confirm(`タグ「${tag.name}」を削除しますか？（割り当て済みのClassDataMatrixIDは未設定になります）`)) return;
+    fetch('/api/class-data-matrix-id-tags', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: tag.name }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('タグの削除に失敗');
+        return response.json();
+      })
+      .then(() => {
+        setTags(tags.filter(t => t.id !== tag.id));
+        setMatrixData(matrixData.map(item =>
+          item.tag === tag.name ? { ...item, tag: null } : item
+        ));
+      })
+      .catch(error => alert('タグ削除エラー: ' + error.message));
+  };
+
   const columns = [
     {
       field: 'name',
@@ -107,8 +227,27 @@ function ClassDataMatrixIdGrid() {
       )
     },
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'rowId', headerName: 'Row ID', width: 150 }, // RowIDカラム
-    { field: 'colId', headerName: 'Col ID', width: 150 }, // ColIDカラム
+    { field: 'rowId', headerName: 'Row ID', width: 150 },
+    { field: 'colId', headerName: 'Col ID', width: 150 },
+    {
+      field: 'tag',
+      headerName: 'タグ',
+      width: 180,
+      renderCell: (params) => (
+        <FormControl size="small" fullWidth>
+          <Select
+            value={params.row.tag || NO_TAG}
+            onChange={(e) => handleTagChange(params.row.name, e.target.value)}
+            displayEmpty
+          >
+            <MenuItem value={NO_TAG}>未設定</MenuItem>
+            {tags.map(t => (
+              <MenuItem key={t.id} value={t.name}>{t.name}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      ),
+    },
     {
       field: 'actions',
       headerName: '操作',
@@ -122,9 +261,16 @@ function ClassDataMatrixIdGrid() {
   ];
 
   return (
-    <div style={{ height: 400, width: '100%', padding: '20px' }}>
+    <div style={{ height: 500, width: '100%', padding: '20px' }}>
       <Button variant="contained" color="primary" onClick={() => setOpenDialog(true)} sx={{ mb: 2 }}>
         新しいClassDataMatrixIDを作成
+      </Button>
+      <Button
+        variant="outlined"
+        onClick={() => setOpenTagDialog(true)}
+        sx={{ mb: 2, ml: 2 }}
+      >
+        タグ管理
       </Button>
       <Button
         variant="contained"
@@ -176,6 +322,54 @@ function ClassDataMatrixIdGrid() {
         <DialogActions>
           <Button onClick={() => setOpenDialog(false)}>キャンセル</Button>
           <Button onClick={handleCreate}>作成</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* タグ管理ダイアログ（新規追加・編集・削除） */}
+      <Dialog open={openTagDialog} onClose={() => setOpenTagDialog(false)} fullWidth maxWidth="xs">
+        <DialogTitle>タグ管理</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', gap: 1, mb: 2, mt: 1 }}>
+            <TextField
+              size="small"
+              label="新しいタグ名"
+              fullWidth
+              value={newTagName}
+              onChange={(e) => setNewTagName(e.target.value)}
+            />
+            <Button variant="contained" onClick={handleAddTag}>追加</Button>
+          </Box>
+          <Divider sx={{ mb: 1 }} />
+          {tags.length === 0 && (
+            <Typography variant="body2" color="text.secondary">タグがまだありません</Typography>
+          )}
+          {tags.map(tag => (
+            <Box key={tag.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              {editingTagId === tag.id ? (
+                <>
+                  <TextField
+                    size="small"
+                    value={editingTagName}
+                    onChange={(e) => setEditingTagName(e.target.value)}
+                    fullWidth
+                  />
+                  <Button size="small" onClick={() => handleRenameTag(tag)}>保存</Button>
+                  <Button size="small" onClick={() => setEditingTagId(null)}>キャンセル</Button>
+                </>
+              ) : (
+                <>
+                  <Typography sx={{ flex: 1 }}>{tag.name}</Typography>
+                  <Button size="small" onClick={() => startEditTag(tag)}>編集</Button>
+                  <IconButton size="small" color="error" onClick={() => handleDeleteTag(tag)}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </>
+              )}
+            </Box>
+          ))}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenTagDialog(false)}>閉じる</Button>
         </DialogActions>
       </Dialog>
     </div>

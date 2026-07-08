@@ -5,11 +5,12 @@ import {
   Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent,
   DialogActions, Autocomplete, IconButton, Accordion, AccordionSummary,
   AccordionDetails, Chip, Select, MenuItem, FormControl, InputLabel,
-  Switch, FormControlLabel
+  Switch, FormControlLabel, Tooltip
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import EditIcon from '@mui/icons-material/Edit';
 import Papa from 'papaparse';
 import { useMemo } from 'react';
 
@@ -18,10 +19,80 @@ import { useMemo } from 'react';
 // ============================================================
 
 /**
+ * 数値入力欄の共通コンポーネント。
+ * 問題点の修正:
+ *  - 先頭の「0」が残り続けて "100" と打っても "0100" になってしまう
+ *  - "0" の状態から "-" を打っても符号が反映されない
+ * 対応方針:
+ *  - 表示用に生の文字列をローカルstateで保持し、フォーカス中は親のonChangeで上書きされないようにする
+ *  - 入力中は "-"・"."・空文字などの中間状態を許可する（数値化できる時だけ親へ伝える）
+ *  - blur時に正式な数値へ正規化する
+ */
+function sanitizeNumericText(raw, allowDecimal) {
+  let s = raw ?? '';
+  // 使用可能な文字だけ残す
+  s = allowDecimal ? s.replace(/[^0-9.\-]/g, '') : s.replace(/[^0-9\-]/g, '');
+  // 先頭以外の "-" は除去
+  s = s.replace(/(?!^)-/g, '');
+  if (allowDecimal) {
+    // "." は最初の1つだけ有効
+    const dot = s.indexOf('.');
+    if (dot !== -1) {
+      s = s.slice(0, dot + 1) + s.slice(dot + 1).replace(/\./g, '');
+    }
+  }
+  // 先頭の余分な0を除去（"0", "0." , "-0" はそのまま残す）
+  s = s.replace(/^(-?)0+(?=\d)/, '$1');
+  return s;
+}
+
+function parseNumericText(text, allowDecimal) {
+  if (text === '' || text === '-' || text === '.' || text === '-.') return null;
+  const num = allowDecimal ? parseFloat(text) : parseInt(text, 10);
+  return isNaN(num) ? null : num;
+}
+
+export function NumericTextField({ value, onChange, allowDecimal = false, readOnly, ...props }) {
+  const [text, setText] = useState(() => (value ?? 0).toString());
+  const focusedRef = React.useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setText((value ?? 0).toString());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <TextField
+      {...props}
+      type="text"
+      value={text}
+      inputProps={{ inputMode: allowDecimal ? 'decimal' : 'numeric', readOnly, ...(props.inputProps || {}) }}
+      onFocus={(e) => { focusedRef.current = true; if (props.onFocus) props.onFocus(e); }}
+      onChange={(e) => {
+        if (readOnly) return;
+        const sanitized = sanitizeNumericText(e.target.value, allowDecimal);
+        setText(sanitized);
+        const num = parseNumericText(sanitized, allowDecimal);
+        if (num !== null) onChange(num);
+      }}
+      onBlur={(e) => {
+        focusedRef.current = false;
+        const num = parseNumericText(text, allowDecimal) ?? 0;
+        setText(num.toString());
+        onChange(num);
+        if (props.onBlur) props.onBlur(e);
+      }}
+    />
+  );
+}
+
+/**
  * 型名から配列かどうかを判定し、要素型を返す
  * カラム型の "int[]" 表記対応（カラムレベルの配列型）
  */
-function parseType(type) {
+export function parseType(type) {
   if (typeof type === 'string' && type.endsWith('[]')) {
     return { isArray: true, isDynamic: true, arraySize: -1, baseType: type.slice(0, -2) };
   }
@@ -32,7 +103,7 @@ function parseType(type) {
  * classDataスキーマのフィールドから配列情報を取得
  * arraySize: -1 = 動的配列(List), >0 = 固定配列, 0 = 単一値
  */
-function getFieldArrayInfo(field) {
+export function getFieldArrayInfo(field) {
   const arraySize = field.arraySize ?? 0;
   if (arraySize === -1) return { isArray: true, isDynamic: true, arraySize: -1 };
   if (arraySize > 0)   return { isArray: true, isDynamic: false, arraySize };
@@ -42,7 +113,7 @@ function getFieldArrayInfo(field) {
 /**
  * 型に応じたデフォルト値を返す（単一値用）
  */
-function getDefaultValueForType(type, enumValues, classSchemas) {
+export function getDefaultValueForType(type, enumValues, classSchemas) {
   const lower = (type || '').toLowerCase();
   switch (lower) {
     case 'int':    return 0;
@@ -68,9 +139,72 @@ function getDefaultValueForType(type, enumValues, classSchemas) {
 }
 
 // ============================================================
+// formatPreviewValue: セル表示用の「見やすい」プレビュー文字列を生成
+// classData/配列型の中身を JSON.stringify([~~~]) ではなく
+// "フィールド名=値" の形式で表示するためのユーティリティ
+// ============================================================
+function formatScalarPreview(value, baseType, classSchemas) {
+  if (value === null || value === undefined) return '-';
+  const lower = (baseType || '').toLowerCase();
+
+  if (lower === 'bool') return value ? 'true' : 'false';
+
+  if (lower === 'vector2' && Array.isArray(value)) {
+    return `(${value[0] ?? 0}, ${value[1] ?? 0})`;
+  }
+  if (lower === 'vector3' && Array.isArray(value)) {
+    return `(${value[0] ?? 0}, ${value[1] ?? 0}, ${value[2] ?? 0})`;
+  }
+
+  // classData型（ネスト）: "field=val, field2=val2" 形式
+  if (classSchemas && classSchemas[baseType]) {
+    const schema = classSchemas[baseType];
+    const obj = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    if (schema.length === 0) return '(フィールドなし)';
+    return schema.map(f => {
+      const { isArray: fIsArray } = getFieldArrayInfo(f);
+      const fv = obj[f.name];
+      const preview = fIsArray
+        ? formatArrayPreview(fv, f.type, classSchemas)
+        : formatScalarPreview(fv, f.type, classSchemas);
+      return `${f.name}=${preview}`;
+    }).join(', ');
+  }
+
+  // enum / classDataID型: "TypeID.Value" -> "Value" だけ表示
+  if (typeof value === 'string' && value.includes('.')) {
+    const tail = value.split('.').pop();
+    return tail === 'None' ? '(未設定)' : tail;
+  }
+
+  if (typeof value === 'object') {
+    // 想定外のオブジェクトは最終手段としてJSON化
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+
+  return String(value);
+}
+
+function formatArrayPreview(value, baseType, classSchemas) {
+  const arr = Array.isArray(value) ? value : [];
+  if (arr.length === 0) return '(空)';
+  return `[${arr.map(v => formatScalarPreview(v, baseType, classSchemas)).join(' / ')}]`;
+}
+
+/**
+ * カラム型（"int[]" のような配列表記込み）に対する見やすいプレビュー文字列を返す
+ */
+export function formatPreviewValue(value, type, classSchemas) {
+  const { isArray, baseType } = parseType(type);
+  return isArray
+    ? formatArrayPreview(value, baseType, classSchemas)
+    : formatScalarPreview(value, baseType, classSchemas);
+}
+
+// ============================================================
 // ArrayFieldEditor: 配列型の入力コンポーネント
 // ============================================================
-function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
+export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
   const arr = Array.isArray(value) ? value : [];
   // isDynamic(arraySize=-1): 自由に追加削除可
   // arraySize>0: 固定長（追加削除ボタン非表示、長さ固定）
@@ -147,7 +281,7 @@ function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, onChange,
 // ============================================================
 // ClassFieldEditor: classData型のネスト入力コンポーネント（折り畳み対応）
 // ============================================================
-function ClassFieldEditor({ value, typeName, enumValues, classSchemas, onChange, onSizeChange, readOnly }) {
+export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, onChange, onSizeChange, readOnly, defaultExpanded = false }) {
   const schema = classSchemas[typeName] || [];
   const obj = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
 
@@ -158,6 +292,7 @@ function ClassFieldEditor({ value, typeName, enumValues, classSchemas, onChange,
   return (
     <Accordion
       disableGutters
+      defaultExpanded={defaultExpanded}
       sx={{ border: '1px solid', borderColor: 'divider', boxShadow: 'none' }}
       onChange={(_, expanded) => {
         // 開閉時に行高さ再計算を要求
@@ -227,7 +362,7 @@ function ClassFieldEditor({ value, typeName, enumValues, classSchemas, onChange,
 // ============================================================
 // SingleValueEditor: 単一値の入力（型に応じて切り替え）
 // ============================================================
-function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, onSizeChange, readOnly }) {
+export function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, onSizeChange, readOnly }) {
   const lower = (type || '').toLowerCase();
 
   // bool
@@ -250,12 +385,12 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
   // int
   if (lower === 'int') {
     return (
-      <TextField
+      <NumericTextField
         size="small"
-        type="number"
+        allowDecimal={false}
         value={value ?? 0}
-        onChange={(e) => !readOnly && onChange(parseInt(e.target.value, 10) || 0)}
-        inputProps={{ step: 1, readOnly }}
+        onChange={onChange}
+        readOnly={readOnly}
         fullWidth
       />
     );
@@ -264,12 +399,12 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
   // float
   if (lower === 'float') {
     return (
-      <TextField
+      <NumericTextField
         size="small"
-        type="number"
+        allowDecimal={true}
         value={value ?? 0}
-        onChange={(e) => !readOnly && onChange(parseFloat(e.target.value) || 0.0)}
-        inputProps={{ step: 0.01, readOnly }}
+        onChange={onChange}
+        readOnly={readOnly}
         fullWidth
       />
     );
@@ -316,19 +451,19 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
     return (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         {['x', 'y'].map((label, i) => (
-          <TextField
+          <NumericTextField
             key={label}
             size="small"
-            type="number"
+            allowDecimal={true}
             label={label}
             value={arr[i] ?? 0}
-            onChange={(e) => {
+            onChange={(val) => {
               if (readOnly) return;
               const next = [...arr];
-              next[i] = parseFloat(e.target.value) || 0;
+              next[i] = val;
               onChange(next);
             }}
-            inputProps={{ readOnly }}
+            readOnly={readOnly}
             sx={{ flex: 1 }}
           />
         ))}
@@ -342,19 +477,19 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
     return (
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         {['x', 'y', 'z'].map((label, i) => (
-          <TextField
+          <NumericTextField
             key={label}
             size="small"
-            type="number"
+            allowDecimal={true}
             label={label}
             value={arr[i] ?? 0}
-            onChange={(e) => {
+            onChange={(val) => {
               if (readOnly) return;
               const next = [...arr];
-              next[i] = parseFloat(e.target.value) || 0;
+              next[i] = val;
               onChange(next);
             }}
-            inputProps={{ readOnly }}
+            readOnly={readOnly}
             sx={{ flex: 1 }}
           />
         ))}
@@ -414,61 +549,17 @@ function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, on
 }
 
 // ============================================================
-// CellEditor: DataGridのrenderEditCellで使うセル編集コンポーネント
-// ============================================================
-function CellEditor({ params, type, enumValues, classSchemas, apiRef }) {
-  const { isArray, baseType } = parseType(type);
-  const value = params.value;
-
-  const handleChange = useCallback((newVal) => {
-    apiRef.current.setEditCellValue({ id: params.id, field: params.field, value: newVal });
-  }, [params.id, params.field, apiRef]);
-
-  // Accordion開閉やリスト変化時に行高さを再計算させる
-  const handleSizeChange = useCallback(() => {
-    // unstable_rowSpanningEnabled使用時は不要だが、通常はこれで行高さ更新をトリガー
-    if (apiRef.current?.resetRowHeights) {
-      apiRef.current.resetRowHeights();
-    }
-  }, [apiRef]);
-
-  if (isArray) {
-    return (
-      <Box sx={{ p: 1, width: '100%', bgcolor: 'background.paper' }} onChange={handleSizeChange}>
-        <ArrayFieldEditor
-          value={Array.isArray(value) ? value : []}
-          baseType={baseType}
-          isDynamic={true}
-          arraySize={-1}
-          enumValues={enumValues}
-          classSchemas={classSchemas}
-          onChange={(val) => { handleChange(val); handleSizeChange(); }}
-          onSizeChange={handleSizeChange}
-        />
-      </Box>
-    );
-  }
-
-  if (classSchemas && classSchemas[type]) {
-    return (
-      <Box sx={{ p: 1, width: '100%', bgcolor: 'background.paper' }}>
-        <ClassFieldEditor
-          value={value}
-          typeName={type}
-          enumValues={enumValues}
-          classSchemas={classSchemas}
-          onChange={handleChange}
-          onSizeChange={handleSizeChange}
-        />
-      </Box>
-    );
-  }
-
-  return null; // 通常型はDataGridのデフォルトを使う
-}
-
-// ============================================================
 // メインコンポーネント
+//
+// ★ classData型・配列型カラムについて:
+//   以前はDataGridのセル内(renderEditCell)にAccordionを直接描画して
+//   編集していたが、この方式だと編集のたびに resetRowHeights() で
+//   行の高さ再計算＝グリッドの再レイアウトが発生し、その最中に
+//   Select/Accordionのポップアップが強制的に閉じてしまう上、
+//   セル幅・高さの制約で入力しづらいという問題があった。
+//   → classData型・配列型は専用の編集ダイアログ（大きく余裕のある
+//     画面）で編集する方式に変更し、グリッドのレイアウト変化の
+//     影響を受けないようにした。
 // ============================================================
 function ClassDataIdDetailGrid() {
   const { name } = useParams();
@@ -490,6 +581,12 @@ function ClassDataIdDetailGrid() {
   const [recordCount, setRecordCount] = useState(1);
   const [columnToDelete, setColumnToDelete] = useState('');
   const apiRef = useGridApiRef();
+
+  // ★ classData型・配列型カラム用の編集ダイアログの状態
+  // （グリッドの中で直接編集せず、広いダイアログで編集する）
+  const [nestedEditorOpen, setNestedEditorOpen] = useState(false);
+  const [nestedEditorCell, setNestedEditorCell] = useState(null); // { rowId, field, type }
+  const [nestedEditorValue, setNestedEditorValue] = useState(null);
 
   // ============================================================
   // getDefaultValue: stateを参照するのでコンポーネント内に定義
@@ -735,6 +832,30 @@ function ClassDataIdDetailGrid() {
     return newRow;
   };
 
+  // ★ classData型・配列型カラムのセルをクリックしたときにダイアログを開く
+  const openNestedEditor = (rowId, field, type) => {
+    const row = data.rows.find(r => r.id === rowId);
+    const currentValue = row?.data?.[field]?.value ?? getDefaultValue(type);
+    setNestedEditorCell({ rowId, field, type });
+    setNestedEditorValue(currentValue);
+    setNestedEditorOpen(true);
+  };
+
+  // ★ ダイアログの「保存」ボタン：グリッドを経由せず直接 data.rows を更新する
+  const handleNestedEditorSave = () => {
+    if (!nestedEditorCell) return;
+    const { rowId, field, type } = nestedEditorCell;
+    const updatedRows = data.rows.map(row =>
+      row.id === rowId
+        ? { ...row, data: { ...row.data, [field]: { value: nestedEditorValue, type } } }
+        : row
+    );
+    setData({ ...data, rows: updatedRows });
+    setNestedEditorOpen(false);
+    setNestedEditorCell(null);
+    setNestedEditorValue(null);
+  };
+
   const handleSave = () => {
     const saveData = {
       columns: data.columns,
@@ -912,9 +1033,12 @@ function ClassDataIdDetailGrid() {
       return {
         field: col.name,
         headerName: col.name,
-        // ★ classData型・配列型はwidthを広めに
-        width: needsCustomEditor ? 280 : 150,
-        editable: true,
+        // ★ classData型・配列型はwidthを広めに（プレビュー表示なので少し広げる）
+        width: needsCustomEditor ? 260 : 150,
+        // ★ classData型・配列型はグリッド内editではなくダイアログで編集するため editable: false
+        //   （クリックで専用ダイアログを開く。グリッド内で直接編集すると
+        //     行高さ再計算のたびにドロップダウンが閉じてしまう問題があったため）
+        editable: !needsCustomEditor,
         headerAlign: 'right',
         renderHeader: () => (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
@@ -1012,58 +1136,78 @@ function ClassDataIdDetailGrid() {
           }
         } : {}),
 
-        // ★ 全型共通: viewモードは表示専用（onChangeなし＝再レンダリングを起こさない）
-        renderCell: (params) => (
-          <Box sx={{ width: '100%', py: 0.5, px: 0.5 }}>
-            <SingleValueEditor
-              value={params.value}
-              type={col.type}
-              enumValues={enumValues}
-              classSchemas={classSchemas}
-              readOnly
-              onChange={() => {}}
-            />
-          </Box>
-        ),
-
-        // ★ 全型共通: 編集モードは readOnly なし（実際に編集できる）
-        renderEditCell: (params) => {
+        // ★ classData型・配列型: グリッド内では読みやすいプレビュー文字列＋編集アイコンのみ表示。
+        //   クリックすると専用ダイアログが開き、そこで実際の編集を行う。
+        //   （通常型は今まで通りグリッド内でreadOnly表示）
+        renderCell: (params) => {
           if (needsCustomEditor) {
-            // classData型・配列型はCellEditorを使う（readOnlyなし）
+            const preview = formatPreviewValue(params.value, col.type, classSchemas);
             return (
-              <CellEditor
-                params={params}
-                type={col.type}
-                enumValues={enumValues}
-                classSchemas={classSchemas}
-                apiRef={apiRef}
-              />
+              <Tooltip title={preview} placement="top-start">
+                <Box
+                  onClick={() => openNestedEditor(params.id, col.name, col.type)}
+                  sx={{
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    cursor: 'pointer',
+                    px: 0.5,
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                >
+                  <EditIcon fontSize="small" color="action" sx={{ flexShrink: 0 }} />
+                  <Typography
+                    variant="body2"
+                    noWrap
+                    sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >
+                    {preview}
+                  </Typography>
+                </Box>
+              </Tooltip>
             );
           }
-          // それ以外（int/float/string/bool/enum等）は SingleValueEditor で編集、選択即確定
+          // ★ 通常型: viewモードは表示専用（onChangeなし＝再レンダリングを起こさない）
           return (
-            <Box sx={{ width: '100%', py: 0.5, px: 0.5, bgcolor: 'background.paper' }}>
+            <Box sx={{ width: '100%', py: 0.5, px: 0.5 }}>
               <SingleValueEditor
                 value={params.value}
                 type={col.type}
                 enumValues={enumValues}
                 classSchemas={classSchemas}
-                onChange={(newVal) => {
-                  apiRef.current.setEditCellValue({ id: params.id, field: params.field, value: newVal });
-                  // string型は文字入力中なので即確定しない
-                  // enum/bool/number は選択・変更後に確定する
-                  if (!isString) {
-                    setTimeout(() => {
-                      try {
-                        apiRef.current.stopCellEditMode({ id: params.id, field: params.field, ignoreModifications: false });
-                      } catch (e) {}
-                    }, 0);
-                  }
-                }}
+                readOnly
+                onChange={() => {}}
               />
             </Box>
           );
         },
+
+        // ★ 通常型（int/float/string/bool/enum等）のみグリッド内編集。
+        //   classData型・配列型は editable: false のため呼ばれない。
+        renderEditCell: (params) => (
+          <Box sx={{ width: '100%', py: 0.5, px: 0.5, bgcolor: 'background.paper' }}>
+            <SingleValueEditor
+              value={params.value}
+              type={col.type}
+              enumValues={enumValues}
+              classSchemas={classSchemas}
+              onChange={(newVal) => {
+                apiRef.current.setEditCellValue({ id: params.id, field: params.field, value: newVal });
+                // string型は文字入力中なので即確定しない
+                // enum/bool/number は選択・変更後に確定する
+                if (!isString) {
+                  setTimeout(() => {
+                    try {
+                      apiRef.current.stopCellEditMode({ id: params.id, field: params.field, ignoreModifications: false });
+                    } catch (e) {}
+                  }, 0);
+                }
+              }}
+            />
+          </Box>
+        ),
       };
     }),
   ];
@@ -1195,13 +1339,13 @@ function ClassDataIdDetailGrid() {
       <Dialog open={openDefaultRecords} onClose={() => setOpenDefaultRecords(false)}>
         <DialogTitle>新しくレコード追加</DialogTitle>
         <DialogContent>
-          <TextField
+          <NumericTextField
             label="レコード数"
-            type="number"
+            allowDecimal={false}
             margin="dense"
             fullWidth
             value={recordCount}
-            onChange={(e) => setRecordCount(parseInt(e.target.value) || 1)}
+            onChange={(val) => setRecordCount(val || 1)}
           />
         </DialogContent>
         <DialogActions>
@@ -1230,6 +1374,50 @@ function ClassDataIdDetailGrid() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenImportCsv(false)}>キャンセル</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* classData型・配列型セル編集ダイアログ */}
+      {/* ★ グリッドの外にある広いダイアログで編集するため、
+             行高さ再計算によるドロップダウンの強制クローズが起きず、
+             幅・高さの制約もなく入力しやすい */}
+      <Dialog
+        open={nestedEditorOpen}
+        onClose={() => setNestedEditorOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          データ編集{nestedEditorCell ? ` - ${nestedEditorCell.field} (${nestedEditorCell.type})` : ''}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 2, minHeight: 320 }}>
+          {nestedEditorCell && (() => {
+            const { isArray, baseType } = parseType(nestedEditorCell.type);
+            return isArray ? (
+              <ArrayFieldEditor
+                value={Array.isArray(nestedEditorValue) ? nestedEditorValue : []}
+                baseType={baseType}
+                enumValues={enumValues}
+                classSchemas={classSchemas}
+                isDynamic={true}
+                arraySize={-1}
+                onChange={setNestedEditorValue}
+              />
+            ) : (
+              <ClassFieldEditor
+                value={nestedEditorValue}
+                typeName={baseType}
+                enumValues={enumValues}
+                classSchemas={classSchemas}
+                onChange={setNestedEditorValue}
+                defaultExpanded
+              />
+            );
+          })()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNestedEditorOpen(false)}>キャンセル</Button>
+          <Button variant="contained" onClick={handleNestedEditorSave}>保存</Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -799,6 +799,8 @@ using System.IO;
 using System.Threading;
 using System;
 using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
 
 public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
 {
@@ -824,28 +826,55 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
     /// <summary>
     /// all_class_data.bin を読み込み、BinaryReader をラムダに渡して実行
     /// </summary>
-    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded)
+    public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded, bool addressable = false)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
         if (isLoaded) return;
 
-
-        string path = SupportFiles.ALL_MATRIX_ID_BIN;
-
-
+        string path = addressable == true ? SupportFiles.MATRIX_ID_BIN_FILE : SupportFiles.ALL_MATRIX_ID_BIN;
 
         try
         {
-            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-            using (BinaryReader reader = new BinaryReader(fs))
+            if (!addressable)
             {
-                if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
-                if (onLoaded != null)
+                // 従来の同期ファイル読み込み
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (BinaryReader reader = new BinaryReader(fs))
                 {
-                    // スレッド切り替えを内部で処理
-                    await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
                 }
-                isLoaded = true;
+            }
+            else
+            {
+                // ====================== Addressableの場合 ======================
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(path);
+
+                TextAsset textAsset = await handle.ToUniTask(cancellationToken: cts);
+
+                if (textAsset == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {path}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return;
+                }
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    if (m_classDataTables == null) m_classDataTables = new ClassDataMatrixHeader(reader);
+                    if (onLoaded != null)
+                    {
+                        await ExecuteOnThreadPoolAndReturn(onLoaded, reader, m_classDataTables, cts);
+                    }
+                    isLoaded = true;
+                }
+
+                if (handle.IsValid()) Addressables.Release(handle);
             }
         }
         catch (OperationCanceledException)
@@ -3178,6 +3207,13 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
         f.write(struct.pack('i', 0))  # 未サポート型
         
 def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
+    if type_str.endswith('[]'):
+        inner_type = type_str[:-2]
+        values = value if isinstance(value, list) else []
+        f.extend(struct.pack('i', len(values)))
+        for v in values:
+            write_binary_field_extend(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+        return
     type_lower = type_str.lower()
 
     if type_lower in TYPE_MAP:
@@ -3210,6 +3246,11 @@ def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum
             elif type_lower == 'bool':
                 safe_value = bool(safe_value)
             f.extend(struct.pack(TYPE_MAP[type_lower]['pack'], safe_value))
+
+    elif type_str + 'ID' in class_data_id:
+        property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
+        actual_id = next((row['id'] for row in class_data_id[type_str + 'ID']['rows'] if row['enum_property'] == property_name), 0)
+        f.extend(struct.pack('i', actual_id))
 
     elif type_str in enum_list:
         #数値ではなければ
@@ -4172,7 +4213,7 @@ def manage_matrix_id():
                 data = json.load(f)
             return jsonify(data)
         except FileNotFoundError:
-            return jsonify([]), 404
+            return jsonify([]), 200
     elif request.method == 'POST':
         new_matrix = request.get_json()
         name = new_matrix['name']
@@ -4186,10 +4227,17 @@ def manage_matrix_id():
         if any(item['name'] == name for item in data):
             return jsonify({"error": f"Matrix {name} already exists"}), 400
         max_id = max([item['id'] for item in data], default=0) + 1
-        new_entry = {"id": max_id, "name": name}
+        # ★ rowId / colId / tag も一覧側に保持しておく（詳細ページ・タグ機能で参照するため）
+        new_entry = {
+            "id": max_id,
+            "name": name,
+            "rowId": new_matrix.get('rowId', ''),
+            "colId": new_matrix.get('colId', ''),
+            "tag": None,
+        }
         data.append(new_entry)
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.makedirs(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name), exist_ok=True)
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.json"), 'w', encoding='utf-8') as f:
             json.dump(new_matrix, f, indent=2)
@@ -4259,7 +4307,15 @@ def generate_cs_matrix(name):
         row_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixRow : BaseClassDataMatrixRow {{\n"
         read_code = "        public override void Read(BinaryReader reader) {\n"
         for field in fields:
-            field_info = generate_csharp_field(field, enum_list, class_list, unity_types, basic_types,class_data_id_list)
+            # ★ Matrixのフィールドは "int[]" のような配列サフィックス表記を使うため、
+            #   generate_csharp_field が期待する arraySize 方式に変換してから渡す
+            field_for_cs = dict(field)
+            if isinstance(field_for_cs.get('type'), str) and field_for_cs['type'].endswith('[]'):
+                field_for_cs['type'] = field_for_cs['type'][:-2]
+                field_for_cs['arraySize'] = -1  # 動的配列(List)として扱う
+            else:
+                field_for_cs.setdefault('arraySize', 0)
+            field_info = generate_csharp_field(field_for_cs, enum_list, class_list, unity_types, basic_types,class_data_id_list)
             row_cs += field_info['field']
             read_code += field_info['read']
         row_cs += read_code + "        }\n    }\n}\n"
@@ -4296,37 +4352,34 @@ def generate_binary_matrix(name):
         fields = json_data['fields']
         basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data= get_type_lists()
 
+        row_type_id = json_data['rowId'] + 'ID'
+        col_type_id = json_data['colId'] + 'ID'
+
+        def resolve_key_id(type_id, key):
+            if type_id in enum_data:
+                return next((item['id'] for item in enum_data[type_id] if item['property'] == key), 0)
+            elif type_id in class_data_id:
+                return next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
+            return 0
+
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bytes"), 'wb') as f:
             f.write(struct.pack('i', len(row_keys)))
             for rk in row_keys:
-                f.write(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
+                f.write(struct.pack('i', resolve_key_id(row_type_id, rk)))
             f.write(struct.pack('i', len(col_keys)))
             for ck in col_keys:
-                f.write(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
+                f.write(struct.pack('i', resolve_key_id(col_type_id, ck)))
             for rk in row_keys:
                 for ck in col_keys:
                     cell = json_data['data'][rk][ck]
                     for field in fields:
-                        value = cell[field['name']]
-                        t = field['type'].lower()
-                        type_id = field['type'] + 'ID'
-                        if t in TYPE_MAP:
-                            if t == 'vector2':
-                                f.write(struct.pack('ff', *value))
-                            elif t == 'vector3':
-                                f.write(struct.pack('fff', *value))
-                            elif t == 'string':
-                                encoded = value.encode('utf-8')
-                                f.write(struct.pack('i', len(encoded)) + encoded)
-                            else:
-                                f.write(struct.pack(TYPE_MAP[t]['pack'], value))
-                        elif type_id in enum_data:
-                            property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                            f.write(struct.pack('i', next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)))
-                        elif type_id in class_data_id:
-                            property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                            f.write(struct.pack('i', next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)))
-        
+                        value = cell.get(field['name'])
+                        write_binary_field(
+                            f, value, field['type'],
+                            basic_types, unity_types, enum_list, class_list,
+                            class_data_id_list, enum_data, class_data_id, class_data
+                        )
+
         return jsonify({"message": f"Binary generated for {name}"})
     except Exception as e:
         logger.error(f"Error generating binary matrix for {name}: {str(e)}")
@@ -4344,42 +4397,30 @@ def generate_binary_matrix_data(name, json_data):
     fields = json_data['fields']
     basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
 
+    def resolve_key_id(type_id, key):
+        if type_id in enum_data:
+            return next((item['id'] for item in enum_data[type_id] if item['property'] == key), 0)
+        elif type_id in class_data_id:
+            return next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
+        return 0
+
     binary_data.extend(struct.pack('i', len(row_keys)))
     for rk in row_keys:
-        if rowId in enum_data:
-            binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['rowId'] + 'ID', []) if item['property'] == rk), 0)))
-        elif rowId in class_data_id:
-            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[rowId]['rows'] if item['enum_property'] == rk), 0)))
+        binary_data.extend(struct.pack('i', resolve_key_id(rowId, rk)))
     binary_data.extend(struct.pack('i', len(col_keys)))
     for ck in col_keys:
-        if colId in enum_data:
-            binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data.get(json_data['colId'] + 'ID', []) if item['property'] == ck), 0)))
-        elif colId in class_data_id:
-            binary_data.extend(struct.pack('i', next((item['id'] for item in class_data_id[colId]['rows'] if item['enum_property'] == ck), 0)))
+        binary_data.extend(struct.pack('i', resolve_key_id(colId, ck)))
     for rk in row_keys:
         for ck in col_keys:
             cell = json_data['data'][rk][ck]
             for field in fields:
-                value = cell[field['name']]
-                t = field['type'].lower()
-                type_id = field['type'] + 'ID'
-                if t in TYPE_MAP:
-                    if t == 'vector2':
-                        binary_data.extend(struct.pack('ff', *value))
-                    elif t == 'vector3':
-                        binary_data.extend(struct.pack('fff', *value))
-                    elif t == 'string':
-                        encoded = value.encode('utf-8')
-                        binary_data.extend(struct.pack('i', len(encoded)) + encoded)
-                    else:
-                        binary_data.extend(struct.pack(TYPE_MAP[t]['pack'], value))
-                elif type_id in enum_data:
-                    property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                    binary_data.extend(struct.pack('i', next((item['id'] for item in enum_data[type_id] if item['property'] == property_name), 0)))
-                elif type_id in class_data_id:
-                    property_name = value['value'].split('.')[-1] if isinstance(value, dict) else value.split('.')[-1] if isinstance(value, str) else ''
-                    binary_data.extend(struct.pack('i', next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == property_name), 0)))
-    
+                value = cell.get(field['name'])
+                write_binary_field_extend(
+                    binary_data, value, field['type'],
+                    basic_types, unity_types, enum_list, class_list,
+                    class_data_id_list, enum_data, class_data_id, class_data
+                )
+
     return binary_data
 #Matrixを一つのバイナリファイルにまとめる
 @app.route('/api/generate-all-binary-matrix', methods=['POST'])
@@ -4499,7 +4540,7 @@ namespace GameCore.Tables
 """
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
-        
+        generate_matrix_tags_load_script()
         return jsonify({"message": "All C# headers and helper generated"})
     except Exception as e:
         logger.error(f"Error generating C# headers: {str(e)}")
@@ -6286,6 +6327,295 @@ namespace GameCore.Enums
         logger.error(f"タグ割り当てエラー : {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
+
+# ============================================================
+# ClassDataMatrixID タグ機能（ClassDataIDのタグ機能と同等）
+# ============================================================
+#
+# タグは class_data_matrix_id ディレクトリ配下に tags.json として保存する:
+#   [{"id": 1, "name": "戦闘"}, {"id": 2, "name": "UI"}, ...]
+#
+# 各 ClassDataMatrixID エントリ（class_data_matrix_id_list.json の各要素）には
+# "tag" フィールド（タグ名。未設定は null）を追加する。
+# ------------------------------------------------------------
+
+@app.route('/api/class-data-matrix-id-tags', methods=['GET', 'POST', 'PATCH'])
+def manage_class_data_matrix_id_tags():
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    os.makedirs(tags_dir, exist_ok=True)
+    file_path = os.path.join(tags_dir, 'tags.json')
+
+    if request.method == 'GET':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        except FileNotFoundError:
+            return jsonify([]), 200
+        except Exception as e:
+            logger.error(f"Matrixタグリスト読み込みエラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'POST':
+        try:
+            new_tag = request.get_json()
+            if not new_tag or not new_tag.get('name'):
+                return jsonify({"error": "タグ名は必須です"}), 400
+            name = new_tag['name']
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                data = []
+
+            if any(t['name'] == name for t in data):
+                return jsonify({"error": f"タグ {name} はすでに存在します"}), 400
+
+            max_id = max([t['id'] for t in data], default=0) + 1
+            new_entry = {"id": max_id, "name": name}
+            data.append(new_entry)
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            return jsonify({"message": f"タグ {name} を作成しました", "data": new_entry}), 201
+        except Exception as e:
+            logger.error(f"Matrixタグ作成エラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'PATCH':
+        # タグ削除。割り当て済みのClassDataMatrixIDエントリからも解除する
+        try:
+            delete_name = request.get_json().get('name')
+            if not delete_name:
+                return jsonify({"error": "削除するタグ名を指定してください"}), 400
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not any(t['name'] == delete_name for t in data):
+                return jsonify({"error": f"タグ {delete_name} が見つかりません"}), 404
+            data = [t for t in data if t['name'] != delete_name]
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # class_data_matrix_id_list.json 側の tag も解除
+            list_path = os.path.join(tags_dir, 'class_data_matrix_id_list.json')
+            if os.path.exists(list_path):
+                with open(list_path, 'r', encoding='utf-8') as f:
+                    list_data = json.load(f)
+                changed = False
+                for item in list_data:
+                    if item.get('tag') == delete_name:
+                        item['tag'] = None
+                        changed = True
+                if changed:
+                    with open(list_path, 'w', encoding='utf-8') as f:
+                        json.dump(list_data, f, ensure_ascii=False, indent=2)
+
+            return jsonify({"message": f"タグ {delete_name} を削除しました"}), 200
+        except FileNotFoundError:
+            return jsonify({"error": "tags.jsonが見つかりません"}), 404
+        except Exception as e:
+            logger.error(f"Matrixタグ削除エラー: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/class-data-matrix-id-tags/<int:tag_id>', methods=['PUT'])
+def rename_class_data_matrix_id_tag(tag_id):
+    """タグ名の変更（割り当て済みClassDataMatrixIDの tag フィールドも追従して更新）"""
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        new_name = request.get_json().get('name')
+        if not new_name:
+            return jsonify({"error": "新しいタグ名を指定してください"}), 400
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        target = next((t for t in data if t['id'] == tag_id), None)
+        if not target:
+            return jsonify({"error": "指定されたタグが見つかりません"}), 404
+        if any(t['name'] == new_name and t['id'] != tag_id for t in data):
+            return jsonify({"error": f"タグ {new_name} はすでに存在します"}), 400
+
+        old_name = target['name']
+        target['name'] = new_name
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # class_data_matrix_id_list.json 側の tag 名も追従
+        list_path = os.path.join(tags_dir, 'class_data_matrix_id_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                list_data = json.load(f)
+            changed = False
+            for item in list_data:
+                if item.get('tag') == old_name:
+                    item['tag'] = new_name
+                    changed = True
+            if changed:
+                with open(list_path, 'w', encoding='utf-8') as f:
+                    json.dump(list_data, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"message": f"タグ名を {old_name} から {new_name} に変更しました"}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"Matrixタグ名変更エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/class-data-matrix-id/<name>/tag', methods=['PUT'])
+def set_class_data_matrix_id_tag(name):
+    """特定のClassDataMatrixIDエントリにタグを割り当てる（tag=nullで未設定に戻す）"""
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+    try:
+        tag = request.get_json().get('tag')  # None も許容（未設定に戻す）
+
+        with open(list_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        target = next((item for item in data if item['name'] == name), None)
+        if not target:
+            return jsonify({"error": f"ClassDataMatrixID {name} が見つかりません"}), 404
+
+        # タグが指定されている場合は存在確認
+        if tag is not None:
+            tags_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'tags.json')
+            if os.path.exists(tags_path):
+                with open(tags_path, 'r', encoding='utf-8') as f:
+                    tag_list = json.load(f)
+                if not any(t['name'] == tag for t in tag_list):
+                    return jsonify({"error": f"タグ {tag} が見つかりません"}), 404
+
+        target['tag'] = tag
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"message": f"{name} にタグを設定しました", "data": target}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "class_data_matrix_id_list.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"Matrixタグ割り当てエラー {name}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+def generate_matrix_tags_load_script():
+    """tags.json をロードしてタグ名ごとにMatrixをロードするC#スクリプトを生成（ClassDataIDのTableIdUtilsと同等）"""
+    tags_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'tags.json')
+    try:
+        tags = []
+        if os.path.exists(tags_path):
+            with open(tags_path, 'r', encoding='utf-8') as f:
+                tags = json.load(f)
+        else:
+            tags = []
+
+        matrix_list = []
+        list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                matrix_list = json.load(f)
+
+        dict_tags_load_write_script = {}
+
+        for tag in tags:
+            tag_name = tag["name"]
+            tagged_items = [
+                item["name"] for item in matrix_list
+                if item.get("tag") == tag_name
+            ]
+
+            lines = []
+            indent = 0
+
+            def add(text=""):
+                lines.append("    " * indent + text)
+
+            # -------------------------
+            # 非同期
+            # -------------------------
+            add(f"public static async UniTask LoadAsync{tag_name}(Action action = null)")
+            add("{")
+            indent += 1
+
+            add("await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
+            add("{")
+            indent += 1
+
+            for item_name in tagged_items:
+                add(f"header.GetData<GameCore.Tables.{item_name}MatrixTable>(GameCore.Tables.MatrixTableID.{item_name}, reader);")
+                add("await UniTask.Yield();")
+
+            add("action?.Invoke();")
+            add("await UniTask.CompletedTask;")
+            indent -= 1
+            add("});")
+
+            indent -= 1
+            add("}")
+            add()
+
+            # -------------------------
+            # 同期
+            # -------------------------
+            add(f"public static void Load{tag_name}(Action action = null)")
+            add("{")
+            indent += 1
+
+            add("UniTask.Action(async () =>")
+            add("{")
+            indent += 1
+
+            add("await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
+            add("{")
+            indent += 1
+
+            for item_name in tagged_items:
+                add(f"header.GetData<GameCore.Tables.{item_name}MatrixTable>(GameCore.Tables.MatrixTableID.{item_name}, reader);")
+
+            add("action?.Invoke();")
+            add("await UniTask.CompletedTask;")
+            indent -= 1
+            add("});")
+
+            indent -= 1
+            add("}).Invoke();")
+
+            indent -= 1
+            add("}")
+            add()
+
+            dict_tags_load_write_script[tag_name] = lines
+
+        append_str = "\n".join(
+            "\n".join(lines)
+            for lines in dict_tags_load_write_script.values()
+        )
+
+        code_str = f"""
+using System;
+using Cysharp.Threading.Tasks;
+using System.Collections.Generic;
+
+namespace GameCore.Tables
+{{
+    public static class MatrixTableIdUtils
+    {{
+{textwrap.indent(append_str, '        ')}
+    }}
+}}
+"""
+
+        cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'MatrixTableIdUtils.cs')
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+
+    except Exception as e:
+        logger.error(f"Matrixタグロードスクリプト生成エラー: {str(e)}")
 
 
 def flask_main():

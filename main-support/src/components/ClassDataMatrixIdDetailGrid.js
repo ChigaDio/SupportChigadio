@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Tooltip, createTheme, ThemeProvider } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, createTheme, ThemeProvider } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
@@ -9,7 +9,16 @@ import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import CodeIcon from '@mui/icons-material/Code';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import Chip from '@mui/material/Chip';
 import Papa from 'papaparse';
+import {
+  parseType,
+  getDefaultValueForType,
+  SingleValueEditor,
+  ArrayFieldEditor,
+  ClassFieldEditor,
+  formatPreviewValue,
+} from './ClassDataIdDetailGrid';
 
 const theme = createTheme({
   palette: {
@@ -92,6 +101,11 @@ function ClassDataMatrixIdDetailGrid() {
   const [data, setData] = useState({ rowId: '', colId: '', fields: [], data: {} });
   const [typeOptions, setTypeOptions] = useState([]);
   const [enumValues, setEnumValues] = useState({});
+  // ★ 追加: classDataのスキーマを保持（ネスト入力・配列対応のため）
+  const [classSchemas, setClassSchemas] = useState({});
+  const [classList, setClassList] = useState([]);
+  // ★ 追加: タグ表示用（一覧側で管理、ここでは読み取りのみ）
+  const [currentTag, setCurrentTag] = useState(null);
   const [rowKeys, setRowKeys] = useState([]);
   const [colKeys, setColKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -107,21 +121,57 @@ function ClassDataMatrixIdDetailGrid() {
   const [cellValues, setCellValues] = useState({});
   const apiRef = useGridApiRef();
 
-const enumOptions = useMemo(() => {
-  const options = {};
-  data.fields.forEach(field => {
-    if (field.type in enumValues && enumValues[field.type]?.length > 0) {
-      options[field.name] = [
-        { value: `${field.type}ID.None`, label: 'None' },
-        ...enumValues[field.type].map(v => ({
-          value: `${field.type}ID.${v}`,
-          label: v
-        }))
-      ];
+  // ★ 配列型("int[]"等)・classData型（ネスト）にも対応した共通のデフォルト値生成
+  // (gridRows等より先に定義しておく必要があるため、ここに配置)
+  const getDefaultValue = (type) => {
+    const { isArray, baseType } = parseType(type);
+    if (isArray) return [];
+    return getDefaultValueForType(baseType, enumValues, classSchemas);
+  };
+
+  const parseImportedValue = (value, type) => {
+    const { isArray, baseType } = parseType(type);
+    if (isArray) {
+      // CSVインポート時、セル全体はJSON化されているため配列はそのまま渡ってくる想定
+      return Array.isArray(value) ? value : [];
     }
-  });
-  return options;
-}, [data.fields, enumValues]);
+    if (value === undefined || value === '') return getDefaultValue(type);
+    switch (baseType.toLowerCase()) {
+      case 'int': return parseInt(value, 10) || 0;
+      case 'float': return parseFloat(value) || 0.0;
+      case 'bool': return typeof value === 'string' ? (value.toLowerCase() === 'true' || value === '1') : !!value;
+      case 'string': return String(value);
+      case 'vector2':
+        try {
+          const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+          if (Array.isArray(parsed) && parsed.length === 2) return parsed;
+          return [0, 0];
+        } catch {
+          return [0, 0];
+        }
+      case 'vector3':
+        try {
+          const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+          if (Array.isArray(parsed) && parsed.length === 3) return parsed;
+          return [0, 0, 0];
+        } catch {
+          return [0, 0, 0];
+        }
+      default:
+        if (classSchemas && classSchemas[baseType]) {
+          // classData型: すでにオブジェクトであればそのまま、文字列ならJSONとして解釈
+          if (typeof value === 'object' && value !== null) return value;
+          try {
+            const parsed = JSON.parse(value);
+            return (parsed && typeof parsed === 'object') ? parsed : getDefaultValue(type);
+          } catch {
+            return getDefaultValue(type);
+          }
+        }
+        const enumOpts = enumValues[baseType]?.map(v => `${baseType}ID.${v}`) || [];
+        return enumOpts.includes(value) ? value : (enumOpts[0] || `${baseType}ID.None`);
+    }
+  };
 
   const gridRows = useMemo(() => {
     return rowKeys.map((rowKey, index) => {
@@ -193,17 +243,34 @@ const enumOptions = useMemo(() => {
         navigate('/class-data-matrix-id');
       });
 
+    // 現在のタグ表示用（一覧のリストから拾う）
+    fetch('/api/class-data-matrix-id')
+      .then(res => res.json())
+      .then(list => {
+        const entry = Array.isArray(list) ? list.find(item => item.name === name) : null;
+        setCurrentTag(entry?.tag ?? null);
+      })
+      .catch(() => {});
+
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
       fetch('/api/class-data').then(res => res.json()),
       fetch('/api/class-data-id').then(res => res.json())
-    ]).then(([enumList, classList, classIdList]) => {
+    ]).then(([enumList, classListData, classIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
       const enumTypes = enumList.map(item => item.name);
-      const classTypes = classList.map(item => item.name);
+      const classTypes = classListData.map(item => item.name);
       const classIdTypes = classIdList.map(item => item.name);
-      setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIdTypes]);
+
+      // ★ classDataの一覧を保持（配列型判定・ネスト編集に使う）
+      setClassList(classTypes);
+
+      // ★ 配列型のオプションを追加（"int[]" のような表記で動的配列を選べるように）
+      const allBaseTypes = [...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIdTypes];
+      const arrayTypes = allBaseTypes.map(t => `${t}[]`);
+
+      setTypeOptions([...allBaseTypes, ...arrayTypes]);
 
       const enumPromises = enumList.map(e =>
         fetch(`/api/enum/${encodeURIComponent(e.name)}`)
@@ -221,11 +288,24 @@ const enumOptions = useMemo(() => {
             [c.name]: Array.isArray(d.rows) ? d.rows.map(r => r.enum_property || '').filter(v => v) : []
           }))
       );
-      Promise.all([...enumPromises, ...classIdPromises]).then(results => {
-        const newEnumValues = Object.assign({}, ...results);
-        console.log('enumValues:', newEnumValues);
-        setEnumValues(newEnumValues);
-      });
+      // ★ classDataスキーマの取得（ネスト編集・配列デフォルト値生成に使う）
+      const classSchemaPromises = classTypes.map(className =>
+        fetch(`/api/class-data/${encodeURIComponent(className)}`)
+          .then(res => res.ok ? res.json() : [])
+          .then(d => ({ [className]: Array.isArray(d) ? d : [] }))
+          .catch(() => ({ [className]: [] }))
+      );
+      return Promise.all([
+        Promise.all(enumPromises),
+        Promise.all(classIdPromises),
+        Promise.all(classSchemaPromises),
+      ]);
+    }).then(([enumResults, classIdResults, classSchemaResults]) => {
+      const newEnumValues = Object.assign({}, ...enumResults, ...classIdResults);
+      console.log('enumValues:', newEnumValues);
+      setEnumValues(newEnumValues);
+      const schemasMap = Object.assign({}, ...classSchemaResults);
+      setClassSchemas(schemasMap);
     }).catch(error => {
       alert('型オプション取得エラー: ' + error.message);
     });
@@ -261,51 +341,6 @@ const enumOptions = useMemo(() => {
       setData({ ...data, data: newData });
     }
   }, [enumValues, data.rowId, data.colId, data.fields]);
-
-  const getDefaultValue = (type) => {
-    switch (type.toLowerCase()) {
-      case 'int': return 0;
-      case 'float': return 0.0;
-      case 'bool': return false;
-      case 'string': return '';
-      case 'vector2': return [0, 0];
-      case 'vector3': return [0, 0, 0];
-default:
-      if (enumValues[type] && enumValues[type].length > 0) {
-        return `${type}ID.None`;  // ← ここを変更
-      }
-      return '';
-    }
-  };
-
-  const parseImportedValue = (value, type) => {
-    if (value === undefined || value === '') return getDefaultValue(type);
-    switch (type.toLowerCase()) {
-      case 'int': return parseInt(value, 10) || 0;
-      case 'float': return parseFloat(value) || 0.0;
-      case 'bool': return value.toLowerCase() === 'true' || value === '1';
-      case 'string': return String(value);
-      case 'vector2':
-        try {
-          const parsed = JSON.parse(value);
-          if (Array.isArray(parsed) && parsed.length === 2) return parsed;
-          return [0, 0];
-        } catch {
-          return [0, 0];
-        }
-      case 'vector3':
-        try {
-          const parsed = JSON.parse(value);
-          if (Array.isArray(parsed) && parsed.length === 3) return parsed;
-          return [0, 0, 0];
-        } catch {
-          return [0, 0, 0];
-        }
-      default:
-        const enumOpts = enumValues[type]?.map(v => `${type}ID.${v}`) || [];
-        return enumOpts.includes(value) ? value : (enumOpts[0] || '');
-    }
-  };
 
   const handleAddField = () => {
     if (!newFieldType || !newFieldName) return alert('型と名前は必須です');
@@ -446,103 +481,87 @@ default:
     setEditingCell(null);
   };
 
-  const Vector2Editor = ({ field, value, onChange }) => {
-    const [x, y] = Array.isArray(value) && value.length === 2 ? value : [0, 0];
-    return (
-      <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-        <TextField
-          type="number"
-          label="X"
-          value={x}
-          onChange={(e) => onChange([parseFloat(e.target.value) || 0, y])}
-          size="small"
-          variant="outlined"
-          sx={{ width: 100 }}
-        />
-        <TextField
-          type="number"
-          label="Y"
-          value={y}
-          onChange={(e) => onChange([x, parseFloat(e.target.value) || 0])}
-          size="small"
-          variant="outlined"
-          sx={{ width: 100 }}
-        />
-      </Box>
-    );
-  };
-
-  const Vector3Editor = ({ field, value, onChange }) => {
-    const [x, y, z] = Array.isArray(value) && value.length === 3 ? value : [0, 0, 0];
-    return (
-      <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-        <TextField
-          type="number"
-          label="X"
-          value={x}
-          onChange={(e) => onChange([parseFloat(e.target.value) || 0, y, z])}
-          size="small"
-          variant="outlined"
-          sx={{ width: 100 }}
-        />
-        <TextField
-          type="number"
-          label="Y"
-          value={y}
-          onChange={(e) => onChange([x, parseFloat(e.target.value) || 0, z])}
-          size="small"
-          variant="outlined"
-          sx={{ width: 100 }}
-        />
-        <TextField
-          type="number"
-          label="Z"
-          value={z}
-          onChange={(e) => onChange([x, y, parseFloat(e.target.value) || 0])}
-          size="small"
-          variant="outlined"
-          sx={{ width: 100 }}
-        />
-      </Box>
-    );
-  };
+  // ※ Vector2/Vector3/enum/bool/配列/classDataの各エディタは
+  //    ClassDataIdDetailGrid.js から共有している SingleValueEditor /
+  //    ArrayFieldEditor / ClassFieldEditor に統一（数値入力の不具合修正も含む）。
 
   const columns = useMemo(() => {
     return [
-      { field: 'rowKey', headerName: 'Row Key', width: 150 },
+      {
+        field: 'rowKey',
+        headerName: 'Row Key',
+        width: 150,
+        // ★ 行ID(Row Key)は背景色を緑にして目立たせる
+        cellClassName: 'matrix-row-id-cell',
+      },
       ...colKeys.map(ck => ({
         field: ck,
         headerName: ck,
-        width: 200,
+        width: 240,
         editable: !!data.fields.length,
+        // ★ 単一行のテキストではなく、フィールド名/値を並べた
+        //   見やすいミニテーブルとして表示する
         renderCell: (params) => {
           const value = params.value || {};
-          const display = data.fields
-            .map(f => {
-              const fieldValue = value[f.name] ?? getDefaultValue(f.type);
-              if (fieldValue === undefined || fieldValue === null) {
-                return `${f.name}: -`;
-              }
-              return `${f.name}: ${typeof fieldValue === 'object' ? JSON.stringify(fieldValue) : fieldValue}`;
-            })
-            .join(', ') || '空';
+          if (data.fields.length === 0) {
+            return <Typography variant="caption" color="text.disabled">空</Typography>;
+          }
           return (
-            <Tooltip title={display}>
-              <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {display}
-              </Box>
-            </Tooltip>
+            <Box
+              component="table"
+              sx={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: '0.75rem',
+                lineHeight: 1.4,
+                '& td': {
+                  padding: '2px 6px',
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                  verticalAlign: 'top',
+                },
+                '& tr:last-of-type td': { borderBottom: 'none' },
+              }}
+            >
+              <tbody>
+                {data.fields.map(f => {
+                  const fieldValue = value[f.name] ?? getDefaultValue(f.type);
+                  const preview = formatPreviewValue(fieldValue, f.type, classSchemas);
+                  return (
+                    <tr key={f.name}>
+                      <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>
+                        {f.name}
+                      </td>
+                      <td
+                        title={preview}
+                        style={{
+                          wordBreak: 'break-word',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                      >
+                        {preview}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Box>
           );
         },
       }))
     ];
-  }, [colKeys, data.fields]);
+  }, [colKeys, data.fields, classSchemas]);
 
   return (
     <ThemeProvider theme={theme}>
       <Box sx={{ p: 3, maxWidth: '1200px', margin: '0 auto' }}>
-        <Typography variant="h5" gutterBottom sx={{ fontWeight: 500, color: 'text.primary' }}>
+        <Typography variant="h5" gutterBottom sx={{ fontWeight: 500, color: 'text.primary', display: 'flex', alignItems: 'center', gap: 1 }}>
           {name}
+          {currentTag && <Chip label={currentTag} size="small" color="primary" variant="outlined" />}
         </Typography>
         <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -590,10 +609,21 @@ default:
               editMode="cell"
               apiRef={apiRef}
               onCellDoubleClick={handleCellDoubleClick}
+              // ★ ミニテーブルのプレビューが見切れないよう、行の高さをコンテンツに合わせる
+              getRowHeight={() => 'auto'}
               sx={{
                 '& .MuiDataGrid-main': {
                   borderRadius: '8px',
                   overflow: 'hidden',
+                },
+                '& .MuiDataGrid-cell': {
+                  py: 0.5,
+                  alignItems: 'flex-start',
+                },
+                // ★ 行ID(Row Key)列の背景色を緑にする
+                '& .matrix-row-id-cell': {
+                  backgroundColor: '#a5d6a7',
+                  fontWeight: 600,
                 },
               }}
             />
@@ -660,62 +690,42 @@ default:
             <Button onClick={() => setOpenImportCsv(false)} color="secondary">キャンセル</Button>
           </DialogActions>
         </Dialog>
-        <Dialog open={openCellEditor} onClose={() => setOpenCellEditor(false)} sx={{ '& .MuiDialog-paper': { transition: 'opacity 0.2s ease' } }}>
+        <Dialog
+          open={openCellEditor}
+          onClose={() => setOpenCellEditor(false)}
+          maxWidth="md"
+          fullWidth
+          sx={{ '& .MuiDialog-paper': { transition: 'opacity 0.2s ease' } }}
+        >
           <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white', fontWeight: 500 }}>
             セル編集 ({editingCell?.rowKey}, {editingCell?.colKey})
           </DialogTitle>
-          <DialogContent sx={{ pt: 2 }}>
+          <DialogContent sx={{ pt: 2, minHeight: 320 }}>
 {data.fields.map(field => {
-  const fieldType = field.type;
+  // ★ "int[]" のような配列型・classData型（ネスト）にも対応
+  const { isArray, baseType } = parseType(field.type);
   const value = cellValues[field.name] ?? getDefaultValue(field.type);
-  const isVector2 = fieldType.toLowerCase() === 'vector2';
-  const isVector3 = fieldType.toLowerCase() === 'vector3';
-  const isEnum = fieldType in enumValues;
-  const isBool = fieldType.toLowerCase() === 'bool';
 
   return (
     <Box key={field.name} sx={{ mb: 2 }}>
-      <Typography variant="subtitle2" sx={{ mb: 1 }}>{field.name} ({fieldType})</Typography>
-      
-      {isVector2 ? (
-        <Vector2Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
-      ) : isVector3 ? (
-        <Vector3Editor field={field.name} value={value} onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })} />
-      ) : isEnum ? (
-        <Autocomplete
-          options={enumOptions[field.name] || []}
-          getOptionLabel={(option) => option.label}
-          value={enumOptions[field.name]?.find(opt => opt.value === value) || null}
-          onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue?.value ?? `${fieldType}ID.None` })}
-          renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
-          isOptionEqualToValue={(option, val) => option.value === val?.value}
-        />
-      ) : isBool ? (
-        <Autocomplete
-          options={[
-            { value: true, label: 'True' },
-            { value: false, label: 'False' }
-          ]}
-          getOptionLabel={(option) => option.label}
-          value={value}
-          onChange={(e, newValue) => setCellValues({ ...cellValues, [field.name]: newValue?.value ?? false })}
-          renderInput={(params) => <TextField {...params} label={field.name} variant="outlined" />}
-          isOptionEqualToValue={(option, val) => option.value === val}
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>{field.name} ({field.type})</Typography>
+      {isArray ? (
+        <ArrayFieldEditor
+          value={Array.isArray(value) ? value : []}
+          baseType={baseType}
+          enumValues={enumValues}
+          classSchemas={classSchemas}
+          isDynamic={true}
+          arraySize={-1}
+          onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })}
         />
       ) : (
-        <TextField
-          type={fieldType.toLowerCase() === 'int' || fieldType.toLowerCase() === 'float' ? 'number' : 'text'}
-          label={field.name}
+        <SingleValueEditor
           value={value}
-          onChange={(e) => {
-            let newValue = e.target.value;
-            if (fieldType.toLowerCase() === 'int') newValue = parseInt(newValue) || 0;
-            if (fieldType.toLowerCase() === 'float') newValue = parseFloat(newValue) || 0.0;
-            setCellValues({ ...cellValues, [field.name]: newValue });
-          }}
-          fullWidth
-          variant="outlined"
-          InputProps={{ inputProps: { step: fieldType.toLowerCase() === 'float' ? 'any' : undefined } }}
+          type={baseType}
+          enumValues={enumValues}
+          classSchemas={classSchemas}
+          onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })}
         />
       )}
     </Box>
