@@ -530,7 +530,7 @@ function ClassDataMatrixIdDetailGrid() {
                   return (
                     <tr key={f.name}>
                       <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>
-                        {f.name}
+                        {f.name}{f.description ? `（${f.description}）` : ''}
                       </td>
                       <td
                         title={preview}
@@ -708,7 +708,9 @@ function ClassDataMatrixIdDetailGrid() {
 
   return (
     <Box key={field.name} sx={{ mb: 2 }}>
-      <Typography variant="subtitle2" sx={{ mb: 1 }}>{field.name} ({field.type})</Typography>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        {field.name}{field.description ? `（${field.description}）` : ''} ({field.type})
+      </Typography>
       {isArray ? (
         <ArrayFieldEditor
           value={Array.isArray(value) ? value : []}

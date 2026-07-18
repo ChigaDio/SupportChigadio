@@ -23,6 +23,7 @@ from pathlib import Path
 import pythonSrc.scene as scene
 import pythonSrc.savedata as savedata
 import pythonSrc.expansion as expansion
+import pythonSrc.customclassdata
 
 
 if getattr(sys, 'frozen', False):
@@ -960,6 +961,10 @@ namespace GameCore
         public const string SCENARIO_FOLDER = "scenario_data";
         public const string SCENARIO_EVEMT_FOLDER = "scenario_event_data";
         public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bytes";
+        
+        //CustomClassDataID
+        public const string CUSTOM_CLASS_DATA_FOLDER = "custom_class_data_id";
+        public const string CUSTOM_CLASS_DATA_ID_BIN_FILE = "all_custom_class_data_id.bytes";
 
         // キャッシュ（最初に解決したパスを保持）
         public static string s_cachedSupportDataPath = null;
@@ -1033,6 +1038,7 @@ namespace GameCore
         public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_CUSTOM_CLASS_DATA_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, CUSTOM_CLASS_DATA_FOLDER, CUSTOM_CLASS_DATA_ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\\\", "/");
 
 #if UNITY_EDITOR
@@ -1110,6 +1116,7 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
             (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER))
+            (SupportFiles.ALL_CUSTOM_CLASS_DATA_ID_BIN, SupportFiles.CUSTOM_CLASS_DATA_FOLDER)
         };
 
         foreach (var (filePath, targetFolder) in allFiles)
@@ -2396,8 +2403,6 @@ def generate_binary_data(name, json_data):
     f.write(struct.pack('i', len(rows)))
     f.write(struct.pack('i', len(columns)))
 
-    if name == "MobGuest":
-        print("aaa")
 
     for col in columns:
         name_encoded = col['name'].encode('utf-8')
@@ -6628,6 +6633,9 @@ if __name__ == '__main__':
     # Start both threads
     flask_thread.start()
     websocket_thread.start()
+    
+    # ディレクトリ作成やルート定義が終わったあたり（app生成後ならどこでもOK）に追加
+    pythonSrc.customclassdata.register(app, DATA_DIR)
 
     # Keep the main thread alive
     try:

@@ -11,6 +11,13 @@ import ClassDataGrid from './components/ClassDataGrid';
 import ClassDataDetailGrid from './components/ClassDataDetailGrid';
 import ClassDataIdGrid from './components/ClassDataIdGrid';
 import ClassDataIdDetailGrid from './components/ClassDataIdDetailGrid';
+
+import CustomClassDataGrid from './components/CustomClassDataGrid';
+import CustomClassDataDetailGrid from './components/CustomClassDataDetailGrid';
+
+import CustomClassDataIdGrid from './components/CustomClassDataIdGrid';
+import CustomClassDataIdDetailGrid from './components/CustomClassDataIdDetailGrid';
+
 import ClassDataMatrinxIdGrid from './components/ClassDataMatrixIdGrid';
 import ClassDataMatrinxIdDetailGrid from './components/ClassDataMatrixIdDetailGrid';
 import StateGrid from './components/StateGrid';
@@ -58,6 +65,12 @@ function AppContent() {
           break;
         case 'class-data-matrix-id':
           navigate('/class-data-matrix-id');
+          break;
+        case 'custom-class-data':
+          navigate('/custom-class-data');
+          break;
+        case 'custom-class-data-id':
+          navigate('/custom-class-data-id');
           break;
         case 'state':
           navigate('/state');
@@ -142,6 +155,11 @@ function AppContent() {
           <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
           <Route path="/scenario-event" element={<ScenarioEventGrid />} />
           <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+
+          <Route path="/custom-class-data" element={<CustomClassDataGrid />} />
+          <Route path="/custom-class-data/:name" element={<CustomClassDataDetailGrid />} />
+          <Route path="/custom-class-data-id" element={<CustomClassDataIdGrid />} />
+          <Route path="/custom-class-data-id/:name" element={<CustomClassDataIdDetailGrid />} />
 
 
           <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />

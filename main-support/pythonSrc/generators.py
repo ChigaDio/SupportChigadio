@@ -17,7 +17,9 @@ else:
 
 # ディレクトリパスをプロジェクトルート基準に設定
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
+
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..",".." ,"data"))
+SCRIPT_DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
 
 CLASS_DATA_ID = 'class_data_id'
@@ -521,7 +523,7 @@ def generate_js_binary_field(item, enum_list, class_list, class_id_list):
 # 4. Python版クラス生成（import対応 + load_json追加）
 # ========================
 def generate_class_python(name, data, enum_list, class_list, class_id_list):
-    py_dir = os.path.join(DATA_DIR, CLASS_DATA, name)
+    py_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA, name)
     os.makedirs(py_dir, exist_ok=True)
 
     used_classes = set()
@@ -585,7 +587,7 @@ def generate_class_python(name, data, enum_list, class_list, class_id_list):
 # 5. JS版クラス生成（import対応 + read(view, offset) + loadJson）
 # ========================
 def generate_class_js(name, data, enum_list, class_list, class_id_list):
-    js_dir = os.path.join(DATA_DIR, CLASS_DATA, name)
+    js_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA, name)
     os.makedirs(js_dir, exist_ok=True)
 
     used_classes = set()
@@ -887,7 +889,7 @@ def generate_row_python(name, columns, rows, enum_list, class_list, class_data_i
         if f.get('is_table_id'):
             table_classes.add(f['used_table_id'])
 
-    py_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, name)
+    py_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA_ID, name)
     os.makedirs(py_dir, exist_ok=True)
 
     row_path = os.path.join(py_dir, f"{name}Row.py")
@@ -961,7 +963,7 @@ def generate_row_js(name, columns, rows, enum_list, class_list, class_data_id_li
         if f.get('is_table_id'):
             table_classes.add(f['used_table_id'])
 
-    js_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, name)
+    js_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA_ID, name)
     os.makedirs(js_dir, exist_ok=True)
 
     row_path = os.path.join(js_dir, f"{name}Row.js")
@@ -1004,7 +1006,7 @@ def generate_row_js(name, columns, rows, enum_list, class_list, class_data_id_li
 # 3. Python版 Table 生成（BaseClassDataID互換 + read(binary) + load_from_json）
 # ========================
 def generate_table_python(name, columns, rows, enum_list, class_list, class_data_id_list):
-    py_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, name)
+    py_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA_ID, name)
     table_path = os.path.join(py_dir, f"{name}Table.py")
 
     with open(table_path, 'w', encoding='utf-8') as f:
@@ -1043,7 +1045,7 @@ def generate_table_python(name, columns, rows, enum_list, class_list, class_data
 # 4. JS版 Table 生成（BaseClassDataID互換 + read(reader)）
 # ========================
 def generate_table_js(name, columns, rows, enum_list, class_list, class_data_id_list):
-    js_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, name)
+    js_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA_ID, name)
     table_path = os.path.join(js_dir, f"{name}Table.js")
 
     with open(table_path, 'w', encoding='utf-8') as f:
