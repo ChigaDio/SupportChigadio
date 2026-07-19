@@ -783,7 +783,8 @@ def generate_custom_field(item, type_info):
 
     field_decl = (
         f"{attribute}"
-        f"        private {cs_type_full} {var_name} = {initial_full};\n"
+        f"        [SerializeField]\n"
+        f"        protected {cs_type_full} {var_name} = {initial_full};\n"
         f"        public {cs_type_full} {var_name[0].upper()}{var_name[1:]} {{ get => {var_name}; }} // {description}\n"
     )
 
@@ -820,6 +821,7 @@ def generate_custom_class_cs(name):
         with open(base_cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
+            f.write("     [Serializable]\n")
             f.write(f"    public class Base{name} : BaseCustomClassData\n    {{\n")
             read_codes = []
             for item in fields:
@@ -838,6 +840,7 @@ def generate_custom_class_cs(name):
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
+            f.write("     [Serializable]\n")
             f.write(f"    public class {name} : Base{name}\n    {{\n")
             f.write("    }\n}\n")
 

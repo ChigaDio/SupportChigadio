@@ -4109,7 +4109,7 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             read_code = f"            {var_name} = new {type_str}(); // Unsupported\n"
 
     return {
-        'field': f"        [SerializeField]\n        private {type_str} {var_name};\n        public {type_str} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
+        'field': f"        [SerializeField]\n        protected {type_str} {var_name};\n        public {type_str} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
         'read': read_code
     }
 
