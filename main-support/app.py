@@ -2392,13 +2392,14 @@ def generate_class_cs(name):
                 f.write(read_code)
             f.write("        }\n")
             f.write("    }\n}\n")
-        cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
-        with open(cs_path, 'w', encoding='utf-8') as f:
-            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
-            f.write("namespace GameCore.Classes\n{\n")
-            f.write(f"    [Serializable]\n")
-            f.write(f"    public class {name} : Base{name}\n    {{\n")
-            f.write("    }\n}\n")
+        if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name, f"{name}.cs")):
+            cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"{name}.cs")
+            with open(cs_path, 'w', encoding='utf-8') as f:
+                f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
+                f.write("namespace GameCore.Classes\n{\n")
+                f.write(f"    [Serializable]\n")
+                f.write(f"    public class {name} : Base{name}\n    {{\n")
+                f.write("    }\n}\n")
             
         py_path = generators.generate_class_python(name, data, enum_list, class_list, class_data_id_list)
         js_path = generators.generate_class_js(name, data, enum_list, class_list, class_data_id_list)
