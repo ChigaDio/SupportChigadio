@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
 import {
   Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent,
   DialogActions, Autocomplete, IconButton, Accordion, AccordionSummary,
   AccordionDetails, Chip, Select, MenuItem, FormControl, InputLabel,
-  Switch, FormControlLabel, Tooltip
+  Switch, FormControlLabel, Tooltip, Checkbox, Slider
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -186,6 +186,9 @@ export function getDefaultValueForType(type, enumValues, classSchemas) {
     case 'string': return '';
     case 'vector2': return [0, 0];
     case 'vector3': return [0, 0, 0];
+    case 'bit': return { size: 8, bits: [] };
+    case 'color': return { r: 1, g: 1, b: 1, a: 1 };
+    case 'bezier': return { points: [{ time: 0, value: 0, inTangent: 0, outTangent: 0 }, { time: 1, value: 1, inTangent: 0, outTangent: 0 }] };
     default:
       // classData型
       if (classSchemas && classSchemas[type]) {
@@ -369,7 +372,7 @@ export function renderMiniPreviewTable(value, type, classSchemas) {
 // ============================================================
 // ArrayFieldEditor: 配列型の入力コンポーネント
 // ============================================================
-export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
+export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, options, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
   const arr = Array.isArray(value) ? value : [];
   // isDynamic(arraySize=-1): 自由に追加削除可
   // arraySize>0: 固定長（追加削除ボタン非表示、長さ固定）
@@ -422,6 +425,7 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, on
               type={baseType}
               enumValues={enumValues}
               classSchemas={classSchemas}
+              options={options}
               onChange={(val) => handleChange(index, val)}
               onSizeChange={onSizeChange}
               readOnly={readOnly}
@@ -498,6 +502,7 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
                     baseType={baseType}
                     enumValues={enumValues}
                     classSchemas={classSchemas}
+                    options={field.options}
                     isDynamic={isDynamic}
                     arraySize={fieldArraySize}
                     onChange={(val) => { handleFieldChange(field.name, val); if (onSizeChange) onSizeChange(); }}
@@ -510,6 +515,7 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
                     type={baseType}
                     enumValues={enumValues}
                     classSchemas={classSchemas}
+                    options={field.options}
                     onChange={(val) => handleFieldChange(field.name, val)}
                     onSizeChange={onSizeChange}
                     readOnly={readOnly}
@@ -527,7 +533,272 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
 // ============================================================
 // SingleValueEditor: 単一値の入力（型に応じて切り替え）
 // ============================================================
-export function SingleValueEditor({ value, type, enumValues, classSchemas, onChange, onSizeChange, readOnly }) {
+// ============================================================
+// bit / color / bezier エディタ
+// (CustomClassDataIdDetailGrid.js の実装をそのまま移植したもの)
+// ============================================================
+function BitFieldEditor({ value, options, onChange, readOnly }) {
+  const size = options?.size ?? value?.size ?? 8;
+  const flagNames = options?.flagNames && options.flagNames.length === size
+    ? options.flagNames
+    : Array.from({ length: size }, (_, i) => `Flag${i}`);
+  const bits = Array.isArray(value?.bits) ? value.bits : [];
+  const isSingle = options?.mode === 'single';
+  const [search, setSearch] = useState('');
+
+  const toggle = (i) => {
+    if (readOnly) return;
+    if (isSingle) {
+      onChange({ size, bits: [i] });
+      return;
+    }
+    const has = bits.includes(i);
+    const next = has ? bits.filter(b => b !== i) : [...bits, i];
+    onChange({ size, bits: next });
+  };
+
+  const entries = React.useMemo(() => flagNames.map((label, i) => ({ label, i })), [flagNames]);
+  const filtered = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(({ label }) => label.toLowerCase().includes(q));
+  }, [entries, search]);
+
+  return (
+    <Box sx={{ display: 'flex', border: '1px solid #e0e0e0', borderRadius: 2, overflow: 'hidden', bgcolor: '#fff' }}>
+      {/* 左: サマリー + 一括操作 */}
+      <Box sx={{ width: 168, flexShrink: 0, p: 1.75, bgcolor: '#f7f8fa', borderRight: '1px solid #eee' }}>
+        <Typography variant="caption" color="text.secondary">選択中</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2, color: 'primary.main' }}>
+          {bits.length}
+          <Typography component="span" variant="caption" color="text.secondary"> / {size}</Typography>
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 2 }}>
+          {!isSingle && options?.allowSelectAll && (
+            <Button size="small" variant="outlined" disabled={readOnly}
+              onClick={() => onChange({ size, bits: Array.from({ length: size }, (_, i) => i) })}>
+              全選択
+            </Button>
+          )}
+          <Button size="small" variant="outlined" color="secondary" disabled={readOnly} onClick={() => onChange({ size, bits: [] })}>
+            クリア
+          </Button>
+        </Box>
+        {isSingle && (
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1.5 }}>
+            単一選択モード
+          </Typography>
+        )}
+      </Box>
+
+      {/* 右: 検索 + 縦一列のスクロール可能なフラグ一覧 */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ p: 1, borderBottom: '1px solid #eee', bgcolor: '#fff' }}>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder={`フラグを検索 (${flagNames.length}件)`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </Box>
+        <Box sx={{ maxHeight: 320, overflowY: 'auto' }}>
+          {filtered.length === 0 && (
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', p: 2, textAlign: 'center' }}>
+              該当するフラグがありません
+            </Typography>
+          )}
+          {filtered.map(({ label, i }) => {
+            const checked = bits.includes(i);
+            return (
+              <Box
+                key={i}
+                onClick={() => toggle(i)}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  pl: 0.5,
+                  pr: 1.5,
+                  py: 0.25,
+                  cursor: readOnly ? 'default' : 'pointer',
+                  borderLeft: '3px solid',
+                  borderLeftColor: checked ? 'primary.main' : 'transparent',
+                  bgcolor: checked ? 'rgba(25, 118, 210, 0.08)' : (i % 2 === 0 ? '#fff' : '#fafafa'),
+                  '&:hover': { bgcolor: checked ? 'rgba(25, 118, 210, 0.14)' : '#f0f0f0' },
+                }}
+              >
+                <Checkbox
+                  size="small"
+                  checked={checked}
+                  disabled={readOnly}
+                  onChange={() => toggle(i)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <Typography
+                  variant="body2"
+                  sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={label}
+                >
+                  {label}
+                </Typography>
+                <Typography variant="caption" color="text.disabled">#{i}</Typography>
+              </Box>
+            );
+          })}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function _toHex(v) {
+  return Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0');
+}
+function ColorFieldEditor({ value, onChange, readOnly }) {
+  const v = value || { r: 1, g: 1, b: 1, a: 1 };
+  const hex = `#${_toHex(v.r)}${_toHex(v.g)}${_toHex(v.b)}`;
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      <input
+        type="color"
+        value={hex}
+        disabled={readOnly}
+        onChange={(e) => {
+          const h = e.target.value;
+          onChange({
+            r: parseInt(h.slice(1, 3), 16) / 255,
+            g: parseInt(h.slice(3, 5), 16) / 255,
+            b: parseInt(h.slice(5, 7), 16) / 255,
+            a: v.a,
+          });
+        }}
+        style={{ width: 48, height: 36, border: 'none', background: 'none', cursor: readOnly ? 'default' : 'pointer' }}
+      />
+      <Box sx={{ width: 200 }}>
+        <Typography variant="caption">アルファ: {v.a.toFixed(2)}</Typography>
+        <Slider
+          size="small" min={0} max={1} step={0.01}
+          value={v.a}
+          disabled={readOnly}
+          onChange={(e, nv) => onChange({ ...v, a: nv })}
+        />
+      </Box>
+      <Box sx={{ width: 32, height: 32, borderRadius: 1, border: '1px solid #ccc', background: `rgba(${v.r * 255},${v.g * 255},${v.b * 255},${v.a})` }} />
+    </Box>
+  );
+}
+
+function _hermite(p0, p1, t) {
+  const dt = p1.time - p0.time || 1;
+  const s = (t - p0.time) / dt;
+  const h00 = 2 * s ** 3 - 3 * s ** 2 + 1;
+  const h10 = s ** 3 - 2 * s ** 2 + s;
+  const h01 = -2 * s ** 3 + 3 * s ** 2;
+  const h11 = s ** 3 - s ** 2;
+  return h00 * p0.value + h10 * dt * p0.outTangent + h01 * p1.value + h11 * dt * p1.inTangent;
+}
+
+function BezierFieldEditor({ value, options, onChange, readOnly }) {
+  const points = (value?.points && value.points.length >= 2)
+    ? [...value.points].sort((a, b) => a.time - b.time)
+    : [{ time: 0, value: 0, inTangent: 0, outTangent: 0 }, { time: 1, value: 1, inTangent: 0, outTangent: 0 }];
+  const min = options?.min ?? 0;
+  const max = options?.max ?? 1;
+  const W = 420, H = 220, PAD = 24;
+  const svgRef = useRef(null);
+  const [dragIndex, setDragIndex] = useState(null);
+
+  const xToPx = (t) => PAD + t * (W - 2 * PAD);
+  const yToPx = (val) => H - PAD - ((val - min) / (max - min || 1)) * (H - 2 * PAD);
+  const pxToX = (px) => Math.max(0, Math.min(1, (px - PAD) / (W - 2 * PAD)));
+  const pxToY = (py) => {
+    const t = (H - PAD - py) / (H - 2 * PAD);
+    return min + t * (max - min);
+  };
+
+  const pathD = React.useMemo(() => {
+    let d = '';
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i], p1 = points[i + 1];
+      const steps = 24;
+      for (let s = 0; s <= steps; s++) {
+        const t = p0.time + (p1.time - p0.time) * (s / steps);
+        const val = _hermite(p0, p1, t);
+        const cmd = (i === 0 && s === 0) ? 'M' : 'L';
+        d += `${cmd}${xToPx(t)},${yToPx(val)} `;
+      }
+    }
+    return d;
+  }, [points]);
+
+  const updatePoint = (index, patch) => {
+    if (readOnly) return;
+    const next = points.map((p, i) => (i === index ? { ...p, ...patch } : p));
+    onChange({ points: next });
+  };
+
+  const handleMove = (e) => {
+    if (readOnly || dragIndex === null || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * (W / rect.width);
+    const py = (e.clientY - rect.top) * (H / rect.height);
+    updatePoint(dragIndex, { time: pxToX(px), value: pxToY(py) });
+  };
+
+  const addPoint = () => {
+    if (readOnly) return;
+    onChange({ points: [...points, { time: 0.5, value: (min + max) / 2, inTangent: 0, outTangent: 0 }] });
+  };
+  const removePoint = (index) => {
+    if (readOnly || points.length <= 2) return;
+    onChange({ points: points.filter((_, i) => i !== index) });
+  };
+
+  return (
+    <Box>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        style={{ background: '#fafafa', border: '1px solid #ddd', touchAction: 'none' }}
+        onMouseMove={handleMove}
+        onMouseUp={() => setDragIndex(null)}
+        onMouseLeave={() => setDragIndex(null)}
+      >
+        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#bbb" />
+        <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="#bbb" />
+        <path d={pathD} fill="none" stroke="#1976d2" strokeWidth={2} />
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={xToPx(p.time)} cy={yToPx(p.value)} r={6}
+            fill={dragIndex === i ? '#d32f2f' : '#1976d2'}
+            style={{ cursor: readOnly ? 'default' : 'grab' }}
+            onMouseDown={() => !readOnly && setDragIndex(i)}
+          />
+        ))}
+      </svg>
+      <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {points.map((p, i) => (
+          <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Chip size="small" label={`点${i}`} />
+            <NumericTextField label="time(0-1)" allowDecimal value={p.time} readOnly={readOnly} onChange={(val) => updatePoint(i, { time: Math.max(0, Math.min(1, val)) })} sx={{ width: 100 }} />
+            <NumericTextField label="value" allowDecimal value={p.value} readOnly={readOnly} onChange={(val) => updatePoint(i, { value: val })} sx={{ width: 100 }} />
+            <NumericTextField label="inTangent" allowDecimal value={p.inTangent} readOnly={readOnly} onChange={(val) => updatePoint(i, { inTangent: val })} sx={{ width: 100 }} />
+            <NumericTextField label="outTangent" allowDecimal value={p.outTangent} readOnly={readOnly} onChange={(val) => updatePoint(i, { outTangent: val })} sx={{ width: 100 }} />
+            <IconButton size="small" color="error" disabled={readOnly || points.length <= 2} onClick={() => removePoint(i)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        ))}
+        <Button size="small" startIcon={<AddIcon />} onClick={addPoint} disabled={readOnly} sx={{ alignSelf: 'flex-start' }}>点を追加</Button>
+      </Box>
+    </Box>
+  );
+}
+
+export function SingleValueEditor({ value, type, enumValues, classSchemas, options, onChange, onSizeChange, readOnly }) {
   const lower = (type || '').toLowerCase();
 
   // bool
@@ -645,6 +916,17 @@ export function SingleValueEditor({ value, type, enumValues, classSchemas, onCha
     );
   }
 
+  // bit / color / bezier: CustomClassDataIdDetailGrid.js のエディタをそのまま移植
+  if (lower === 'bit') {
+    return <BitFieldEditor value={value} options={options} readOnly={readOnly} onChange={onChange} />;
+  }
+  if (lower === 'color') {
+    return <ColorFieldEditor value={value} readOnly={readOnly} onChange={onChange} />;
+  }
+  if (lower === 'bezier') {
+    return <BezierFieldEditor value={value} options={options} readOnly={readOnly} onChange={onChange} />;
+  }
+
   // classData型（ネスト）
   if (classSchemas && classSchemas[type]) {
     return (
@@ -710,6 +992,7 @@ function NestedEditorDialogBody({ cellInfo, enumValues, classSchemas, onSave, on
   const [localValue, setLocalValue] = useState(cellInfo.initialValue);
   const { isArray, baseType } = parseType(cellInfo.type);
   const isClass = classSchemas && classSchemas[baseType];
+  const fieldOptions = cellInfo.options;
 
   // ★ 親(ClassDataIdDetailGrid)が「外側クリックで閉じられた時に保存するか確認する」
   //   判断をするために、最新の編集値を ref 経由でも参照できるようにしておく。
@@ -727,6 +1010,7 @@ function NestedEditorDialogBody({ cellInfo, enumValues, classSchemas, onSave, on
             baseType={baseType}
             enumValues={enumValues}
             classSchemas={classSchemas}
+            options={fieldOptions}
             isDynamic={true}
             arraySize={-1}
             onChange={setLocalValue}
@@ -746,6 +1030,7 @@ function NestedEditorDialogBody({ cellInfo, enumValues, classSchemas, onSave, on
             type={cellInfo.type}
             enumValues={enumValues}
             classSchemas={classSchemas}
+            options={fieldOptions}
             onChange={setLocalValue}
           />
         )}
@@ -915,12 +1200,17 @@ function ClassDataIdDetailGrid() {
       fetch('/api/enum-id').then(r => r.json()),
       fetch('/api/class-data').then(r => r.json()),
       fetch('/api/class-data-id').then(r => r.json()),
-    ]).then(([enumList, classListData, classIdList]) => {
+      fetch('/api/custom-class-data').then(r => r.ok ? r.json() : []),
+      fetch('/api/custom-class-data-id').then(r => r.ok ? r.json() : []),
+    ]).then(([enumList, classListData, classIdList, customClassList, customClassIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
+      const customTypes = ['bit', 'color', 'bezier'];
       const enumTypes = enumList.map(item => item.name);
       const classNames = classListData.map(item => item.name);
       const classIdTypes = classIdList.map(item => item.name);
+      const customClassNames = (Array.isArray(customClassList) ? customClassList : []).map(item => item.name);
+      const customClassIdTypes = (Array.isArray(customClassIdList) ? customClassIdList : []).map(item => item.name);
 
       // ★ classListを保存（配列型の判定に使う）
       setClassList(classNames);
@@ -929,13 +1219,17 @@ function ClassDataIdDetailGrid() {
       const arrayTypes = [
         ...basicTypes,
         ...unityTypes,
+        ...customTypes,
         ...enumTypes,
         ...classNames,
         ...classIdTypes,
+        ...customClassNames,
+        ...customClassIdTypes,
       ].map(t => `${t}[]`);
 
       setTypeOptions([
-        ...basicTypes, ...unityTypes, ...enumTypes, ...classNames, ...classIdTypes,
+        ...basicTypes, ...unityTypes, ...customTypes, ...enumTypes, ...classNames, ...classIdTypes,
+        ...customClassNames, ...customClassIdTypes,
         ...arrayTypes,
       ]);
 
@@ -953,6 +1247,13 @@ function ClassDataIdDetailGrid() {
           .then(d => ({ [classIdItem.name]: (d.rows || []).map(row => row.enum_property) }))
       );
 
+      // ★ CustomClassDataID値の取得（enum/classDataIDと同じ形でenumValuesへ統合する）
+      const customClassIdPromises = customClassIdTypes.map(nm =>
+        fetch(`/api/custom-class-data-id/${encodeURIComponent(nm)}`)
+          .then(res => res.ok ? res.json() : { rows: [] })
+          .then(d => ({ [nm]: (d.rows || []).map(row => row.enum_property) }))
+      );
+
       // ★ classDataスキーマの取得（/api/class-data/{name} → [{name, type}, ...]）
       const classSchemaPromises = classNames.map(className =>
         fetch(`/api/class-data/${encodeURIComponent(className)}`)
@@ -961,16 +1262,26 @@ function ClassDataIdDetailGrid() {
           .catch(() => ({ [className]: [] }))
       );
 
+      // ★ CustomClassDataスキーマの取得（ClassDataと同じ形でclassSchemasへ統合する）
+      const customClassSchemaPromises = customClassNames.map(className =>
+        fetch(`/api/custom-class-data/${encodeURIComponent(className)}`)
+          .then(res => res.ok ? res.json() : [])
+          .then(d => ({ [className]: Array.isArray(d) ? d : [] }))
+          .catch(() => ({ [className]: [] }))
+      );
+
       return Promise.all([
         Promise.all(enumPromises),
         Promise.all(classIdPromises),
+        Promise.all(customClassIdPromises),
         Promise.all(classSchemaPromises),
+        Promise.all(customClassSchemaPromises),
       ]);
-    }).then(([enumResults, classIdResults, classSchemaResults]) => {
-      const enumValuesMap = Object.assign({}, ...enumResults, ...classIdResults);
+    }).then(([enumResults, classIdResults, customClassIdResults, classSchemaResults, customClassSchemaResults]) => {
+      const enumValuesMap = Object.assign({}, ...enumResults, ...classIdResults, ...customClassIdResults);
       setEnumValues(enumValuesMap);
 
-      const schemasMap = Object.assign({}, ...classSchemaResults);
+      const schemasMap = Object.assign({}, ...classSchemaResults, ...customClassSchemaResults);
       setClassSchemas(schemasMap);
     }).catch(error => {
       console.error('型オプションまたはenum値の取得エラー:', error);
@@ -1092,11 +1403,11 @@ function ClassDataIdDetailGrid() {
   // ★ classData型・配列型カラムのセルをクリックしたときにダイアログを開く
   //   （dataRef 経由で最新の rows を参照することで、この関数自体の参照を
   //     安定させ、columns の useMemo が無関係な再レンダーで作り直されないようにする）
-  const openNestedEditor = useCallback((rowId, field, type) => {
+  const openNestedEditor = useCallback((rowId, field, type, options) => {
     const row = dataRef.current.rows.find(r => r.id === rowId);
     const currentValue = row?.data?.[field]?.value ?? getDefaultValue(type);
     nestedEditorValueRef.current = currentValue;
-    setNestedEditorCell({ rowId, field, type, initialValue: currentValue });
+    setNestedEditorCell({ rowId, field, type, options, initialValue: currentValue });
     setNestedEditorOpen(true);
   }, [getDefaultValue]);
 
@@ -1363,7 +1674,7 @@ function ClassDataIdDetailGrid() {
         //     打鍵のたびにDataGrid側の再計算が走ることがなくなる）
         renderCell: (params) => (
           <Box
-            onClick={() => openNestedEditor(params.id, col.name, col.type)}
+            onClick={() => openNestedEditor(params.id, col.name, col.type, col.options)}
             sx={{
               width: '100%',
               height: '100%',

@@ -31,10 +31,15 @@ function ClassDataMatrixIdGrid() {
 
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
-      fetch('/api/class-data-id').then(res => res.json())
+      fetch('/api/class-data-id').then(res => res.json()),
+      fetch('/api/custom-class-data-id').then(res => res.ok ? res.json() : [])
     ])
-      .then(([enumList, classIdList]) => {
-        setTypeOptions([...enumList.map(item => item.name), ...classIdList.map(item => item.name)]);
+      .then(([enumList, classIdList, customClassIdList]) => {
+        setTypeOptions([
+          ...enumList.map(item => item.name),
+          ...classIdList.map(item => item.name),
+          ...(Array.isArray(customClassIdList) ? customClassIdList.map(item => item.name) : []),
+        ]);
       })
       .catch(error => console.error('オプション取得エラー:', error));
   }, []);
@@ -61,13 +66,41 @@ function ClassDataMatrixIdGrid() {
       return;
     }
     try {
-      // enum値を取得
-      const [rowEnumRes, colEnumRes] = await Promise.all([
-        fetch(`/api/enum/${encodeURIComponent(newRowId)}`).then(res => res.json()),
-        fetch(`/api/enum/${encodeURIComponent(newColId)}`).then(res => res.json())
+      // Enum / ClassDataID / CustomClassDataID のいずれであっても対応できるようにキーを解決する
+      const resolveKeys = async (idName) => {
+        // 1. Enum-ID
+        const enumRes = await fetch(`/api/enum/${encodeURIComponent(idName)}`);
+        if (enumRes.ok) {
+          const enumData = await enumRes.json();
+          if (Array.isArray(enumData) && enumData.length > 0) {
+            return enumData.map(item => (typeof item === 'string' ? item : item.property));
+          }
+        }
+        // 2. ClassDataID
+        const classIdRes = await fetch(`/api/class-data-id/${encodeURIComponent(idName + 'ID')}`);
+        if (classIdRes.ok) {
+          const classIdData = await classIdRes.json();
+          const rows = classIdData && classIdData.rows;
+          if (Array.isArray(rows) && rows.length > 0) {
+            return rows.map(row => row.enum_property);
+          }
+        }
+        // 3. CustomClassDataID
+        const customIdRes = await fetch(`/api/custom-class-data-id/${encodeURIComponent(idName)}`);
+        if (customIdRes.ok) {
+          const customIdData = await customIdRes.json();
+          const rows = customIdData && customIdData.rows;
+          if (Array.isArray(rows)) {
+            return rows.map(row => row.enum_property);
+          }
+        }
+        return [];
+      };
+
+      const [rowKeys, colKeys] = await Promise.all([
+        resolveKeys(newRowId),
+        resolveKeys(newColId)
       ]);
-      const rowKeys = rowEnumRes || [];
-      const colKeys = colEnumRes || [];
 
       // 初期データを作成
       const initialData = {};

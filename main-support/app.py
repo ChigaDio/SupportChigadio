@@ -292,7 +292,64 @@ def get_type_lists():
     class_data_id if class_data_id else [],
     class_data if class_data else []
 )
-    
+
+# CustomClassData / CustomClassDataID の型リスト取得
+# (get_type_lists() のタプルは既存呼び出し箇所が多いため互換性を壊さないよう、
+#  こちらは独立した追加ヘルパーとして用意する)
+def get_custom_type_lists():
+    custom_class_list_path = os.path.join(DATA_DIR, 'custom_class_data', 'custom_class_data_list.json')
+    custom_class_id_list_path = os.path.join(DATA_DIR, 'custom_class_data_id', 'custom_class_data_id_list.json')
+    custom_class_list_raw = json.load(open(custom_class_list_path, encoding='utf-8')) if os.path.exists(custom_class_list_path) else []
+    custom_class_id_list_raw = json.load(open(custom_class_id_list_path, encoding='utf-8')) if os.path.exists(custom_class_id_list_path) else []
+    custom_class_list = [c.get('name') for c in custom_class_list_raw] if custom_class_list_raw else []
+    custom_class_id_list = [c.get('name') for c in custom_class_id_list_raw] if custom_class_id_list_raw else []
+
+    custom_class_schemas = {}
+    for nm in custom_class_list:
+        p = os.path.join(DATA_DIR, 'custom_class_data', nm, f"{nm}.customclass.json")
+        schema = json.load(open(p, encoding='utf-8')) if os.path.exists(p) else []
+        try:
+            pythonSrc.customclassdata._refresh_live_bit_flag_names(schema)
+        except Exception:
+            pass
+        custom_class_schemas[nm] = schema
+
+    return custom_class_list, custom_class_id_list, custom_class_schemas
+
+
+def load_custom_class_data_id_dict(custom_class_id_list):
+    """CustomClassDataID の行データを class_data_id と同じ形( {name+'ID': {'rows': [...]}} )で読み込む"""
+    result = {}
+    for nm in custom_class_id_list:
+        p = os.path.join(DATA_DIR, 'custom_class_data_id', nm, f"{nm}.json")
+        result[nm + 'ID'] = json.load(open(p, encoding='utf-8')) if os.path.exists(p) else {'rows': []}
+    return result
+
+
+def build_custom_type_info(enum_list, class_list, class_data_id_list):
+    """write_binary_field(_extend) / generate_custom_field 用の type_info dict を組み立てる。
+    (pythonSrc/customclassdata.py の関数がそのまま利用できる形)"""
+    custom_class_list, custom_class_id_list, custom_class_schemas = get_custom_type_lists()
+    return {
+        'enum_list': enum_list,
+        'class_list': class_list,
+        'class_data_id_list': class_data_id_list,
+        'custom_class_list': custom_class_list,
+        'custom_class_id_list': custom_class_id_list,
+        'custom_class_schemas': custom_class_schemas,
+    }
+
+
+class _ExtendWriter:
+    """bytearray(f.extend方式) に customclassdata.py 側の f.write(...) ベースの関数を
+    そのまま流用するためのアダプタ"""
+    def __init__(self, buf):
+        self._buf = buf
+
+    def write(self, data):
+        self._buf.extend(data)
+
+
 def get_json_enum(name):
     enum_data = json.load(open(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json")) else []
     return enum_data
@@ -1115,7 +1172,7 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_GAMEOBJECT_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.GAMEOBJECT_FOLDER)),
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
-            (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER))
+            (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER)),
             (SupportFiles.ALL_CUSTOM_CLASS_DATA_ID_BIN, SupportFiles.CUSTOM_CLASS_DATA_FOLDER)
         };
 
@@ -2277,6 +2334,11 @@ def manage_class_detail(name):
         try:
             data = request.get_json()
             logger.debug(f"POST data for class {name}: {data}")
+            # bit/color/bezier/数値型のoptionsを正規化(CustomClassDataと同じロジックを再利用)
+            if isinstance(data, list):
+                for field in data:
+                    if isinstance(field, dict) and (field.get('type') in ('bit', 'color', 'bezier') or field.get('type', '') in pythonSrc.customclassdata.NUMERIC_TYPES):
+                        pythonSrc.customclassdata._normalize_field_options(field)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -2310,6 +2372,7 @@ def generate_class_cs(name):
     try:
         data = request.get_json()
         basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data= get_type_lists()
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name)):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA, name), exist_ok=True)
         cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"Base{name}.cs")
@@ -2317,10 +2380,11 @@ def generate_class_cs(name):
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
+            f.write(f"    [Serializable]\n")
             f.write(f"    public class Base{name} : BaseCustomClassData\n    {{\n")
             read_codes = []
             for item in data:
-                field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
+                field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list, custom_type_info=custom_type_info)
                 f.write(field_data['field'])
                 read_codes.append(field_data['read'])
             f.write(f"\n        public Base{name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
@@ -2332,6 +2396,7 @@ def generate_class_cs(name):
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
+            f.write(f"    [Serializable]\n")
             f.write(f"    public class {name} : Base{name}\n    {{\n")
             f.write("    }\n}\n")
             
@@ -2399,6 +2464,7 @@ def generate_binary_data(name, json_data):
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
     basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data = get_type_lists()
+    custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
 
     f.write(struct.pack('i', len(rows)))
     f.write(struct.pack('i', len(columns)))
@@ -2425,7 +2491,8 @@ def generate_binary_data(name, json_data):
             write_binary_field(
                 f, value, col['type'],
                 basic_types, unity_types, enum_list, class_list,
-                class_data_id_list, enum_data, class_data_id, class_data
+                class_data_id_list, enum_data, class_data_id, class_data,
+                options=col.get('options'), custom_type_info=custom_type_info
             )
 
     return f.getvalue()
@@ -2841,6 +2908,12 @@ def class_data_id_detail(name):
     elif request.method == 'POST':
         try:
             new_data = request.get_json()
+            # columns の options を正規化(bit/color/bezier/数値型)
+            if isinstance(new_data, dict) and isinstance(new_data.get('columns'), list):
+                for col in new_data['columns']:
+                    col_type = (col.get('type') or '').replace('[]', '')
+                    if isinstance(col, dict) and (col_type in ('bit', 'color', 'bezier') or col_type in pythonSrc.customclassdata.NUMERIC_TYPES):
+                        pythonSrc.customclassdata._normalize_field_options(col)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(new_data, f, ensure_ascii=False, indent=2)
             logger.info(f"Saved class-data-id: {name}")
@@ -3133,14 +3206,29 @@ namespace GameCore.Tables
 
     
 #バイナリ書き込み
-def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
-    
+def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=None):
+
     if type_str.endswith('[]'):
         inner_type = type_str[:-2]
         values = value if isinstance(value, list) else []
         f.write(struct.pack('i', len(values)))
         for v in values:
-            write_binary_field(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+            write_binary_field(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
+        return
+
+    # bit / color / bezier、および CustomClassData・CustomClassDataID を参照する型は
+    # pythonSrc/customclassdata.py 側の実装(既にbit/color/bezier対応済み)へ委譲する
+    if type_str in ('bit', 'color', 'bezier') or (
+        custom_type_info and (
+            type_str in custom_type_info.get('custom_class_list', [])
+            or type_str in custom_type_info.get('custom_class_id_list', [])
+        )
+    ):
+        ti = custom_type_info or {
+            'enum_list': enum_list, 'class_list': class_list, 'class_data_id_list': class_data_id_list,
+            'custom_class_list': [], 'custom_class_id_list': [], 'custom_class_schemas': {},
+        }
+        pythonSrc.customclassdata._write_custom_single_value(f, value, type_str, options or {}, ti)
         return
     type_lower = type_str.lower()
 
@@ -3197,27 +3285,41 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
         for item in class_schema:  # class_data → class_schema
             array_size = item.get('arraySize', 0)
             item_value = value.get(item['name']) if isinstance(value, dict) else None
+            item_options = item.get('options')
             if array_size == -1:  # List
                 values = item_value if isinstance(item_value, list) else []
                 f.write(struct.pack('i', len(values)))
                 for v in values:
-                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
             elif array_size > 0:  # Array
                 values = item_value if isinstance(item_value, list) else [None] * array_size
                 for v in values[:array_size]:
-                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                    write_binary_field(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
             else:
-                write_binary_field(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data )
+                write_binary_field(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
     else:
         f.write(struct.pack('i', 0))  # 未サポート型
         
-def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data):
+def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=None):
     if type_str.endswith('[]'):
         inner_type = type_str[:-2]
         values = value if isinstance(value, list) else []
         f.extend(struct.pack('i', len(values)))
         for v in values:
-            write_binary_field_extend(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+            write_binary_field_extend(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
+        return
+
+    if type_str in ('bit', 'color', 'bezier') or (
+        custom_type_info and (
+            type_str in custom_type_info.get('custom_class_list', [])
+            or type_str in custom_type_info.get('custom_class_id_list', [])
+        )
+    ):
+        ti = custom_type_info or {
+            'enum_list': enum_list, 'class_list': class_list, 'class_data_id_list': class_data_id_list,
+            'custom_class_list': [], 'custom_class_id_list': [], 'custom_class_schemas': {},
+        }
+        pythonSrc.customclassdata._write_custom_single_value(_ExtendWriter(f), value, type_str, options or {}, ti)
         return
     type_lower = type_str.lower()
 
@@ -3274,17 +3376,18 @@ def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum
         for item in class_schema:  # class_data → class_schema
             array_size = item.get('arraySize', 0)
             item_value = value.get(item['name']) if isinstance(value, dict) else None
+            item_options = item.get('options')
             if array_size == -1:  # List
                 values = item_value if isinstance(item_value, list) else []
                 f.extend(struct.pack('i', len(values)))
                 for v in values:
-                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
             elif array_size > 0:  # Array
                 values = item_value if isinstance(item_value, list) else [None] * array_size
                 for v in values[:array_size]:
-                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                    write_binary_field_extend(f, v, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
             else:
-                write_binary_field_extend(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data )
+                write_binary_field_extend(f, item_value, item['type'], basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=item_options, custom_type_info=custom_type_info)
     else:
         f.extend(struct.pack('i', 0))  # 未サポート型
 
@@ -3300,6 +3403,7 @@ def generate_binary(name):
         os.makedirs(os.path.dirname(bin_path), exist_ok=True)
         
         basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
         
         with open(bin_path, 'wb') as f:
             # ヘッダ: 行数, カラム数
@@ -3361,26 +3465,34 @@ def generate_binary(name):
                         for item in class_schema:
                             item_value = actual_value.get(item['name'])
                             array_size = item.get('arraySize', 0)
+                            item_options = item.get('options')
                             if array_size == -1:  # List
                                 values = item_value if isinstance(item_value, list) else []
                                 f.write(struct.pack('i', len(values)))
                                 for v in values:
-                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
+                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data, options=item_options, custom_type_info=custom_type_info)
                             elif array_size > 0:  # Array
                                 values = item_value if isinstance(item_value, list) else [None] * array_size
                                 for v in values[:array_size]:
-                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
+                                    write_binary_field(f, v, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data, options=item_options, custom_type_info=custom_type_info)
                             else:
-                                write_binary_field(f, item_value, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data)
+                                write_binary_field(f, item_value, item['type'],basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data, options=item_options, custom_type_info=custom_type_info)
+
+                    elif col['type'] in ('bit', 'color', 'bezier') or col['type'] in custom_type_info['custom_class_list'] or col['type'] in custom_type_info['custom_class_id_list']:
+                        # CustomClassData / CustomClassDataID 参照、または bit/color/bezier型
+                        actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
+                        pythonSrc.customclassdata._write_custom_single_value(f, actual_value, col['type'], col.get('options') or {}, custom_type_info)
+
                     else:
                         col_name_type = col['type']
-                        # 配列型カラム("int[]", "MyClass[]"など)
+                        actual_value = col_value.get('value') if isinstance(col_value, dict) else col_value
+                        # 配列型カラム("int[]", "MyClass[]", "SomeCustomClass[]"など)
                         if col_name_type.endswith('[]'):
                             base_type = col_name_type[:-2]
                             arr_vals = actual_value if isinstance(actual_value, list) else []
                             f.write(struct.pack('i', len(arr_vals)))  # 長さを先に書く
                             for v in arr_vals:
-                                write_binary_field(f, v, base_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data)
+                                write_binary_field(f, v, base_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=col.get('options'), custom_type_info=custom_type_info)
                             else:
                                 f.write(struct.pack('i', 0))  # 未サポート型
                     
@@ -3862,8 +3974,19 @@ def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
 
 
 # C#フィールド生成（private + ゲッター）
-def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list):
+def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list, custom_type_info=None):
     type_str = item['type'].replace("[]", "")
+
+    # bit / color / bezier、CustomClassData・CustomClassDataID参照は
+    # pythonSrc/customclassdata.py 側の実装(bit/color/bezier対応済み)へ委譲する
+    if custom_type_info and (
+        type_str in ('bit', 'color', 'bezier')
+        or type_str in custom_type_info.get('custom_class_list', [])
+        or type_str in custom_type_info.get('custom_class_id_list', [])
+    ):
+        custom_field = pythonSrc.customclassdata.generate_custom_field(item, custom_type_info)
+        return {'field': custom_field['field'], 'read': custom_field['read']}
+
     var_name = item['name']
     array_size = item.get('arraySize', 0)
     description = item.get('description', '')
@@ -3986,7 +4109,7 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
             read_code = f"            {var_name} = new {type_str}(); // Unsupported\n"
 
     return {
-        'field': f"        private {type_str} {var_name};\n        public {type_str} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
+        'field': f"        [SerializeField]\n        private {type_str} {var_name};\n        public {type_str} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
         'read': read_code
     }
 
@@ -4273,6 +4396,11 @@ def handle_matrix_data(name):
     elif request.method == 'POST':
         try:
             data = request.get_json()
+            if isinstance(data, dict) and isinstance(data.get('fields'), list):
+                for field in data['fields']:
+                    field_type = (field.get('type') or '').replace('[]', '') if isinstance(field, dict) else ''
+                    if isinstance(field, dict) and (field_type in ('bit', 'color', 'bezier') or field_type in pythonSrc.customclassdata.NUMERIC_TYPES):
+                        pythonSrc.customclassdata._normalize_field_options(field)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
             return jsonify({"message": f"Matrix {name} saved"})
@@ -4302,9 +4430,10 @@ def generate_cs_matrix(name):
         
         
         basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
-        if row_id in class_data_id_list:
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+        if row_id in class_data_id_list or row_id in custom_type_info['custom_class_id_list']:
             row_id += "Table"
-        if col_id in class_data_id_list:
+        if col_id in class_data_id_list or col_id in custom_type_info['custom_class_id_list']:
             col_id += "Table"    
 
         # {name}MatrixRow.cs
@@ -4356,6 +4485,8 @@ def generate_binary_matrix(name):
         col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
         fields = json_data['fields']
         basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data= get_type_lists()
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+        custom_class_data_id = load_custom_class_data_id_dict(custom_type_info['custom_class_id_list'])
 
         row_type_id = json_data['rowId'] + 'ID'
         col_type_id = json_data['colId'] + 'ID'
@@ -4365,6 +4496,8 @@ def generate_binary_matrix(name):
                 return next((item['id'] for item in enum_data[type_id] if item['property'] == key), 0)
             elif type_id in class_data_id:
                 return next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
+            elif type_id in custom_class_data_id:
+                return next((row['id'] for row in custom_class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
             return 0
 
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f"{name}.bytes"), 'wb') as f:
@@ -4382,7 +4515,8 @@ def generate_binary_matrix(name):
                         write_binary_field(
                             f, value, field['type'],
                             basic_types, unity_types, enum_list, class_list,
-                            class_data_id_list, enum_data, class_data_id, class_data
+                            class_data_id_list, enum_data, class_data_id, class_data,
+                            options=field.get('options'), custom_type_info=custom_type_info
                         )
 
         return jsonify({"message": f"Binary generated for {name}"})
@@ -4401,12 +4535,16 @@ def generate_binary_matrix_data(name, json_data):
     colId = json_data['colId'] + "ID"
     fields = json_data['fields']
     basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id,class_data = get_type_lists()
+    custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+    custom_class_data_id = load_custom_class_data_id_dict(custom_type_info['custom_class_id_list'])
 
     def resolve_key_id(type_id, key):
         if type_id in enum_data:
             return next((item['id'] for item in enum_data[type_id] if item['property'] == key), 0)
         elif type_id in class_data_id:
             return next((row['id'] for row in class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
+        elif type_id in custom_class_data_id:
+            return next((row['id'] for row in custom_class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
         return 0
 
     binary_data.extend(struct.pack('i', len(row_keys)))
@@ -4423,7 +4561,8 @@ def generate_binary_matrix_data(name, json_data):
                 write_binary_field_extend(
                     binary_data, value, field['type'],
                     basic_types, unity_types, enum_list, class_list,
-                    class_data_id_list, enum_data, class_data_id, class_data
+                    class_data_id_list, enum_data, class_data_id, class_data,
+                    options=field.get('options'), custom_type_info=custom_type_info
                 )
 
     return binary_data

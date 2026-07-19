@@ -255,19 +255,24 @@ function ClassDataMatrixIdDetailGrid() {
     Promise.all([
       fetch('/api/enum-id').then(res => res.json()),
       fetch('/api/class-data').then(res => res.json()),
-      fetch('/api/class-data-id').then(res => res.json())
-    ]).then(([enumList, classListData, classIdList]) => {
+      fetch('/api/class-data-id').then(res => res.json()),
+      fetch('/api/custom-class-data').then(res => res.ok ? res.json() : []),
+      fetch('/api/custom-class-data-id').then(res => res.ok ? res.json() : [])
+    ]).then(([enumList, classListData, classIdList, customClassList, customClassIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
+      const customTypes = ['bit', 'color', 'bezier'];
       const enumTypes = enumList.map(item => item.name);
       const classTypes = classListData.map(item => item.name);
       const classIdTypes = classIdList.map(item => item.name);
+      const customClassTypes = (Array.isArray(customClassList) ? customClassList : []).map(item => item.name);
+      const customClassIdTypes = (Array.isArray(customClassIdList) ? customClassIdList : []).map(item => item.name);
 
       // ★ classDataの一覧を保持（配列型判定・ネスト編集に使う）
       setClassList(classTypes);
 
       // ★ 配列型のオプションを追加（"int[]" のような表記で動的配列を選べるように）
-      const allBaseTypes = [...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIdTypes];
+      const allBaseTypes = [...basicTypes, ...unityTypes, ...customTypes, ...enumTypes, ...classTypes, ...classIdTypes, ...customClassTypes, ...customClassIdTypes];
       const arrayTypes = allBaseTypes.map(t => `${t}[]`);
 
       setTypeOptions([...allBaseTypes, ...arrayTypes]);
@@ -288,6 +293,15 @@ function ClassDataMatrixIdDetailGrid() {
             [c.name]: Array.isArray(d.rows) ? d.rows.map(r => r.enum_property || '').filter(v => v) : []
           }))
       );
+      // ★ CustomClassDataID の行データ（キー一覧・bit参照元などに使う）
+      const customClassIdPromises = customClassIdTypes.map(nm =>
+        fetch(`/api/custom-class-data-id/${encodeURIComponent(nm)}`)
+          .then(res => res.ok ? res.json() : { rows: [] })
+          .catch(() => ({ rows: [] }))
+          .then(d => ({
+            [nm]: Array.isArray(d.rows) ? d.rows.map(r => r.enum_property || '').filter(v => v) : []
+          }))
+      );
       // ★ classDataスキーマの取得（ネスト編集・配列デフォルト値生成に使う）
       const classSchemaPromises = classTypes.map(className =>
         fetch(`/api/class-data/${encodeURIComponent(className)}`)
@@ -295,16 +309,25 @@ function ClassDataMatrixIdDetailGrid() {
           .then(d => ({ [className]: Array.isArray(d) ? d : [] }))
           .catch(() => ({ [className]: [] }))
       );
+      // ★ CustomClassDataのスキーマ（ネスト編集に使う。ClassDataと同じ形で classSchemas に統合する）
+      const customClassSchemaPromises = customClassTypes.map(className =>
+        fetch(`/api/custom-class-data/${encodeURIComponent(className)}`)
+          .then(res => res.ok ? res.json() : [])
+          .then(d => ({ [className]: Array.isArray(d) ? d : [] }))
+          .catch(() => ({ [className]: [] }))
+      );
       return Promise.all([
         Promise.all(enumPromises),
         Promise.all(classIdPromises),
+        Promise.all(customClassIdPromises),
         Promise.all(classSchemaPromises),
+        Promise.all(customClassSchemaPromises),
       ]);
-    }).then(([enumResults, classIdResults, classSchemaResults]) => {
-      const newEnumValues = Object.assign({}, ...enumResults, ...classIdResults);
+    }).then(([enumResults, classIdResults, customClassIdResults, classSchemaResults, customClassSchemaResults]) => {
+      const newEnumValues = Object.assign({}, ...enumResults, ...classIdResults, ...customClassIdResults);
       console.log('enumValues:', newEnumValues);
       setEnumValues(newEnumValues);
-      const schemasMap = Object.assign({}, ...classSchemaResults);
+      const schemasMap = Object.assign({}, ...classSchemaResults, ...customClassSchemaResults);
       setClassSchemas(schemasMap);
     }).catch(error => {
       alert('型オプション取得エラー: ' + error.message);
@@ -717,6 +740,7 @@ function ClassDataMatrixIdDetailGrid() {
           baseType={baseType}
           enumValues={enumValues}
           classSchemas={classSchemas}
+          options={field.options}
           isDynamic={true}
           arraySize={-1}
           onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })}
@@ -727,6 +751,7 @@ function ClassDataMatrixIdDetailGrid() {
           type={baseType}
           enumValues={enumValues}
           classSchemas={classSchemas}
+          options={field.options}
           onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })}
         />
       )}

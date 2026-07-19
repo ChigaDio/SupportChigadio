@@ -430,8 +430,11 @@ namespace GameCore.Classes
     [Serializable]
     public abstract class CustomBitFieldBase
     {
+        [SerializeField]
         public int Size { get; protected set; }
+        [SerializeField]
         protected ulong single;
+        [SerializeField]
         protected ulong[] array;
         protected bool UseArray => Size > 64;
 
