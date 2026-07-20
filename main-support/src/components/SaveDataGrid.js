@@ -35,12 +35,25 @@ function SaveDataGrid() {
         Promise.all([
             fetch('/api/enum-id').then(res => res.json()),
             fetch('/api/class-data').then(res => res.json()),
-            fetch('/api/class-data-id').then(res => res.json())
-        ]).then(([enumList, classList, classIDList]) => {
+            fetch('/api/class-data-id').then(res => res.json()),
+            // CustomClassData / CustomClassDataID (bit・color・bezier対応版) も選択できるようにする
+            fetch('/api/custom-class-data-type-options').then(res => res.json())
+        ]).then(([enumList, classList, classIDList, customOptions]) => {
             const enumTypes = enumList.map(item => item.name);
             const classTypes = classList.map(item => item.name);
             const classIDTypes = classIDList.map(item => item.name);
-            setTypeOptions([...basicTypes, ...unityTypes, ...enumTypes, ...classTypes, ...classIDTypes]);
+            const customClassTypes = customOptions.custom_class_list || [];
+            const customClassIDTypes = customOptions.custom_class_id_list || [];
+            // Save は BinaryFormatter でオブジェクトごとシリアライズするため、
+            // UnityEngine.AnimationCurve(bezier) は非対応(BinaryFormatterでは
+            // シリアライズできない型のため)。bit/color はどちらもC#側で
+            // [Serializable] 付きの型に解決されるので問題なく使える。
+            const customValueTypes = (customOptions.custom_types || []).filter(t => t !== 'bezier');
+            setTypeOptions([
+                ...basicTypes, ...unityTypes,
+                ...enumTypes, ...classTypes, ...classIDTypes,
+                ...customClassTypes, ...customClassIDTypes, ...customValueTypes
+            ]);
         }).catch(error => console.error('Error fetching type options:', error));
     };
 

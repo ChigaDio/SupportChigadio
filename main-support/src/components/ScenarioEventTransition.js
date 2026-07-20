@@ -29,6 +29,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import RoleInputFactory from '../scenario/RoleInputFactory';
 import { debounce } from 'lodash';
 
@@ -57,14 +58,27 @@ const getNextNodeId = (nodes) => {
 const schemaCache = {};
 const schemaInFlight = {};
 
-const fetchSchemaOnce = async (roleName) => {
-  if (schemaCache[roleName]) return schemaCache[roleName];
-  if (schemaInFlight[roleName]) return schemaInFlight[roleName];
+const fetchSchemaOnce = async (roleName, forceRefresh = false) => {
+  // forceRefresh=true のときはキャッシュを無視して必ずサーバーから取り直す。
+  // Role定義(型・options)を編集した直後にこのページを開いたまま戻ってきても、
+  // 古いスキーマのままにならないようにするため。
+  if (!forceRefresh) {
+    if (schemaCache[roleName]) return schemaCache[roleName];
+    if (schemaInFlight[roleName]) return schemaInFlight[roleName];
+  }
   schemaInFlight[roleName] = fetch(`/api/role-form-schema/${roleName}`)
     .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
     .then(schema => { schemaCache[roleName] = schema; delete schemaInFlight[roleName]; return schema; })
     .catch(err => { delete schemaInFlight[roleName]; throw err; });
   return schemaInFlight[roleName];
+};
+
+// Role定義(型・bit/color/bezierのoptionsなど)を編集した後、キャンバス側の
+// roleFormSchemas(Reactステート)にも古いスキーマが残ってしまうことがあるため、
+// 手動で再取得したい場合にモジュールキャッシュ側を明示的に破棄できるようにする。
+const invalidateRoleSchemaCache = (roleName) => {
+  delete schemaCache[roleName];
+  delete schemaInFlight[roleName];
 };
 
 // ============================================================
@@ -150,7 +164,11 @@ const RoleDataDrawer = ({
       loadedRef.current[uid] = true;
       setLoadingForms(prev => ({ ...prev, [uid]: true }));
       try {
-        const schema = roleFormSchemas[role.name] || await fetchSchemaOnce(role.name);
+        // Drawerを開くたびに必ず最新のスキーマを取得する。
+        // roleFormSchemas(キャンバス側のキャッシュ)は初回ロード時のまま更新されないため、
+        // Role定義(型・bit/color/bezierのoptionsなど)を編集した直後でも
+        // 確実に反映されるよう、ここではキャッシュを使わない。
+        const schema = await fetchSchemaOnce(role.name, true);
         const FormComp = await RoleInputFactory.getForm(
           role.name,
           formDataState[uid] || role.data || [],
@@ -1214,6 +1232,28 @@ function ScenarioEventTransition() {
               sx={{ bgcolor: 'rgba(255,255,255,0.15)', color: 'white', fontSize: '0.65rem', height: 22 }}
             />
           )}
+
+          <Tooltip title="Role定義(型・オプション)を変更した場合、ここを押すと最新のスキーマを取り直します">
+            <Button variant="outlined" size="small"
+              startIcon={<RefreshIcon />}
+              onClick={async () => {
+                const fresh = {};
+                for (const role of globalRoles) {
+                  invalidateRoleSchemaCache(role.name);
+                  try {
+                    fresh[role.name] = await fetchSchemaOnce(role.name, true);
+                  } catch (e) {
+                    console.error(`スキーマ再取得エラー (${role.name}):`, e);
+                  }
+                }
+                setRoleFormSchemas(fresh);
+                showSnack('Roleスキーマを再取得しました');
+              }}
+              disabled={isLoading}
+              sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+              Roleスキーマ再取得
+            </Button>
+          </Tooltip>
 
           <Box sx={{ flex: 1 }} />
 

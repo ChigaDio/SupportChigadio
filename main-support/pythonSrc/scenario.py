@@ -9,6 +9,12 @@ from enum import Enum
 import glob
 from venv import logger
 
+# CustomClassData / CustomClassDataID (bit・color・bezier対応済みの型解決とバイナリ書き込み)を
+# シナリオ側でも再利用するために読み込む。app.py 側で customclassdata.register() が
+# 呼ばれ済みであることを前提とする(_state['DATA_DIR'] が必要なAPI呼び出しは
+# 実行時=Flaskアプリ起動後にしか行われないため問題ない)。
+import pythonSrc.customclassdata as customclassdata
+
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     # PyInstallerでビルドされた場合
@@ -1127,7 +1133,7 @@ def get_type_lists():
     basic_types = ['int', 'float', 'bool', 'string', 'double', 'byte', 'char', 'short', 'long', 'decimal', 'object']
     unity_types = ['GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 'Color', 'Rect', 'Bounds', 'Matrix4x4', 'AnimationCurve', 'Sprite', 'Texture', 'Material', 'Mesh', 'Rigidbody', 'Collider', 'AudioClip', 'ScriptableObject']
     enum_dir = os.path.join(DATA_DIR, 'enum')
-    class_dir = os.path.join(DATA_DIR, 'class-data')
+    class_dir = os.path.join(DATA_DIR, 'class_data')
     class_id_dir = os.path.join(DATA_DIR, 'class_data_id')
     enum_list = json.load(open(os.path.join(enum_dir, 'enum_list.json'))) if os.path.exists(os.path.join(enum_dir, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(class_dir, 'class_list.json'))) if os.path.exists(os.path.join(class_dir, 'class_list.json')) else []
@@ -1140,8 +1146,35 @@ def get_type_lists():
         [c.get('name') for c in class_id_list]
     )
 
+# CustomClassData のフィールド一覧(name.customclass.json由来)を、role-form-schema と
+# 同じ形の subFields に変換する(bit/color/bezier や入れ子のCustomClassDataにも対応する再帰)。
+def _build_custom_class_subfields(fields, custom_info, depth, max_depth):
+    if depth > max_depth:
+        return []
+    custom_class_list = custom_info['custom_class_list']
+    custom_class_schemas = custom_info['custom_class_schemas']
+    result = []
+    for f in fields or []:
+        sub = {
+            "name": f['name'],
+            "label": f.get('name'),
+            "arraySize": f.get('arraySize', 0),
+            "description": f.get('description', ''),
+            "type": f['type'],
+        }
+        if f['type'] in ('bit', 'color', 'bezier'):
+            sub['options'] = f.get('options', {})
+        elif f['type'] in custom_class_list:
+            sub['subFields'] = _build_custom_class_subfields(
+                custom_class_schemas.get(f['type'], []), custom_info, depth + 1, max_depth
+            )
+        result.append(sub)
+    return result
+
+
 # generate_role_form_schema (全考慮版)
-def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
+# bit/color/bezier、CustomClassData・CustomClassDataID参照にも対応する。
+def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom_info=None):
     if depth > max_depth:
         return {"fields": [], "error": "Max depth reached"}
 
@@ -1153,14 +1186,27 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
         role_data = role_json.get('data', [])
         branch_type = role_json.get('branchType', 'General')
 
+    # CustomClassData/CustomClassDataID の一覧・スキーマは1回だけ取得して再帰呼び出しに使い回す
+    custom_info = _custom_info or customclassdata.get_extended_type_lists()
+    custom_class_list = custom_info['custom_class_list']
+    custom_class_id_list = custom_info['custom_class_id_list']
+    custom_class_schemas = custom_info['custom_class_schemas']
+
+    _, _, enum_names, class_names, class_id_names = get_type_lists()
+
     schema = {"fields": [], "branchType": branch_type}
 
     for var in role_data:
-        field = {"name": var['name'], "label": var['name'], "arraySize":var["arraySize"], "description": var.get('description', '')}
+        field = {"name": var['name'], "label": var['name'], "arraySize": var.get("arraySize", 0), "description": var.get('description', '')}
         var_type = var['type']
 
+        # bit / color / bezier: 値編集に必要な options をそのままフロントへ渡す
+        if var_type in ('bit', 'color', 'bezier'):
+            field['type'] = var_type
+            field['options'] = var.get('options', {})
+
         # 各数値型を個別に割り当て
-        if var_type in ['int', 'float', 'double', 'short', 'long', 'decimal', 'byte', 'char']:
+        elif var_type in ['int', 'float', 'double', 'short', 'long', 'decimal', 'byte', 'char']:
             field['type'] = var_type  # ← まとめず個別型名をそのまま使う
 
         # bool
@@ -1180,7 +1226,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
             field['type'] = 'vector4'
 
         # Enum
-        elif var_type in get_type_lists()[2]:
+        elif var_type in enum_names:
             field['type'] = var_type
             enum_values = get_enum_values()
             if var_type in enum_values:
@@ -1189,10 +1235,28 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3):
                 field['options'] = []
                 field['warning'] = 'Enum options not found'
 
-        # class-data/class_data_id
-        elif var_type in get_type_lists()[3] or var_type in get_type_lists()[4]:
+        # CustomClassDataID: class_data_id と同じくID参照。値候補はフロント側が
+        # /api/custom-class-data-id から取得するので、typeだけ渡せば十分。
+        elif var_type in custom_class_id_list:
             field['type'] = var_type
-            sub_schema = generate_role_form_schema(var_type, data_dir, depth + 1, max_depth)
+
+        # CustomClassData: ネストしたオブジェクト。フロントは通常
+        # /api/custom-class-data-type-options から取得した custom_class_schemas を使って
+        # 描画するが、バックエンド側のスキーマにも参考として subFields を載せておく。
+        elif var_type in custom_class_list:
+            field['type'] = var_type
+            field['subFields'] = _build_custom_class_subfields(
+                custom_class_schemas.get(var_type, []), custom_info, depth + 1, max_depth
+            )
+
+        # class_data_id: IDテーブル参照(値候補はフロントが/api/class-data-idから取得)
+        elif var_type in class_id_names:
+            field['type'] = var_type
+
+        # class_data: ネストしたClassData
+        elif var_type in class_names:
+            field['type'] = var_type
+            sub_schema = generate_role_form_schema(var_type, data_dir, depth + 1, max_depth, custom_info)
             field['subFields'] = sub_schema['fields'] if sub_schema else []
 
         else:
@@ -1327,79 +1391,87 @@ def write_7bit_encoded_int(value: int) -> bytes:
     return bytes(result)
 
 # Event bin 生成ヘルパー
-def pack_value(value, type_,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data):
-    type_lower = type_.lower()
-    if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
-        return b''  # スキップ
-    if type_lower in ['int', 'short', 'long', 'byte', 'char']:
-        return struct.pack('i', int(value))
-    elif type_lower == 'float':
-        return struct.pack('f', float(value))
-    elif type_lower == 'double':
-        return struct.pack('d', float(value))
-    elif type_lower == 'bool':
-        return struct.pack('?', bool(value))
-    elif type_lower == 'string':
-        encoded = value.encode('utf-8')
-        return write_7bit_encoded_int(len(encoded)) + encoded
-    elif type_lower == 'vector2':
-        return struct.pack('ff', *map(float, value))
-    elif type_lower == 'vector3':
-        return struct.pack('fff', *map(float, value))
-    elif type_lower == 'vector4':
-        return struct.pack('ffff', *map(float, value))
-    elif type_ + "ID" in enum_data:
-        # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
-        property_name = value
-        actual_id = next((item['id'] for item in enum_data[type_ + "ID"] if item['property'] == property_name.split('.')[-1]), 0)
-        return struct.pack('i', actual_id)
-                    
-    elif type_ + "ID" in class_data_id:
-        property_name = value
-        actual_id = next((row['id'] for row in class_data_id[type_+ "ID"]['rows'] if row['enum_property'] == property_name.split('.')[-1]), 0)
-        return struct.pack('i', actual_id)
-    elif type_ in class_list:
-        property_name = value
-        customData =  class_data[type_]
-        section = bytearray()
-        for detailsData in customData:
-            typeDetails = detailsData["type"]
-            arraySize = detailsData["arraySize"]
-            valueDetails = None
-            
-            for key, valueData in value.items():
-                if(key == detailsData["name"]):
-                    valueDetails = valueData
-                    break
-            if valueDetails == None:
-                 return struct.pack('i', int(0))
-            
-            if arraySize == 0:
-                return (pack_value(valueDetails, typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
-            elif arraySize > 0:
-                for count in range(0,arraySize):
-                    section.extend(pack_value(valueDetails[count], typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
-            elif arraySize <= -1:
-                section.extend(struct.pack('i', int(arraySize)))
-                for count in range(0,arraySize):
-                    section.extend(pack_value(valueDetails[count], typeDetails,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
-                    
-        
-        
-        
-        return section
-    else:  # enuass_id
-        return struct.pack('i', int(value))
-    
+#
+# 実際のバイナリ書き込みは pythonSrc/customclassdata.py 側の実装(_write_custom_single_value /
+# _write_custom_field_value)に委譲する。理由:
+#   - あちら側はすでに bit/color/bezier、CustomClassData・CustomClassDataID、通常の
+#     enum/classData/classDataID を正しくバイナリ化できており、C#側の生成コード
+#     (generate_csharp_field / generate_custom_field の ReadBinary)ともバイト単位で
+#     整合が取れている。
+#   - 旧実装には (a) NaN/Infの値でバイト自体を書かずスキップしてしまい後続フィールドの
+#     オフセットがずれる、(b) byte/short/longを全部4バイトint扱いで書いてしまいC#側の
+#     ReadByte/ReadInt16/ReadInt64と桁数が合わない、(c) ClassData型のフィールドが複数ある
+#     とき最初の1個を書いた時点で return してしまい残りのフィールドが書き込まれない、
+#     という3つの実害あるバグがあったため、書き直すよりも「動作確認済みの実装を再利用する」
+#     方が安全。
+# Vector4 のみ customclassdata 側に無い型のため、ここで個別対応する。
+def build_scenario_type_info(enum_list, class_list, class_data_id_list):
+    """pack_value/write_field_value で使う type_info を組み立てる。
+    CustomClassData・CustomClassDataIDの一覧/スキーマは customclassdata 側から取得する。"""
+    ext = customclassdata.get_extended_type_lists()
+    return {
+        'enum_list': enum_list,
+        'class_list': class_list,
+        'class_data_id_list': class_data_id_list,
+        'custom_class_list': ext['custom_class_list'],
+        'custom_class_id_list': ext['custom_class_id_list'],
+        'custom_class_schemas': ext['custom_class_schemas'],
+    }
+
+
+def pack_value(value, type_, basic_types, unity_types, enum_list, class_list, class_data_id_list,
+               enum_data, class_data_id, class_data, options=None, type_info=None):
+    """1つの値をバイナリへ変換して返す(後方互換のための薄いラッパー)。
+    type_info を渡さない場合は enum_list/class_list/class_data_id_list のみから組み立てる
+    (この場合 CustomClassData/CustomClassDataID・bit/color/bezier は非対応になる)。"""
+    info = type_info or {
+        'enum_list': enum_list,
+        'class_list': class_list,
+        'class_data_id_list': class_data_id_list,
+        'custom_class_list': [],
+        'custom_class_id_list': [],
+        'custom_class_schemas': {},
+    }
+    type_str = (type_ or '').replace('[]', '')
+    buf = io.BytesIO()
+    if type_str == 'Vector4':
+        x, y, z, w = value if isinstance(value, (list, tuple)) and len(value) >= 4 else [0.0, 0.0, 0.0, 0.0]
+        buf.write(struct.pack('ffff', float(x or 0), float(y or 0), float(z or 0), float(w or 0)))
+    else:
+        customclassdata._write_custom_single_value(buf, value, type_str, options or {}, info)
+    return buf.getvalue()
+
+
+def write_field_value(buf, value, type_str, array_size, options, type_info):
+    """schema 1フィールド分(配列/固定長配列/単一値)をバイナリとして buf(bytearray)に追記する。
+    generate_all_event_bin 側の roles / inner_roles 双方から共通で呼び出す。"""
+    type_str = (type_str or '').replace('[]', '')
+    array_size = array_size or 0
+
+    def pack_single(v):
+        return pack_value(v, type_str, None, None, None, None, None, None, None, None,
+                           options=options, type_info=type_info)
+
+    if array_size == -1:
+        values = value if isinstance(value, list) else []
+        buf.extend(struct.pack('i', len(values)))
+        for v in values:
+            buf.extend(pack_single(v))
+    elif array_size > 0:
+        values = value if isinstance(value, list) else []
+        for i in range(array_size):
+            buf.extend(pack_single(values[i] if i < len(values) else None))
+    else:
+        buf.extend(pack_single(value))
 
 def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data ):
     all_bin_path = os.path.join(DATA_DIR, SCENARIO_EVENT, 'all_events.bytes')
     header = bytearray()
     data_sections = bytearray()
-    
-    
-    
-    
+
+    # bit/color/bezier・CustomClassData・CustomClassDataID を含めたバイナリ書き込みに使う type_info
+    type_info = build_scenario_type_info(enum_list, class_list, class_data_id_list)
+
     # 1. Load event JSON files
     event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
     event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))  # Original path
@@ -1448,9 +1520,12 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
         event_offset_positions.append((event_id, offset_pos))
         logger.debug(f"Event header: ID={event_id}, Name={event.get('name', '')}, OffsetPos={offset_pos}")
     
-    # 3. Load role schemas
+    # 3. Load role schemas (name/type だけでなく arraySize・options も保持する)
     role_schemas = {
-        'TalkText': [('text', 'string'), ('name', 'string')]  # Temporary schema
+        'TalkText': [
+            {'name': 'text', 'type': 'string', 'arraySize': 0, 'options': {}},
+            {'name': 'name', 'type': 'string', 'arraySize': 0, 'options': {}},
+        ]  # Temporary schema
     }
     role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
     for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
@@ -1459,11 +1534,31 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
             with open(role_file, 'r', encoding='utf-8') as f:
                 schema_data = json.load(f)
                 fields = schema_data.get('data', [])
-                role_schemas[role_name] = [(field['name'], field['type']) for field in fields]
+                role_schemas[role_name] = [
+                    {
+                        'name': field['name'],
+                        'type': field['type'],
+                        'arraySize': field.get('arraySize', 0),
+                        'options': field.get('options', {}),
+                    }
+                    for field in fields
+                ]
             logger.debug(f"Loaded role schema: {role_name}")
         except Exception as e:
             logger.error(f"Failed to load role file {role_file}: {e}")
-    
+
+    def write_role_fields(sub_section, role, schema_fields):
+        """1つのRoleが持つフィールド値をすべてバイナリへ書き込む(roles/inner_roles共通)。"""
+        fields = role.get('data', [])
+        for field_idx in range(min(len(fields), len(schema_fields))):
+            field = fields[field_idx]
+            schema_field = schema_fields[field_idx]
+            field_type = schema_field['type']
+            # arraySizeは実データ側(fieldの編集結果)を優先し、無ければスキーマ側にフォールバックする
+            array_size = field.get('arraySize', schema_field.get('arraySize', 0))
+            options = field.get('options', schema_field.get('options', {}))
+            write_field_value(sub_section, field.get('value', ''), field_type, array_size, options, type_info)
+
     # 4. Data section generation
     for event in events:
         event_id = event.get('id', '')
@@ -1525,11 +1620,8 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                         sub_section.extend(struct.pack('i', role_id))
                         logger.debug(f"Role ID: {role_id}")
                         schema_fields = role_schemas.get(role.get('name', ''), [])
-                        fields = role.get('data', [])
-                        for field_idx in range(min(len(fields), len(schema_fields))):
-                            field = fields[field_idx]
-                            _, field_type = schema_fields[field_idx]
-                            sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+                        # arraySize(-1=可変長リスト等)を含め、inner_rolesと同じロジックで書き込む
+                        write_role_fields(sub_section, role, schema_fields)
 
                 for inner_sub_id, inner_sub in inner_subgroups.items():
                     inner_nodes = inner_sub.get('nodes', [])
@@ -1545,22 +1637,7 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                             sub_section.extend(struct.pack('i', inner_role_id))
                             logger.debug(f"Inner Role ID: {inner_role_id}")
                             inner_schema_fields = role_schemas.get(inner_role.get('name', ''), [])
-                            inner_fields = inner_role.get('data', [])
-                            for field_idx in range(min(len(inner_fields), len(inner_schema_fields))):
-                                field = inner_fields[field_idx]
-                                _, field_type = inner_schema_fields[field_idx]
-                                if(field_type == "Fade"):
-                                    print("Fade type found, skipping value packing for this field.")
-                                arraySize = field.get('arraySize',0)
-                                if arraySize == 0:
-                                    sub_section.extend(pack_value(field.get('value', ''), field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
-                                elif arraySize > 0:
-                                    for count in range(0,arraySize):
-                                        sub_section.extend(pack_value(field.get('value', '')[count], field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
-                                elif arraySize <= -1:
-                                    sub_section.extend(struct.pack('i', int(arraySize)))
-                                    for count in range(0,arraySize):
-                                        sub_section.extend(pack_value(field.get('value', '')[count], field_type,basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data))
+                            write_role_fields(sub_section, inner_role, inner_schema_fields)
 
             section.extend(sub_section)
 

@@ -718,6 +718,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, "BaseCustomClassData.cs
 
     namespace GameCore.Classes
     {
+        [System.Serializable]
         public abstract class BaseCustomClassData
         {
             public abstract void Read(BinaryReader reader);
@@ -4903,6 +4904,7 @@ def generate_scenario_role_cs(name):
     data_path = os.path.join(role_dir, f"{name}.json")
     
     basic_types, unity_types, enum_list, class_list, class_data_id_list,enum_data,class_data_id,class_data = get_type_lists()
+    custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)  # ← 追加
     if not os.path.exists(data_path):
         return jsonify({"error": "Data not found"}), 404
     with open(data_path, 'r', encoding='utf-8') as f:
@@ -4917,7 +4919,10 @@ def generate_scenario_role_cs(name):
         f.write(f"   public class {name}RoleData : BaseScenarioRoleData \n    {{\n")
         read_codes = []
         for item in data:
-            field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list)
+            field_data = generate_csharp_field(
+                item, enum_list, class_list, unity_types, basic_types, class_data_id_list,
+                custom_type_info=custom_type_info,  # ← 追加
+            )
             f.write(field_data['field'])
             read_codes.append(field_data['read'])
         f.write(f"\n        public {name}RoleData() : base() {{  RoleID = ScenarioRoleID.{name};  }}\n       public override void ReadBinary(BinaryReader reader)        {{\n")
@@ -5531,11 +5536,29 @@ def generate_files():
 
 @app.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
 def open_code(state_name, node_label):
-    cs_path = os.path.join(DATA_DIR, STATE_DATA, state_name, "States",f"{state_name}{node_label}State.cs")
+    cs_path = os.path.join(DATA_DIR, STATE_DATA, state_name, "States", f"{state_name}{node_label}State.cs")
     if not os.path.exists(cs_path):
         return jsonify({"error": "File not found"}), 404
 
-    # Possible Visual Studio 2022 Community paths
+    # ==================== VSCode優先 ====================
+    vs_code_running = False
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and proc.info['name'].lower() in ('code.exe', 'code'):
+            vs_code_running = True
+            break
+
+    if vs_code_running:
+        try:
+            # `code` コマンドがPATHにある前提（インストール時に「Add to PATH」を推奨）
+            subprocess.Popen(['code', cs_path], shell=True)
+            return jsonify({"message": "Opened in VS Code"})
+        except FileNotFoundError:
+            # codeコマンドが見つからない場合はVSにフォールバック
+            pass
+        except Exception as e:
+            return jsonify({"error": f"VSCode error: {str(e)}"}), 500
+
+    # ==================== Visual Studio 2022 フォールバック ====================
     possible_vs_paths = [
         r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
         r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
@@ -5554,12 +5577,11 @@ def open_code(state_name, node_label):
     if not vs_path:
         return jsonify({"error": "Visual Studio 2022 not found on system"}), 404
 
-    # Check if Visual Studio is running
-    vs_running = False
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'].lower() == 'devenv.exe':
-            vs_running = True
-            break
+    # VSが起動しているかチェック（任意）
+    vs_running = any(
+        proc.info['name'] and proc.info['name'].lower() == 'devenv.exe'
+        for proc in psutil.process_iter(['name'])
+    )
 
     if not vs_running:
         return jsonify({"error": "Visual Studio 2022 is not currently running"}), 400
@@ -5807,6 +5829,48 @@ def manage_save_data_schema(name):
         except Exception as e:
             logger.error(f"Error saving {name} schema: {e}")
             return jsonify({"error": str(e)}), 500
+        
+def resolve_save_field_cs_type(type_name, custom_type_info):
+    """SaveData(SystemData/PlayerData)の1フィールド分のC#型名と初期化式を解決する。
+    generate_csharp_field / pythonSrc.customclassdata.generate_custom_field と
+    同じ型解決ルールを使う(Save側はBinaryFormatterでのフルオブジェクト
+    シリアライズなので、ReadBinary相当のコードまでは不要で型名の解決だけで足りる)。
+    戻り値: (cs_type: str, initial_expr: str|None)
+    """
+    enum_list = custom_type_info['enum_list']
+    class_list = custom_type_info['class_list']
+    class_data_id_list = custom_type_info['class_data_id_list']
+    custom_class_list = custom_type_info['custom_class_list']
+    custom_class_id_list = custom_type_info['custom_class_id_list']
+
+    if type_name == 'bit':
+        # SaveData側の変数定義には現状 options を持たせていないため、
+        # 手動指定(size=8)のCustomBitFieldとして解決する。
+        return pythonSrc.customclassdata._bit_cs_type_and_initial({})
+    if type_name == 'color':
+        return 'UnityEngine.Color', 'new UnityEngine.Color(1f, 1f, 1f, 1f)'
+    if type_name == 'bezier':
+        return 'UnityEngine.AnimationCurve', 'new UnityEngine.AnimationCurve()'
+    if type_name in enum_list:
+        cs = f"GameCore.Enums.{type_name}ID"
+        return cs, f"{cs}.None"
+    if type_name in class_list:
+        cs = f"GameCore.Classes.{type_name}"
+        return cs, f"new {cs}()"
+    if type_name in class_data_id_list or type_name in custom_class_id_list:
+        # CustomClassDataIDもClassDataID同様、TableID enumとして扱う
+        cs = f"GameCore.Tables.ID.{type_name}TableID"
+        return cs, f"{cs}.None"
+    if type_name in custom_class_list:
+        cs = f"GameCore.Classes.{type_name}"
+        return cs, f"new {cs}()"
+    if type_name.lower() == 'vector2':
+        return 'UnityEngine.Vector2', 'new UnityEngine.Vector2()'
+    if type_name.lower() == 'vector3':
+        return 'UnityEngine.Vector3', 'new UnityEngine.Vector3()'
+    if type_name.lower() == 'string':
+        return 'string', '""'
+    return type_name, None  # 基本型(int/float/bool等)はそのままの型名でOK
 
 @app.route('/api/generate-save-data/<name>', methods=['POST'])
 def generate_save_data_cs(name):
@@ -5824,6 +5888,10 @@ def generate_save_data_cs(name):
             data = []
 
     try:
+        # 型解決に enum/class/class_data_id/CustomClassData(ID) を使えるようにする
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data = get_type_lists()
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+
         # Generate C# Code
         field_declarations = ""
         for item in data:
@@ -5832,25 +5900,27 @@ def generate_save_data_cs(name):
             array_size = item.get('arraySize', 0)
             description = item.get('description', '')
 
+            cs_type, initial = resolve_save_field_cs_type(type_name, custom_type_info)
+
             # Basic comment
             if description:
                 field_declarations += f"        /// <summary>\n        /// {description}\n        /// </summary>\n"
-            
+
             # Field definition
             if array_size > 0:
-                 field_declarations += f"        public {type_name}[] {var_name} = new {type_name}[{array_size}];\n"
+                field_declarations += f"        public {cs_type}[] {var_name} = new {cs_type}[{array_size}];\n"
+            elif array_size == -1:
+                field_declarations += f"        public List<{cs_type}> {var_name} = new List<{cs_type}>();\n"
             else:
-                 # Initialize string to empty to avoid null issues if desired, or default
-                 if type_name == 'string':
-                     field_declarations += f"        public string {var_name} = \"\";\n"
-                 else:
-                     field_declarations += f"        public {type_name} {var_name};\n"
+                init_suffix = f" = {initial}" if initial is not None else ""
+                field_declarations += f"        public {cs_type} {var_name}{init_suffix};\n"
 
         code_str = f"""using System;
 using UnityEngine;
 using System.Collections.Generic;
 using GameCore.Enums;
 using GameCore.Tables;
+using GameCore.Classes;
 
 namespace GameCore.SaveSystem
 {{
@@ -5869,22 +5939,6 @@ namespace GameCore.SaveSystem
     except Exception as e:
         logger.error(f"Error generating {name}.cs: {e}")
         return jsonify({"error": str(e)}), 500
-    #if request.method == 'PATCH':
-    #    try:
-    #        delete_name = request.get_json()['name']
-    #        with open(file_path, 'r', encoding='utf-8') as f:
-    #            data = json.load(f)
-    #        data = [item for item in data if item['name'] != delete_name]
-    #        with open(file_path, 'w', encoding='utf-8') as f:
-    #            json.dump(data, f, ensure_ascii=False, indent=2)
-    #        logger.info(f"Removed enum: {delete_name}")
-    #        return jsonify({"message": f"Enum {delete_name} removed from enum_list.json"})
-    #    except FileNotFoundError:
-    #        return jsonify({"error": "enum_list.json not found"}), 404
-    #    except Exception as e:
-    #        logger.error(f"Error removing enum-id: {str(e)}")
-    #        return jsonify({"error": str(e)}), 500
-# 静的ファイルのルーティング
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_static(path):
