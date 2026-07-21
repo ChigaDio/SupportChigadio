@@ -149,22 +149,16 @@ namespace GameCore.SaveSystem
 
         private byte[] SerializeToBinary<T>(T data)
         {
-            using (MemoryStream ms = new MemoryStream())
-            {
-                BinaryFormatter formatter = new BinaryFormatter();
-                formatter.Serialize(ms, data);
-                return ms.ToArray();
-            }
+            string json = JsonUtility.ToJson(data);
+            return System.Text.Encoding.UTF8.GetBytes(json);
         }
 
         private T DeserializeFromBinary<T>(byte[] data)
         {
-            using (MemoryStream ms = new MemoryStream(data))
-            {
-                BinaryFormatter formatter = new BinaryFormatter();
-                return (T)formatter.Deserialize(ms);
-            }
+            string json = System.Text.Encoding.UTF8.GetString(data);
+            return JsonUtility.FromJson<T>(json);
         }
+
 
         public async UniTask LoadAllDataAsync(Action onComplete = null)
         {

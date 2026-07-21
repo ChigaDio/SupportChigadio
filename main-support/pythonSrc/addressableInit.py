@@ -306,6 +306,7 @@ namespace AddressableSystem
         Texture,
         Sprite,
         Audio,
+        Material,
         UI,
         Other
     }

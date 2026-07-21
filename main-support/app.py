@@ -702,6 +702,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
 
     namespace GameCore.Tables
     {
+        [System.Serializable]
         public abstract class BaseClassDataMatrixRow
         {
             public abstract void Read(BinaryReader reader);
@@ -1430,7 +1431,7 @@ public static class DebugLogBridge
     private static DebugLogBridgeRuntime runtime;
 
     [Conditional("UNITY_EDITOR")]
-    [Conditional("DEVELOPMENT_BUILD")]
+    [Conditional("UNITY_ENABLE_CHECKS")]
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void Init()
     {
@@ -1443,7 +1444,7 @@ public static class DebugLogBridge
     }
 
     [Conditional("UNITY_EDITOR")]
-    [Conditional("DEVELOPMENT_BUILD")]
+    [Conditional("UNITY_ENABLE_CHECKS")]
     public static void Log(string message)
     {
         UnityEngine.Debug.Log(message);
@@ -1451,7 +1452,7 @@ public static class DebugLogBridge
     }
 
     [Conditional("UNITY_EDITOR")]
-    [Conditional("DEVELOPMENT_BUILD")]
+    [Conditional("UNITY_ENABLE_CHECKS")]
     public static void LogWarning(string message)
     {
         UnityEngine.Debug.LogWarning(message);
@@ -1459,7 +1460,7 @@ public static class DebugLogBridge
     }
 
     [Conditional("UNITY_EDITOR")]
-    [Conditional("DEVELOPMENT_BUILD")]
+    [Conditional("UNITY_ENABLE_CHECKS")]
     public static void LogError(string message)
     {
         UnityEngine.Debug.LogError(message);
