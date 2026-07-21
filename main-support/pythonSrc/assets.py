@@ -60,6 +60,8 @@ TEXTURE_DATA = os.path.join(ASSETS_DATA, 'texture')
 TEXTURE_JSON = os.path.join(TEXTURE_DATA, 'assets_texture.json')
 GAMEOBJECT_DATA = os.path.join(ASSETS_DATA, 'gameobject')
 GAMEOBJECT_JSON = os.path.join(GAMEOBJECT_DATA, 'assets_gameobject.json')
+MATERIAL_DATA = os.path.join(ASSETS_DATA, 'material')
+MATERIAL_JSON = os.path.join(MATERIAL_DATA, 'assets_material.json')
 EDITOR_DATA = os.path.join(ASSETS_DATA, 'Editor')
 ENUM_DIR = os.path.join(DATA_DIR, 'enum')
 
@@ -75,6 +77,8 @@ def generate_base():
         os.makedirs(TEXTURE_DATA)
     if not os.path.exists(GAMEOBJECT_DATA):
         os.makedirs(GAMEOBJECT_DATA)
+    if not os.path.exists(MATERIAL_DATA):
+        os.makedirs(MATERIAL_DATA)
     if not os.path.exists(EDITOR_DATA):
         os.makedirs(EDITOR_DATA)
     if not os.path.exists(ENUM_DIR):
@@ -95,9 +99,10 @@ def generate_base():
         print(enum_list)
         max_id = max([e['id'] for e in enum_list], default=0)
         new_entries = [
-            {'name': 'Sound', 'path': SOUND_JSON},
-            {'name': 'Texture', 'path': TEXTURE_JSON},
-            {'name': 'GameObject', 'path': GAMEOBJECT_JSON}
+            {'name': 'Sound', 'path': SOUND_JSON, 'default': {'groups': {}}},
+            {'name': 'Texture', 'path': TEXTURE_JSON, 'default': {'groups': {}}},
+            {'name': 'GameObject', 'path': GAMEOBJECT_JSON, 'default': {'groups': {}}},
+            {'name': 'Material', 'path': MATERIAL_JSON, 'default': {'groups': {}}}
         ]
         for entry in new_entries:
             if entry['name'] not in existing_names:
@@ -106,7 +111,7 @@ def generate_base():
                 os.makedirs(os.path.dirname(entry['path']), exist_ok=True)
                 if not os.path.exists(entry['path']):
                     with open(entry['path'], 'w', encoding='utf-8') as ef:
-                        json.dump({'groups': {}}, ef, ensure_ascii=False, indent=4)
+                        json.dump(entry['default'], ef, ensure_ascii=False, indent=4)
         f.seek(0)
         json.dump(enum_list, f, ensure_ascii=False, indent=4)
         f.truncate()
@@ -278,67 +283,9 @@ public class EditorCommunication : EditorWindow
         }
         else if (command == "get_addressable_path")
         {
-            string filePath = data.file_path;
-            Debug.Log($"Received filePath: {filePath}");
-
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).Replace(@"\\", "/").TrimEnd('/');
-            Debug.Log($"Project root (normalized): {projectRoot}");
-
-            string normalizedFilePath = filePath.Replace(@"\\", "/").TrimEnd('/');
-            Debug.Log($"Normalized filePath: {normalizedFilePath}");
-
-            string assetPath = normalizedFilePath;
-            if (normalizedFilePath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                assetPath = normalizedFilePath.Substring(projectRoot.Length).TrimStart('/');
-                Debug.Log($"Trimmed assetPath: {assetPath}");
-            }
-            else
-            {
-                Debug.LogWarning($"filePath does not start with project root: {projectRoot}");
-            }
-
-            assetPath = assetPath.Replace(@"\\", "/").Trim();
-            if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
-            {
-                assetPath = "Assets/" + assetPath.TrimStart('/');
-            }
-            Debug.Log($"Final assetPath: {assetPath}");
-
-            string fullPath = Path.Combine(projectRoot, assetPath).Replace(@"\\", "/");
-            if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(assetPath)) && !File.Exists(fullPath))
-            {
-                Debug.LogWarning($"Invalid asset path for AssetDatabase: {assetPath}");
-                return assetPath;
-            }
-
-            string guid = AssetDatabase.AssetPathToGUID(assetPath);
-            Debug.Log($"GUID: {guid}");
-
-            if (string.IsNullOrEmpty(guid) || guid == "00000000000000000000000000000000")
-            {
-                Debug.LogWarning($"No valid GUID found for assetPath: {assetPath}");
-                return assetPath;
-            }
-
-            AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
-            if (settings == null)
-            {
-                Debug.LogWarning("AddressableAssetSettings is not initialized.");
-                return assetPath;
-            }
-
-            var entry = settings.FindAssetEntry(guid);
-            if (entry != null)
-            {
-                Debug.Log($"Found Addressable entry: {entry.address}");
-                return entry.address;
-            }
-            else
-            {
-                Debug.LogWarning($"Asset not Addressable: {assetPath}. Returning relative path.");
-                return assetPath;
-            }
+            string assetPath = NormalizeAssetPath(data.file_path);
+            Debug.Log($"[get_addressable_path] assetPath: {assetPath}");
+            return ResolveAddressableAddress(assetPath);
         }
         else if (command == "get_sprite_info")
         {
@@ -413,7 +360,96 @@ public class EditorCommunication : EditorWindow
 
             return JsonUtility.ToJson(info);
         }
+        else if (command == "get_material_properties")
+        {
+            string filePath = data.file_path;
+            string assetPath = NormalizeAssetPath(filePath);
+
+            Shader shader = null;
+            string ext = Path.GetExtension(assetPath).ToLowerInvariant();
+            if (ext == ".mat")
+            {
+                Material mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+                if (mat != null) shader = mat.shader;
+            }
+            else if (ext == ".shader" || ext == ".shadergraph")
+            {
+                // .shadergraph はインポート後に通常のShaderアセットとして
+                // AssetDatabaseから読み込める（ShaderGraphImporterを直接使う必要はない）
+                shader = AssetDatabase.LoadAssetAtPath<Shader>(assetPath);
+            }
+
+            if (shader == null) return "{}";
+
+            // 【重要】UnityEditor.ShaderUtil（旧型式・非推奨寄りのエディタ専用API）は使わない。
+            // 代わりにUnityEngine.Shaderのインスタンスメソッド（Runtime/Editor共通、
+            // ShaderGraph生成のShaderにも同じように使える）でプロパティを列挙する。
+            var props = new List<ShaderPropertyInfo>();
+            int propCount = shader.GetPropertyCount();
+            for (int i = 0; i < propCount; i++)
+            {
+                var flags = shader.GetPropertyFlags(i);
+                if ((flags & UnityEngine.Rendering.ShaderPropertyFlags.HideInInspector) != 0) continue;
+
+                props.Add(new ShaderPropertyInfo
+                {
+                    name = shader.GetPropertyName(i),
+                    type = shader.GetPropertyType(i).ToString()
+                });
+            }
+
+            var materialResult = new MaterialPropertiesResult
+            {
+                items = props
+            };
+
+            return JsonUtility.ToJson(materialResult);
+        }
         return null;
+    }
+
+    // assetPath（"Assets/..."形式、正規化済み）からAddressableのアドレスを取得する。
+    // Addressableでなければ assetPath をそのまま返す。
+    // get_addressable_path / get_material_properties など、Addressableパスが必要な
+    // すべてのコマンドはこのメソッドだけを経由する（duplicate実装の禁止・唯一の実装元）。
+    private static string ResolveAddressableAddress(string assetPath)
+    {
+        if (string.IsNullOrEmpty(assetPath)) return assetPath;
+
+        string guid = AssetDatabase.AssetPathToGUID(assetPath);
+        if (string.IsNullOrEmpty(guid) || guid == "00000000000000000000000000000000")
+        {
+            Debug.LogWarning($"No valid GUID found for assetPath: {assetPath}");
+            return assetPath;
+        }
+
+        AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
+        if (settings == null)
+        {
+            Debug.LogWarning("AddressableAssetSettings is not initialized.");
+            return assetPath;
+        }
+
+        var entry = settings.FindAssetEntry(guid);
+        if (entry == null)
+        {
+            Debug.LogWarning($"Asset not Addressable: {assetPath}. Returning relative path.");
+            return assetPath;
+        }
+        return entry.address;
+    }
+
+    [System.Serializable]
+    private class ShaderPropertyInfo
+    {
+        public string name;
+        public string type;
+    }
+
+    [System.Serializable]
+    private class MaterialPropertiesResult
+    {
+        public List<ShaderPropertyInfo> items;
     }
 
     [System.Serializable]
@@ -674,6 +710,28 @@ def save_gameobject_data(data):
     assets_gameobject.jsonを保存
     """
     with open(GAMEOBJECT_JSON, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def load_material_data():
+    """
+    assets_material.jsonを読み込む
+    GameObject/Sound/Textureと同じ「groups」形式（グループ紐づけ）で保持する。
+    旧形式（entries直下フラット）で保存されていた場合は、Defaultグループへ自動移行する。
+    """
+    if os.path.exists(MATERIAL_JSON):
+        with open(MATERIAL_JSON, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if 'groups' not in data:
+            old_entries = data.get('entries', [])
+            data = {'groups': ({'Default': old_entries} if old_entries else {})}
+        return data
+    return {'groups': {}}
+
+def save_material_data(data):
+    """
+    assets_material.jsonを保存
+    """
+    with open(MATERIAL_JSON, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # Unity communication functions
@@ -3825,6 +3883,780 @@ def generate_gameobject_bin():
             current_offset = f.tell()
         f.seek(offset_pos)
         f.write(struct.pack('i' * group_count, *offsets))
+
+# ============================================================
+# Material CS生成機能
+# ============================================================
+
+# Shader.GetPropertyType（UnityEngine.Rendering.ShaderPropertyType）→ C#表現のマッピング
+# 旧ShaderUtil.ShaderPropertyTypeでは "TexEnv" だったが、新APIでは "Texture" になるため両方保持
+MATERIAL_PROPERTY_TYPE_MAP = {
+    'Color':   {'cs_type': 'Color',   'setter': 'SetColor'},
+    'Vector':  {'cs_type': 'Vector4', 'setter': 'SetVector'},
+    'Float':   {'cs_type': 'float',   'setter': 'SetFloat'},
+    'Range':   {'cs_type': 'float',   'setter': 'SetFloat'},
+    'Int':     {'cs_type': 'int',     'setter': 'SetInt'},
+    'Texture': {'cs_type': 'Texture', 'setter': 'SetTexture'},
+    'TexEnv':  {'cs_type': 'Texture', 'setter': 'SetTexture'},  # 旧ShaderUtil由来データとの互換用
+}
+
+def _material_property_field_name(prop_name):
+    """
+    シェーダープロパティ名からC#の識別子名を作る
+    例: "_Color" -> "Color", "_EmissionColor" -> "EmissionColor", "_MainTex" -> "MainTex"
+    """
+    name = prop_name.lstrip('_')
+    if not name:
+        name = prop_name
+    return name[0].upper() + name[1:]
+
+def get_material_data():
+    """
+    生成済みMaterialDataエントリの一覧を取得
+    """
+    return load_material_data()
+
+def _request_material_properties_from_unity(file_path):
+    """
+    Unityエディタに対して指定パスのプロパティ一覧を問い合わせる
+    （エクスプローラーは開かない・内部共通処理）
+
+    Addressableパスは get_material_properties の戻り値には頼らず、
+    Sound/GameObjectと同じ get_addressable_path で個別に取得する。
+    （プロパティ列挙とAddressable登録有無は別々の関心事であり、
+    　前者の戻り値からAddressableパスを取り出そうとしていたのが、
+    　パスが取得できなくなっていた原因）
+    """
+    result = send_to_unity('get_material_properties', {'file_path': file_path})
+    if result is None:
+        raise Exception("プロパティ情報を取得できませんでした。EditorCommunicationが起動しているか確認してください。")
+
+    try:
+        parsed = json.loads(result)
+        if not isinstance(parsed, dict):
+            parsed = {}
+    except (TypeError, ValueError):
+        parsed = {}
+
+    addressable_path = get_addressable_path(file_path) or ''
+
+    return {
+        'addressable_path': addressable_path,
+        'properties': parsed.get('items', []) or []
+    }
+
+def get_material_properties():
+    """
+    エクスプローラーを開いて .shader / .mat ファイルを選択し、
+    含まれるプロパティ名・型・Addressableパスを一度の通信で取得する
+    """
+    project_path = get_unity_project_path()
+    if not project_path:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    file_path = select_file(project_path, [("Shader / Materialファイル", "*.shader *.shadergraph *.mat")])
+    if not file_path:
+        raise Exception("ファイルが選択されていません。")
+
+    fetched = _request_material_properties_from_unity(file_path)
+
+    return {
+        'absolute_path': os.path.abspath(file_path),
+        'addressable_path': fetched['addressable_path'],
+        'properties': fetched['properties']
+    }
+
+def add_material_group(group_name):
+    """
+    Materialグループを追加
+    """
+    data = load_material_data()
+    if group_name and group_name not in data['groups']:
+        data['groups'][group_name] = []
+        save_material_data(data)
+
+def delete_material_group(group_name):
+    """
+    Materialグループを削除し、そのグループに属していたC#ファイルも削除した上で
+    Enum・Core・バイナリを再生成する
+    """
+    data = load_material_data()
+    entries = data['groups'].pop(group_name, [])
+    save_material_data(data)
+
+    for entry in entries:
+        cs_path = os.path.join(MATERIAL_DATA, f"{entry['class_name']}.cs")
+        if os.path.exists(cs_path):
+            os.remove(cs_path)
+
+    generate_material_enum_csharp()
+    generate_material_bin()
+
+def generate_material_entry(group_name, class_name, desc, absolute_path, selected_property_names):
+    """
+    CS生成ボタンから呼ばれるメイン処理。
+    jsonに保持しているabsolute_pathを使い、Unityと再度通信して
+    最新のプロパティ（型含む）とAddressableパスを取得し直してからCSを再生成する。
+    併せてMaterialGroup/MaterialID Enum・Core一式・バイナリも再生成する。
+    """
+    if not group_name:
+        raise Exception("グループを選択してください。")
+    if not class_name:
+        raise Exception("クラス名を入力してください。")
+    if not absolute_path:
+        raise Exception("Shader / Materialのパスがありません。先にファイルを選択してください。")
+    if not selected_property_names:
+        raise Exception("プロパティを1つ以上選択してください。")
+
+    data = load_material_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。先にグループを作成してください。")
+
+    # 再通信して最新のプロパティ・Addressableパスを取得
+    fetched = _request_material_properties_from_unity(absolute_path)
+    addressable_path = fetched['addressable_path']
+
+    selected_set = set(selected_property_names)
+    properties = [p for p in fetched['properties'] if p.get('name') in selected_set]
+    if not properties:
+        raise Exception("選択したプロパティがシェーダーから見つかりませんでした。ファイルが変更された可能性があります。")
+
+    # JSONエントリを更新（同グループ内で同名クラスは上書き。absolute_pathを保持し続ける）
+    data['groups'][group_name] = [e for e in data['groups'][group_name] if e['class_name'] != class_name]
+    data['groups'][group_name].append({
+        'class_name': class_name,
+        'desc': desc or '',
+        'absolute_path': absolute_path,
+        'addressable_path': addressable_path,
+        'properties': properties
+    })
+    save_material_data(data)
+
+    # C#（クラス本体・Group/ID Enum・Core一式・バイナリ）を再生成
+    generate_material_csharp(group_name, class_name)
+    generate_material_enum_csharp()
+    generate_material_bin()
+    generate_material_core_files()
+
+def regenerate_material_entry(group_name, class_name):
+    """
+    生成済みエントリの「再生成」用。jsonに保持しているabsolute_pathと
+    これまで選択していたプロパティ名を使って、Unityに再問い合わせしてから再生成する。
+    """
+    data = load_material_data()
+    entries = data['groups'].get(group_name, [])
+    entry = next((e for e in entries if e['class_name'] == class_name), None)
+    if entry is None:
+        raise Exception(f"{class_name} のデータが見つかりません。")
+
+    selected_names = [p['name'] for p in entry.get('properties', []) if p.get('name')]
+    generate_material_entry(
+        group_name,
+        entry['class_name'],
+        entry.get('desc', ''),
+        entry.get('absolute_path'),
+        selected_names
+    )
+
+def delete_material_entry(group_name, class_name):
+    """
+    Materialエントリと生成済みC#ファイルを削除し、Enum・バイナリも再生成する
+    """
+    data = load_material_data()
+    if group_name in data['groups']:
+        data['groups'][group_name] = [e for e in data['groups'][group_name] if e['class_name'] != class_name]
+    save_material_data(data)
+
+    cs_path = os.path.join(MATERIAL_DATA, f"{class_name}.cs")
+    if os.path.exists(cs_path):
+        os.remove(cs_path)
+
+    generate_material_enum_csharp()
+    generate_material_bin()
+
+def generate_material_csharp(group_name, class_name):
+    """
+    選択されたプロパティに基づき、MaterialPropertyBlockを使った
+    高効率なマテリアル操作用のC#クラスを1ファイル生成する
+    """
+    _ensure_base_material_data()
+
+    data = load_material_data()
+    entry = next((e for e in data['groups'].get(group_name, []) if e['class_name'] == class_name), None)
+    if entry is None:
+        raise Exception(f"{class_name} のデータが見つかりません。")
+
+    properties = entry.get('properties', [])
+    desc = entry.get('desc', '')
+
+    id_field_lines = []
+    setter_method_blocks = []
+    used_field_names = set()
+
+    for prop in properties:
+        prop_name = prop.get('name')
+        if not prop_name:
+            continue
+        prop_type = prop.get('type', 'Float')
+        type_info = MATERIAL_PROPERTY_TYPE_MAP.get(prop_type, MATERIAL_PROPERTY_TYPE_MAP['Float'])
+
+        field_name = _material_property_field_name(prop_name)
+        # 重複するフィールド名を避ける
+        base_field_name = field_name
+        suffix = 1
+        while field_name in used_field_names:
+            suffix += 1
+            field_name = f"{base_field_name}{suffix}"
+        used_field_names.add(field_name)
+
+        id_name = f"{field_name}PropertyId"
+
+        id_field_lines.append(
+            f'    private static readonly int {id_name} = Shader.PropertyToID("{prop_name}");'
+        )
+
+        setter_method_blocks.append(f'''
+    /// <summary>
+    /// {prop_name} ({prop_type}) をMaterialPropertyBlock経由で効率的に変更する
+    /// メモリリークせず、バッチング（描画最適化）も維持されます
+    /// </summary>
+    public void Set{field_name}Efficiently({type_info['cs_type']} newValue)
+    {{
+        targetRenderer.GetPropertyBlock(propertyBlock);
+        propertyBlock.{type_info['setter']}({id_name}, newValue);
+        targetRenderer.SetPropertyBlock(propertyBlock);
+    }}''')
+
+    id_fields_str = "\n".join(id_field_lines) if id_field_lines else "    // プロパティが選択されていません"
+    setters_str = "".join(setter_method_blocks)
+
+    code_str = f"""using UnityEngine;
+using GameCore.MaterialData;
+
+/// <summary>
+/// {desc}
+/// </summary>
+public class {class_name} : BaseMaterialData
+{{
+
+{id_fields_str}
+
+
+{setters_str}
+
+}}
+"""
+    if not os.path.exists(os.path.join(MATERIAL_DATA,f"{class_name}")):        
+        os.mkdir(os.path.join(MATERIAL_DATA,f"{class_name}"))
+    cs_path = os.path.join(MATERIAL_DATA,f"{class_name}", f"{class_name}.cs")
+    
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(code_str)
+
+def _material_id_map(data):
+    """
+    "{group}_{class_name}" -> MaterialID の対応表を作る（None=0固定、以降は登場順）
+    GameObjectのgameobject_id_mapと同じ考え方（グループをまたいでユニークなID）。
+    """
+    id_map = {'None': 0}
+    counter = 1
+    for group, entries in data['groups'].items():
+        for e in entries:
+            key = f"{group}_{e['class_name']}"
+            if key not in id_map:
+                id_map[key] = counter
+                counter += 1
+    return id_map
+
+def generate_material_enum_csharp():
+    """
+    GameObject/Sound/Textureと同様に、Material用のenum(MaterialGroup / MaterialID)を生成する
+    - MaterialEnums.cs（MaterialGroup）を生成
+    - ENUM_DIR/Material/Material.json を更新してMaterialID.csを生成（generate_enum_csharpを再利用）
+    """
+    data = load_material_data()
+
+    # MaterialEnums.cs（MaterialGroup） - GameObjectEnums.csのGameObjectGroupと同じ考え方
+    with open(os.path.join(MATERIAL_DATA, 'MaterialEnums.cs'), 'w', encoding='utf-8') as f:
+        f.write('namespace GameCore.MaterialData {\n')
+        f.write('    public enum MaterialGroup { None')
+        for group in data['groups']:
+            f.write(f', {group}')
+        f.write(' ,Max\n  };\n')
+        f.write('}\n')
+
+    id_map = _material_id_map(data)
+
+    material_dir = os.path.join(ENUM_DIR, "Material")
+    if not os.path.exists(material_dir):
+        os.makedirs(material_dir)
+
+    material_json_path = os.path.join(material_dir, "Material.json")
+    with open(material_json_path, 'w', encoding='utf-8') as f:
+        material_id_list = []
+        for group, entries in data['groups'].items():
+            for e in entries:
+                key = f"{group}_{e['class_name']}"
+                material_id_list.append({
+                    'description': e.get('desc', ''),
+                    'id': id_map[key],
+                    'property': key,
+                    'value': id_map[key]
+                })
+        json.dump(material_id_list, f, ensure_ascii=False, indent=4)
+
+    generate_enum_csharp(material_json_path, "Material", ENUM_DIR)
+
+def generate_material_bin():
+    """
+    gameobject_data.bytes と同じ「グループごとのオフセットテーブル」形式で、
+    MaterialGroup / MaterialID / クラス名 / Addressableパスをバイナリ出力する
+    （material_data.bytes）
+    """
+    data = load_material_data()
+    with open(os.path.join(MATERIAL_DATA, 'material_data.bytes'), 'wb') as f:
+        groups = list(data['groups'].keys())
+        group_count = len(groups)
+        f.write(struct.pack('i', group_count))
+        offsets = [0] * group_count
+        offset_pos = f.tell()
+        f.write(struct.pack('i' * group_count, *offsets))
+        current_offset = f.tell()
+
+        id_map = _material_id_map(data)
+
+        for i, group in enumerate(groups):
+            offsets[i] = current_offset
+            entries = data['groups'][group]
+            f.write(struct.pack('i', len(entries)))
+            for e in entries:
+                material_id = id_map.get(f"{group}_{e['class_name']}", 0)
+                f.write(struct.pack('i', material_id))
+                name_bytes = e['class_name'].encode('utf-8') + b'\0'
+                f.write(name_bytes)
+                addressable_path = e.get('addressable_path') or ''
+                path_bytes = addressable_path.encode('utf-8') + b'\0'
+                f.write(path_bytes)
+            current_offset = f.tell()
+        f.seek(offset_pos)
+        f.write(struct.pack('i' * group_count, *offsets))
+
+def _ensure_base_material_data():
+    """
+    Material用CS生成の共通基底クラス（BaseMaterialData.cs）が存在しなければ生成する。
+    元々generate_gameobject_csharp内に紛れ込んでいた処理をMaterial側へ移設し、
+    かつ f-string化していなかったため二重波括弧がそのまま出力される不具合
+    （{{ }} が壊れたC#として書き出されていた）を修正。
+    MonoBehaviourにコンストラクタを持たせるのは実行時に呼ばれないため、Awakeへ変更。
+    """
+    if not os.path.exists(MATERIAL_DATA):
+        os.makedirs(MATERIAL_DATA)
+    if not os.path.exists(os.path.join(MATERIAL_DATA, "BaseMaterialData.cs")):
+        code_str = """using UnityEngine;
+
+namespace GameCore.MaterialData
+{
+    /// <summary>
+    /// Material CS生成機能によって生成される各クラスの共通基底クラス
+    /// </summary>
+    public abstract class BaseMaterialData : MonoBehaviour
+    {
+        [SerializeField] protected Renderer targetRenderer;
+        // MaterialPropertyBlock用（メモリを汚さず、マテリアルを複製しない最高効率の方式）
+        protected MaterialPropertyBlock propertyBlock;
+
+        // マテリアル自体のパラメータを直接変える必要がある場合にキャッシュする変数
+        protected Material cachedMaterial;
+
+        protected virtual void Awake()
+        {
+            if (targetRenderer == null) return;
+            propertyBlock = new MaterialPropertyBlock();
+
+            // 【注意】もしマテリアル自体のシェーダーキーワード切り替えなどが必要な場合のみ、
+            // インスタンスをキャッシュして使い回します（毎フレームの .material 呼び出しは絶対NG）
+            // cachedMaterial = targetRenderer.material;
+        }
+    }
+}
+"""
+        with open(os.path.join(MATERIAL_DATA, "BaseMaterialData.cs"), "w", encoding="utf-8") as f:
+            f.write(code_str)
+
+def generate_material_core_files():
+    """
+    GameObjectCore/GameObjectDatabase/GameObjectBinaryReaderと同じ「グループ紐づけ」構成で、
+    Addressable対応のMaterialCore一式を生成する（存在する場合はスキップ）。
+
+    ※ グループ対応前の形式（Dictionary<MaterialID, ...>のみ）から作り直しているため、
+    　既存プロジェクトに旧MaterialCore.cs / MaterialDatabase.cs / MaterialBinaryReader.cs /
+    　MaterialEnums.cs がある場合は、一度削除してから再生成してください
+    　（このスキャフォールドは既存ファイルを上書きしない方針のため）。
+    """
+    _ensure_base_material_data()
+
+    # MaterialDatabase.cs
+    if not os.path.exists(os.path.join(MATERIAL_DATA, 'MaterialDatabase.cs')):
+        code_str = """
+using System.Collections.Generic;
+using GameCore.Enums;
+namespace GameCore.MaterialData
+{
+    public class MaterialDatabase
+    {
+        [System.Serializable]
+        public class MaterialAssetData
+        {
+            private readonly MaterialID materialID;
+            private readonly string idName;
+            private readonly string addressablePath;
+            public MaterialAssetData(MaterialID materialID, string idName, string addressablePath)
+            {
+                this.materialID = materialID;
+                this.idName = idName;
+                this.addressablePath = addressablePath;
+            }
+            public MaterialID MaterialID => materialID;
+            public string IdName => idName;
+            public string AddressablePath => addressablePath;
+        }
+
+        [System.Serializable]
+        public class GroupedMaterials
+        {
+            private readonly MaterialGroup group;
+            private readonly List<MaterialAssetData> materials;
+            public GroupedMaterials(MaterialGroup group, List<MaterialAssetData> materials)
+            {
+                this.group = group;
+                this.materials = materials ?? new List<MaterialAssetData>();
+            }
+            public MaterialGroup Group => group;
+            public List<MaterialAssetData> Materials => materials;
+        }
+
+        private readonly List<GroupedMaterials> groupedMaterials;
+        public MaterialDatabase()
+        {
+            groupedMaterials = new List<GroupedMaterials>();
+        }
+        public List<GroupedMaterials> GroupedMaterialsList => groupedMaterials;
+    }
+}
+"""
+        with open(os.path.join(MATERIAL_DATA, 'MaterialDatabase.cs'), 'w', encoding='utf-8') as f:
+            f.write(code_str)
+
+    # MaterialBinaryReader.cs
+    if not os.path.exists(os.path.join(MATERIAL_DATA, 'MaterialBinaryReader.cs')):
+        code_str = """
+using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+using GameCore.Enums;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
+using Cysharp.Threading.Tasks;
+
+namespace GameCore.MaterialData
+{
+    public class MaterialBinaryReader
+    {
+        public static MaterialDatabase LoadMaterialDatabaseFromBinary(string filePath, bool addressable = false)
+        {
+            if (!addressable)
+            {
+                if (!File.Exists(filePath))
+                {
+                    Debug.LogError($"Binary file not found: {filePath}");
+                    return null;
+                }
+
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+                {
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
+
+                handle.WaitForCompletion();
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+
+                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    MaterialDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);
+                    return database;
+                }
+            }
+        }
+
+        public static async UniTask<MaterialDatabase> LoadMaterialDatabaseFromBinaryAsync(string filePath, bool addressable = false)
+        {
+            if (!addressable)
+            {
+                if (!File.Exists(filePath))
+                {
+                    Debug.LogError($"Binary file not found: {filePath}");
+                    return null;
+                }
+
+                using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+                {
+                    return ReadDatabase(reader);
+                }
+            }
+            else
+            {
+                AsyncOperationHandle<TextAsset> handle = Addressables.LoadAssetAsync<TextAsset>(filePath);
+
+                await handle.ToUniTask();
+
+                if (handle.Status != AsyncOperationStatus.Succeeded || handle.Result == null)
+                {
+                    Debug.LogError($"Failed to load Addressable binary: {filePath}");
+                    if (handle.IsValid()) Addressables.Release(handle);
+                    return null;
+                }
+
+                TextAsset textAsset = handle.Result;
+                byte[] rawBytes = textAsset.bytes;
+
+                using (MemoryStream ms = new MemoryStream(rawBytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    MaterialDatabase database = ReadDatabase(reader);
+                    Addressables.Release(handle);
+                    return database;
+                }
+            }
+        }
+
+        // 共通読み込みロジック（GameObjectBinaryReaderと同じグループ・オフセット構成）
+        private static MaterialDatabase ReadDatabase(BinaryReader reader)
+        {
+            MaterialDatabase database = new MaterialDatabase();
+
+            int groupCount = reader.ReadInt32();
+            int[] offsets = new int[groupCount];
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                offsets[i] = reader.ReadInt32();
+            }
+
+            string[] groupNames = Enum.GetNames(typeof(MaterialGroup));
+            if (groupCount > groupNames.Length - 1)
+            {
+                Debug.LogError("Binary contains more groups than defined in MaterialGroup enum.");
+                return null;
+            }
+
+            for (int i = 0; i < groupCount; i++)
+            {
+                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
+                int materialCount = reader.ReadInt32();
+                List<MaterialDatabase.MaterialAssetData> materials = new List<MaterialDatabase.MaterialAssetData>();
+
+                for (int j = 0; j < materialCount; j++)
+                {
+                    int materialId = reader.ReadInt32();
+                    string idName = ReadNullTerminatedString(reader);
+                    string addressablePath = ReadNullTerminatedString(reader);
+
+                    materials.Add(new MaterialDatabase.MaterialAssetData(
+                        materialID: (MaterialID)materialId,
+                        idName: idName,
+                        addressablePath: addressablePath
+                    ));
+                }
+
+                database.GroupedMaterialsList.Add(new MaterialDatabase.GroupedMaterials(
+                    group: (MaterialGroup)(i + 1),
+                    materials: materials
+                ));
+            }
+
+            return database;
+        }
+
+        private static string ReadNullTerminatedString(BinaryReader reader)
+        {
+            List<byte> bytes = new List<byte>();
+            byte b;
+            while ((b = reader.ReadByte()) != 0)
+            {
+                bytes.Add(b);
+            }
+            return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
+        }
+    }
+}
+"""
+        with open(os.path.join(MATERIAL_DATA, 'MaterialBinaryReader.cs'), 'w', encoding='utf-8') as f:
+            f.write(code_str)
+
+    # MaterialCore.cs（GameObjectCoreと同じグループ紐づけのDictionaryで管理）
+    if not os.path.exists(os.path.join(MATERIAL_DATA, 'MaterialCore.cs')):
+        code_str = """
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using UnityEngine;
+using Cysharp.Threading.Tasks;
+using AddressableSystem;
+using GameCore.Enums;
+
+namespace GameCore.MaterialData
+{
+    public class MaterialCore : BaseSingleton<MaterialCore>
+    {
+        private MaterialDatabase database;
+        private Dictionary<MaterialGroup, Dictionary<MaterialID, AddressableData<Material>>> loadedMaterials =
+            new Dictionary<MaterialGroup, Dictionary<MaterialID, AddressableData<Material>>>();
+        private bool isLoadDatabase = false;
+        public bool IsLoadDatabase => isLoadDatabase;
+        private CancellationToken destroyToken;
+
+        public override void AwakeSingleton()
+        {
+            base.AwakeSingleton();
+            instance = this;
+            DontDestroyOnLoad(gameObject);
+            destroyToken = this.GetCancellationTokenOnDestroy();
+            LoadDatabaseAsync().Forget();
+        }
+
+        private async UniTask LoadDatabaseAsync()
+        {
+            string path = SupportFiles.ADDRESSABLE_CHECK ? SupportFiles.ALL_MATERIAL_BIN_FILE : SupportFiles.ALL_MATERIAL_BIN;
+            database = await MaterialBinaryReader.LoadMaterialDatabaseFromBinaryAsync(path, SupportFiles.ADDRESSABLE_CHECK);
+            if (database == null)
+            {
+                Debug.LogError("Failed to load MaterialDatabase from binary.");
+            }
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+            isLoadDatabase = true;
+        }
+
+        public void LoadGroup(MaterialGroup group, GroupCategory groupCategory, Action action = null)
+        {
+            LoadGroupAsync(group, groupCategory, action).Forget();
+        }
+
+        public async UniTask LoadGroupAsync(MaterialGroup group, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+            {
+                await UniTask.Yield(cancellationToken: destroyToken);
+            }
+            if (loadedMaterials.ContainsKey(group)) { action?.Invoke(); return; }
+            var materials = database.GroupedMaterialsList.FirstOrDefault(data => data.Group == group);
+            if (materials == null) return;
+
+            loadedMaterials[group] = new Dictionary<MaterialID, AddressableData<Material>>();
+            var tasks = new List<UniTask>();
+
+            foreach (var mat in materials.Materials)
+            {
+                var addressable = new AddressableData<Material>(groupCategory, AssetCategory.Material, mat.AddressablePath);
+                tasks.Add(addressable.LoadAsync(obj =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                    {
+                        loadedMaterials[group][mat.MaterialID] = addressable;
+                    }
+                }, ex =>
+                {
+                    Debug.LogError($"Failed to load material for {mat.MaterialID} at {mat.AddressablePath}: {ex.Message}");
+                }).AttachExternalCancellation(destroyToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            action?.Invoke();
+        }
+
+        public void UnloadGroup(MaterialGroup group, GroupCategory groupCategory, Action action = null)
+        {
+            UnloadGroupAsync(group, groupCategory, action).Forget();
+        }
+
+        public async UniTask UnloadGroupAsync(MaterialGroup group, GroupCategory groupCategory, Action action = null)
+        {
+            if (!loadedMaterials.TryGetValue(group, out var materials)) return;
+
+            foreach (var addressable in materials.Values)
+            {
+                addressable.Release();
+            }
+            loadedMaterials.Remove(group);
+            AddressableDataCore.Instance.ReleaseCategory(groupCategory, AssetCategory.Material);
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
+        public void UnloadAll(Action action = null)
+        {
+            UnloadAllAsync(action).Forget();
+        }
+
+        public async UniTask UnloadAllAsync(Action action = null)
+        {
+            foreach (var group in loadedMaterials.Values)
+            {
+                foreach (var data in group.Values)
+                {
+                    data.Release();
+                }
+                await UniTask.Yield(destroyToken);
+                group.Clear();
+            }
+            loadedMaterials.Clear();
+
+            AddressableDataCore.Instance.ReleaseAssetsAll(AssetCategory.Material);
+            await UniTask.Yield(destroyToken);
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
+        public Material GetMaterial(MaterialGroup group, MaterialID id)
+        {
+            if (loadedMaterials.TryGetValue(group, out var groupMaterials) && groupMaterials.TryGetValue(id, out var addressable))
+            {
+                return addressable.GetAddressableObjectResult();
+            }
+            return null;
+        }
+
+        private void OnDestroy()
+        {
+            foreach (var group in loadedMaterials.Values)
+            {
+                foreach (var mat in group.Values)
+                {
+                    mat.Release();
+                }
+            }
+            loadedMaterials.Clear();
+        }
+    }
+}
+"""
+        with open(os.path.join(MATERIAL_DATA, 'MaterialCore.cs'), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 
 def get_texture_file_path(group_name, index):
     """

@@ -32,7 +32,8 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'Texture', key: 'texture' },
         { name: 'GameObject', key: 'gameobject' },
         { name: 'Animator', key: 'animator' },
-        { name: 'Scene', key: 'scene' }
+        { name: 'Scene', key: 'scene' },
+        { name: 'Material', key: 'material' } 
       ],
     },
     {

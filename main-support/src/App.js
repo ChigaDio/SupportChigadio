@@ -37,6 +37,7 @@ import SaveDataGrid from './components/SaveDataGrid';
 import Sound from './assets/sound';
 import Texture from './assets/texture';
 import GameObject from './assets/gameobject';
+import Material from './assets/material';
 import Scene from './assets/scene';
 
 import DbgLog from './components/DebugLog'
@@ -112,6 +113,9 @@ function AppContent() {
         case 'animator':
           navigate('animator');
           break;
+        case 'material':
+          navigate('material');
+          break;
         case 'scene':
           navigate('scene');
           break;
@@ -166,6 +170,7 @@ function AppContent() {
           <Route path="/sound" element={<Sound />} />
           <Route path="/texture" element={<Texture />} />
           <Route path="/gameobject" element={<GameObject />} />
+          <Route path='/material' element={<Material />}/>
           <Route path="/animator" element={<AnimatorGrid />} />
           <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
           <Route path="/scene" element={<Scene />} />

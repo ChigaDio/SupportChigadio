@@ -1001,6 +1001,7 @@ namespace GameCore
         public const string SOUND_FOLDER = "sound";
         public const string TEXTURE_FOLDER = "texture";
         public const string GAMEOBJECT_FOLDER = "gameobject";
+        public const string MATERIAL_FOLDER = "material";
 
         //dataID
         public const string ID_FOLDER = "class_data_id";
@@ -1014,6 +1015,7 @@ namespace GameCore
         public const string ALL_SOUND_BIN_FILE = "sound_data.bytes";
         public const string ALL_TEXTURE_BIN_FILE = "texture_data.bytes";
         public const string ALL_GAMEOBJECT_BIN_FILE = "gameobject_data.bytes";
+        public const string ALL_MATERIAL_BIN_FILE = "material_data.bytes";
 
         //Scenario
         public const string SCENARIO_FOLDER = "scenario_data";
@@ -1094,6 +1096,7 @@ namespace GameCore
         public static string ALL_SOUND_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, SOUND_FOLDER, ALL_SOUND_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_TEXTURE_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, TEXTURE_FOLDER, ALL_TEXTURE_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_GAMEOBJECT_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, GAMEOBJECT_FOLDER, ALL_GAMEOBJECT_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_MATERIAL_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ASSETS_FOLDER, MATERIAL_FOLDER, ALL_MATERIAL_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_MATRIX_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, MATRIX_DATA_ID_FOLDER, MATRIX_ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_CUSTOM_CLASS_DATA_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, CUSTOM_CLASS_DATA_FOLDER, CUSTOM_CLASS_DATA_ID_BIN_FILE)).Replace("\\\\", "/");
@@ -1171,6 +1174,7 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_SOUND_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.SOUND_FOLDER)),
             (SupportFiles.ALL_TEXTURE_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.TEXTURE_FOLDER)),
             (SupportFiles.ALL_GAMEOBJECT_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.GAMEOBJECT_FOLDER)),
+            (SupportFiles.ALL_MATERIAL_BIN, Path.Combine(SupportFiles.ASSETS_FOLDER, SupportFiles.MATERIAL_FOLDER)),
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
             (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER)),
@@ -5681,6 +5685,93 @@ def generate_gameobject_files():
     assets.generate_gameobject_csharp()
     assets.generate_gameobject_bin()
     return jsonify({'status': 'success'})
+
+
+#=================================================-----
+# Material（Shader / Material の プロパティからCS生成）
+
+@app.route('/api/material', methods=['GET'])
+def get_material():
+    return jsonify(assets.get_material_data())
+
+@app.route('/api/material/add_group', methods=['POST'])
+def add_material_group():
+    data = request.get_json()
+    try:
+        assets.add_material_group(data['group_name'])
+        return jsonify({"message": "グループを追加しました。"}), 200
+    except Exception as e:
+        logger.error(f"Materialグループ追加エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/delete_group', methods=['POST'])
+def delete_material_group():
+    data = request.get_json()
+    try:
+        assets.delete_material_group(data['group_name'])
+        return jsonify({"message": "グループを削除しました。"}), 200
+    except Exception as e:
+        logger.error(f"Materialグループ削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/select_file', methods=['POST'])
+def select_material_file():
+    """
+    エクスプローラーを開いて .shader / .shadergraph / .mat を選択し、
+    プロパティ名・型・Addressableパスを取得する
+    """
+    try:
+        result = assets.get_material_properties()
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Materialプロパティ取得エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/generate', methods=['POST'])
+def generate_material():
+    """
+    グループ・クラス名・説明・選択されたプロパティ名を元に、
+    Unityへ再通信して最新のプロパティ(型含む)とAddressableパスを取得し直し、
+    MaterialData用のC#（クラス本体・Group/ID Enum・Core一式・バイナリ）を生成する
+    """
+    data = request.get_json()
+    try:
+        selected_names = [p['name'] for p in data.get('properties', []) if p.get('name')]
+        assets.generate_material_entry(
+            data.get('group_name'),
+            data.get('class_name'),
+            data.get('desc', ''),
+            data.get('absolute_path'),
+            selected_names
+        )
+        return jsonify({"message": "C#ファイルを生成しました。"}), 200
+    except Exception as e:
+        logger.error(f"Material生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/regenerate', methods=['POST'])
+def regenerate_material():
+    """
+    既存エントリの再生成。jsonに保持したabsolute_pathと選択済みプロパティ名を使い、
+    Unityへ再通信してからCS・Enum・Core・バイナリを再生成する
+    """
+    data = request.get_json()
+    try:
+        assets.regenerate_material_entry(data['group_name'], data['class_name'])
+        return jsonify({"message": "再生成しました。"}), 200
+    except Exception as e:
+        logger.error(f"Material再生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/delete', methods=['POST'])
+def delete_material():
+    data = request.get_json()
+    try:
+        assets.delete_material_entry(data['group_name'], data['class_name'])
+        return jsonify({"message": "削除しました。"}), 200
+    except Exception as e:
+        logger.error(f"Material削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 
