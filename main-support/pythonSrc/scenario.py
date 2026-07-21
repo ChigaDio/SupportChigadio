@@ -1162,7 +1162,7 @@ def _build_custom_class_subfields(fields, custom_info, depth, max_depth):
             "description": f.get('description', ''),
             "type": f['type'],
         }
-        if f['type'] in ('bit', 'color', 'bezier'):
+        if f['type'] in ('bit', 'color', 'bezier', 'dictionary'):
             sub['options'] = f.get('options', {})
         elif f['type'] in custom_class_list:
             sub['subFields'] = _build_custom_class_subfields(
@@ -1200,8 +1200,8 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         field = {"name": var['name'], "label": var['name'], "arraySize": var.get("arraySize", 0), "description": var.get('description', '')}
         var_type = var['type']
 
-        # bit / color / bezier: 値編集に必要な options をそのままフロントへ渡す
-        if var_type in ('bit', 'color', 'bezier'):
+        # bit / color / bezier / dictionary: 値編集に必要な options をそのままフロントへ渡す
+        if var_type in ('bit', 'color', 'bezier', 'dictionary'):
             field['type'] = var_type
             field['options'] = var.get('options', {})
 
@@ -1301,6 +1301,8 @@ def get_initial_value(type_):
         return [0.0, 0.0, 0.0]
     elif type_lower == 'vector4':
         return [0.0, 0.0, 0.0, 0.0]
+    elif type_lower == 'dictionary':
+        return {"entries": []}
     else:  # enum, class_id など
         return 0
 
@@ -1437,6 +1439,41 @@ def pack_value(value, type_, basic_types, unity_types, enum_list, class_list, cl
     if type_str == 'Vector4':
         x, y, z, w = value if isinstance(value, (list, tuple)) and len(value) >= 4 else [0.0, 0.0, 0.0, 0.0]
         buf.write(struct.pack('ffff', float(x or 0), float(y or 0), float(z or 0), float(w or 0)))
+    elif type_str == 'dictionary':
+        # ★ dictionary型はここで自己完結して処理する(customclassdata側への委譲なし)。
+        #   options.valueArraySize (0=単一 / -1=可変長List / N=固定長配列) を見て
+        #   pack_value を再帰呼び出しするため、Dictionary<T,List<~>> や
+        #   Dictionary<T,Dictionary<TE,~>> のような入れ子にも対応できる。
+        opts = options or {}
+        key_type = opts.get('keyType', 'int')
+        value_type = opts.get('valueType', 'int')
+        value_array_size = opts.get('valueArraySize', 0) or 0
+        value_options = opts.get('valueOptions') or {}
+        entries = value.get('entries', []) if isinstance(value, dict) else []
+
+        buf.write(struct.pack('i', len(entries)))
+        for entry in entries:
+            k = entry.get('key') if isinstance(entry, dict) else None
+            v = entry.get('value') if isinstance(entry, dict) else None
+
+            buf.write(pack_value(k, key_type, basic_types, unity_types, enum_list, class_list, class_data_id_list,
+                                  enum_data, class_data_id, class_data, options=None, type_info=info))
+
+            if value_array_size == -1:
+                values = v if isinstance(v, list) else []
+                buf.write(struct.pack('i', len(values)))
+                for vv in values:
+                    buf.write(pack_value(vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list,
+                                          enum_data, class_data_id, class_data, options=value_options, type_info=info))
+            elif value_array_size > 0:
+                values = v if isinstance(v, list) else []
+                for i in range(value_array_size):
+                    vv = values[i] if i < len(values) else None
+                    buf.write(pack_value(vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list,
+                                          enum_data, class_data_id, class_data, options=value_options, type_info=info))
+            else:
+                buf.write(pack_value(v, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list,
+                                      enum_data, class_data_id, class_data, options=value_options, type_info=info))
     else:
         customclassdata._write_custom_single_value(buf, value, type_str, options or {}, info)
     return buf.getvalue()

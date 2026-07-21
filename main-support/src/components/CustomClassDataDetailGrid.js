@@ -9,7 +9,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 
-const CUSTOM_TYPES = ['bit', 'color', 'bezier'];
+const CUSTOM_TYPES = ['bit', 'color', 'bezier', 'dictionary'];
 const NUMERIC_TYPES = ['int', 'float', 'double', 'byte', 'short', 'long', 'decimal', 'uint'];
 
 // ============================================================
@@ -171,11 +171,80 @@ function BezierOptionsEditor({ options, onChange }) {
   );
 }
 
+// ============================================================
+// オプション編集: dictionary
+// キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）に限定し、
+// 値はすべての型（配列・bit/color/bezierを含む）に対応する
+// ============================================================
+function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeOptions, enumNames, classDataIdNames, customClassDataIdNames }) {
+  const keyType = options.keyType || 'int';
+  const valueType = options.valueType || 'int';
+  const valueArraySize = options.valueArraySize ?? 0;
+  const valueOptions = options.valueOptions || {};
+  const valueIsNumeric = NUMERIC_TYPES.includes(valueType);
+
+  const setValueOptions = (vo) => onChange({ ...options, valueOptions: vo });
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel>キーの型</InputLabel>
+          <Select
+            label="キーの型"
+            value={keyType}
+            onChange={(e) => onChange({ ...options, keyType: e.target.value })}
+          >
+            {keyTypeOptions.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+          </Select>
+        </FormControl>
+
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: 220 }}
+          options={valueTypeOptions}
+          value={valueType}
+          onChange={(e, v) => onChange({ ...options, valueType: v || 'int', valueOptions: {} })}
+          renderInput={(params) => <TextField {...params} label="値の型" />}
+        />
+
+        <TextField
+          label="値の配列サイズ（0=単一, -1=可変長, N>0=固定長）"
+          type="number" size="small" sx={{ minWidth: 260 }}
+          value={valueArraySize}
+          onChange={(e) => onChange({ ...options, valueArraySize: Number(e.target.value) || 0 })}
+        />
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）です。値はどの型でも指定できます。
+      </Typography>
+
+      {(valueIsNumeric || valueType === 'bit' || valueType === 'bezier') && (
+        <Box sx={{ mt: 1.5, p: 1, border: '1px dashed #ccc', borderRadius: 1 }}>
+          <Typography variant="caption" color="text.secondary">値の型オプション</Typography>
+          {valueIsNumeric && <NumericOptionsEditor options={valueOptions} onChange={setValueOptions} />}
+          {valueType === 'bit' && (
+            <BitOptionsEditor
+              options={valueOptions}
+              onChange={setValueOptions}
+              enumNames={enumNames}
+              classDataIdNames={classDataIdNames}
+              customClassDataIdNames={customClassDataIdNames}
+            />
+          )}
+          {valueType === 'bezier' && <BezierOptionsEditor options={valueOptions} onChange={setValueOptions} />}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 function defaultOptionsForType(type) {
   if (NUMERIC_TYPES.includes(type)) return { min: null, max: null };
   if (type === 'bit') return { sizeMode: 'manual', sizeSourceName: null, size: 8, mode: 'multiple', allowSelectAll: true, flagNames: Array.from({ length: 8 }, (_, i) => `Flag${i}`) };
   if (type === 'color') return {};
   if (type === 'bezier') return { valueType: 'float', min: 0, max: 1 };
+  if (type === 'dictionary') return { keyType: 'int', valueType: 'int', valueArraySize: 0, valueOptions: {} };
   return {};
 }
 
@@ -192,6 +261,10 @@ function optionsSummary(field) {
   }
   if (t === 'color') return 'RGBA';
   if (t === 'bezier') return `ベジェ(${o.valueType || 'float'}) [${o.min ?? 0}, ${o.max ?? 1}]`;
+  if (t === 'dictionary') {
+    const valueLabel = `${o.valueType || 'int'}${o.valueArraySize ? '[]' : ''}`;
+    return `Dictionary<${o.keyType || 'int'}, ${valueLabel}>`;
+  }
   return '-';
 }
 
@@ -230,7 +303,7 @@ function CustomClassDataDetailGrid() {
 
     fetch('/api/custom-class-data-type-options')
       .then(res => res.json())
-      .then(info => setTypeInfo(info))
+      .then(info => setTypeInfo({ ...info, custom_types: Array.from(new Set([...(info.custom_types || []), 'dictionary'])) }))
       .catch(error => console.error('型情報取得エラー:', error));
   }, [name]);
 
@@ -246,6 +319,16 @@ function CustomClassDataDetailGrid() {
     ];
     return Array.from(new Set(list));
   }, [typeInfo, name]);
+
+  // dictionaryのキー型候補: int(数値) + Enum + ClassDataID + CustomClassDataID のみ
+  const keyTypeOptions = useMemo(() => {
+    return Array.from(new Set([
+      'int',
+      ...typeInfo.enum_list,
+      ...typeInfo.class_data_id_list,
+      ...typeInfo.custom_class_id_list,
+    ]));
+  }, [typeInfo]);
 
   const openAddDialog = () => {
     setEditingId(null);
@@ -419,6 +502,17 @@ function CustomClassDataDetailGrid() {
               )}
               {formType === 'bezier' && (
                 <BezierOptionsEditor options={formOptions} onChange={setFormOptions} />
+              )}
+              {formType === 'dictionary' && (
+                <DictionaryOptionsEditor
+                  options={formOptions}
+                  onChange={setFormOptions}
+                  keyTypeOptions={keyTypeOptions}
+                  valueTypeOptions={typeOptions.filter(t => t !== 'dictionary')}
+                  enumNames={typeInfo.enum_list}
+                  classDataIdNames={typeInfo.class_data_id_list}
+                  customClassDataIdNames={typeInfo.custom_class_id_list}
+                />
               )}
             </>
           )}

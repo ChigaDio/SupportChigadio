@@ -39,6 +39,7 @@ function BitValueEditor({ value, options, onChange }) {
     : Array.from({ length: size }, (_, i) => `Flag${i}`);
   const bits = Array.isArray(value?.bits) ? value.bits : [];
   const isSingle = options?.mode === 'single';
+  const [search, setSearch] = useState('');
 
   const toggle = (i) => {
     if (isSingle) { onChange({ size, bits: [i] }); return; }
@@ -46,35 +47,73 @@ function BitValueEditor({ value, options, onChange }) {
     onChange({ size, bits: has ? bits.filter(b => b !== i) : [...bits, i] });
   };
 
+  const entries = useMemo(() => flagNames.map((label, i) => ({ label, i })), [flagNames]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(({ label }) => label.toLowerCase().includes(q));
+  }, [entries, search]);
+
   return (
-    <Box sx={{ border: '1px solid #e0e0e0', borderRadius: 1, p: 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary">{bits.length} / {size} 選択中</Typography>
-        <Box sx={{ display: 'flex', gap: 0.5 }}>
+    <Box sx={{ display: 'flex', border: '1px solid #e0e0e0', borderRadius: 2, overflow: 'hidden', bgcolor: '#fff' }}>
+      {/* 左: サマリー + 一括操作 */}
+      <Box sx={{ width: 160, flexShrink: 0, p: 1.5, bgcolor: '#f7f8fa', borderRight: '1px solid #eee' }}>
+        <Typography variant="caption" color="text.secondary">選択中</Typography>
+        <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2, color: 'primary.main' }}>
+          {bits.length}
+          <Typography component="span" variant="caption" color="text.secondary"> / {size}</Typography>
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 1.5 }}>
           {!isSingle && options?.allowSelectAll && (
-            <Button size="small" onClick={() => onChange({ size, bits: Array.from({ length: size }, (_, i) => i) })}>全選択</Button>
+            <Button size="small" variant="outlined" onClick={() => onChange({ size, bits: Array.from({ length: size }, (_, i) => i) })}>全選択</Button>
           )}
-          <Button size="small" color="secondary" onClick={() => onChange({ size, bits: [] })}>クリア</Button>
+          <Button size="small" variant="outlined" color="secondary" onClick={() => onChange({ size, bits: [] })}>クリア</Button>
         </Box>
+        {isSingle && (
+          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1.5 }}>
+            単一選択モード
+          </Typography>
+        )}
       </Box>
-      <Box sx={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #eee', borderRadius: 1 }}>
-        {flagNames.map((label, i) => {
-          const checked = bits.includes(i);
-          return (
-            <Box
-              key={i}
-              onClick={() => toggle(i)}
-              sx={{
-                display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.25, cursor: 'pointer',
-                bgcolor: checked ? 'rgba(25, 118, 210, 0.08)' : (i % 2 === 0 ? '#fff' : '#fafafa'),
-              }}
-            >
-              <Checkbox size="small" checked={checked} onChange={() => toggle(i)} onClick={(e) => e.stopPropagation()} />
-              <Typography variant="body2" sx={{ flex: 1 }}>{label}</Typography>
-              <Typography variant="caption" color="text.disabled">#{i}</Typography>
-            </Box>
-          );
-        })}
+
+      {/* 右: 検索 + 縦一列のスクロール可能なフラグ一覧 */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ p: 1, borderBottom: '1px solid #eee', bgcolor: '#fff' }}>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder={`フラグを検索 (${flagNames.length}件)`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </Box>
+        <Box sx={{ maxHeight: 220, overflowY: 'auto' }}>
+          {filtered.length === 0 && (
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', p: 2, textAlign: 'center' }}>
+              該当するフラグがありません
+            </Typography>
+          )}
+          {filtered.map(({ label, i }) => {
+            const checked = bits.includes(i);
+            return (
+              <Box
+                key={i}
+                onClick={() => toggle(i)}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, pl: 0.5, pr: 1.5, py: 0.25, cursor: 'pointer',
+                  borderLeft: '3px solid',
+                  borderLeftColor: checked ? 'primary.main' : 'transparent',
+                  bgcolor: checked ? 'rgba(25, 118, 210, 0.08)' : (i % 2 === 0 ? '#fff' : '#fafafa'),
+                  '&:hover': { bgcolor: checked ? 'rgba(25, 118, 210, 0.14)' : '#f0f0f0' },
+                }}
+              >
+                <Checkbox size="small" checked={checked} onChange={() => toggle(i)} onClick={(e) => e.stopPropagation()} />
+                <Typography variant="body2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={label}>{label}</Typography>
+                <Typography variant="caption" color="text.disabled">#{i}</Typography>
+              </Box>
+            );
+          })}
+        </Box>
       </Box>
     </Box>
   );
@@ -120,6 +159,11 @@ function hermite(p0, p1, t) {
   const h11 = s ** 3 - s ** 2;
   return h00 * p0.value + h10 * dt * p0.outTangent + h01 * p1.value + h11 * dt * p1.inTangent;
 }
+// タンジェントハンドルの画面上の長さ（px固定。角度だけが傾き値を表す）
+const TANGENT_HANDLE_LEN = 40;
+// ハンドルドラッグ時、傾き計算が発散しないようx方向オフセットの最小値をpxで確保する
+const TANGENT_MIN_DX = 10;
+
 function BezierValueEditor({ value, options, onChange }) {
   const points = (value?.points && value.points.length >= 2)
     ? [...value.points].sort((a, b) => a.time - b.time)
@@ -129,11 +173,35 @@ function BezierValueEditor({ value, options, onChange }) {
   const W = 360, H = 180, PAD = 20;
   const svgRef = useRef(null);
   const [dragIndex, setDragIndex] = useState(null);
+  // アクティブ（選択中）な点。選択されている間、その点の左右にタンジェントハンドルを表示する
+  const [activeIndex, setActiveIndex] = useState(null);
+  // タンジェントハンドルのドラッグ状態: { index, side: 'in' | 'out' }
+  const [dragHandle, setDragHandle] = useState(null);
+
+  const sx = (W - PAD * 2); // px per unit time (time範囲は0-1)
+  const sy = (H - PAD * 2) / ((max - min) || 1); // px per unit value
 
   const xToPx = (t) => PAD + t * (W - PAD * 2);
   const yToPx = (v) => H - PAD - ((v - min) / ((max - min) || 1)) * (H - PAD * 2);
   const pxToX = (px) => Math.max(0, Math.min(1, (px - PAD) / (W - PAD * 2)));
   const pxToY = (py) => min + (1 - (py - PAD) / (H - PAD * 2)) * (max - min);
+
+  // タンジェント値 -> ハンドルの点からの相対オフセット（画面上の長さは固定）
+  const tangentToHandleOffset = (tangent, side) => {
+    const dtime = side === 'out' ? 1 : -1;
+    const dvalue = side === 'out' ? tangent : -tangent;
+    let dx = sx * dtime;
+    let dy = -sy * dvalue;
+    const len = Math.hypot(dx, dy) || 1;
+    return { dx: (dx / len) * TANGENT_HANDLE_LEN, dy: (dy / len) * TANGENT_HANDLE_LEN };
+  };
+
+  // ハンドルの相対オフセット -> タンジェント値
+  const handleOffsetToTangent = (dx, dy, side) => {
+    const minDx = side === 'out' ? TANGENT_MIN_DX : -TANGENT_MIN_DX;
+    const clampedDx = side === 'out' ? Math.max(dx, minDx) : Math.min(dx, minDx);
+    return -(dy * sx) / (clampedDx * sy);
+  };
 
   const pathD = useMemo(() => {
     let d = '';
@@ -152,39 +220,99 @@ function BezierValueEditor({ value, options, onChange }) {
 
   const updatePoint = (index, patch) => onChange({ points: points.map((p, i) => (i === index ? { ...p, ...patch } : p)) });
   const handleMove = (e) => {
-    if (dragIndex === null || !svgRef.current) return;
+    if (!svgRef.current) return;
+    if (dragIndex === null && dragHandle === null) return;
     const rect = svgRef.current.getBoundingClientRect();
     const px = (e.clientX - rect.left) * (W / rect.width);
     const py = (e.clientY - rect.top) * (H / rect.height);
-    updatePoint(dragIndex, { time: pxToX(px), value: pxToY(py) });
+    if (dragIndex !== null) {
+      updatePoint(dragIndex, { time: pxToX(px), value: pxToY(py) });
+      return;
+    }
+    if (dragHandle !== null) {
+      const p = points[dragHandle.index];
+      const cx = xToPx(p.time), cy = yToPx(p.value);
+      const tangent = handleOffsetToTangent(px - cx, py - cy, dragHandle.side);
+      updatePoint(dragHandle.index, { [`${dragHandle.side}Tangent`]: tangent });
+    }
   };
+  const endDrag = () => { setDragIndex(null); setDragHandle(null); };
   const addPoint = () => onChange({ points: [...points, { time: 0.5, value: (min + max) / 2, inTangent: 0, outTangent: 0 }] });
-  const removePoint = (index) => { if (points.length > 2) onChange({ points: points.filter((_, i) => i !== index) }); };
+  const removePoint = (index) => {
+    if (points.length <= 2) return;
+    if (activeIndex === index) setActiveIndex(null);
+    onChange({ points: points.filter((_, i) => i !== index) });
+  };
 
   return (
     <Box>
       <svg
         ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%"
         style={{ background: '#fafafa', border: '1px solid #ddd', touchAction: 'none' }}
-        onMouseMove={handleMove} onMouseUp={() => setDragIndex(null)} onMouseLeave={() => setDragIndex(null)}
+        onMouseMove={handleMove} onMouseUp={endDrag} onMouseLeave={endDrag}
       >
         <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#bbb" />
         <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="#bbb" />
         <path d={pathD} fill="none" stroke="#1976d2" strokeWidth={2} />
-        {points.map((p, i) => (
-          <circle key={i} cx={xToPx(p.time)} cy={yToPx(p.value)} r={5}
-            fill={dragIndex === i ? '#d32f2f' : '#1976d2'} style={{ cursor: 'grab' }}
-            onMouseDown={() => setDragIndex(i)} />
-        ))}
+        {points.map((p, i) => {
+          const cx = xToPx(p.time), cy = yToPx(p.value);
+          const isActive = activeIndex === i;
+          const inOff = tangentToHandleOffset(p.inTangent ?? 0, 'in');
+          const outOff = tangentToHandleOffset(p.outTangent ?? 0, 'out');
+          const inPos = { x: cx + inOff.dx, y: cy + inOff.dy };
+          const outPos = { x: cx + outOff.dx, y: cy + outOff.dy };
+          return (
+            <g key={i}>
+              {isActive && (
+                <>
+                  <line x1={cx} y1={cy} x2={inPos.x} y2={inPos.y} stroke="#43a047" strokeWidth={1.5} strokeDasharray="3,2" />
+                  <line x1={cx} y1={cy} x2={outPos.x} y2={outPos.y} stroke="#fb8c00" strokeWidth={1.5} strokeDasharray="3,2" />
+                  <circle
+                    cx={inPos.x} cy={inPos.y} r={5}
+                    fill={dragHandle?.index === i && dragHandle?.side === 'in' ? '#2e7d32' : '#66bb6a'}
+                    stroke="#fff" strokeWidth={1}
+                    style={{ cursor: 'grab' }}
+                    onMouseDown={(e) => { e.stopPropagation(); setDragHandle({ index: i, side: 'in' }); }}
+                  />
+                  <circle
+                    cx={outPos.x} cy={outPos.y} r={5}
+                    fill={dragHandle?.index === i && dragHandle?.side === 'out' ? '#e65100' : '#ffa726'}
+                    stroke="#fff" strokeWidth={1}
+                    style={{ cursor: 'grab' }}
+                    onMouseDown={(e) => { e.stopPropagation(); setDragHandle({ index: i, side: 'out' }); }}
+                  />
+                </>
+              )}
+              <circle cx={cx} cy={cy} r={isActive ? 6 : 5}
+                fill={dragIndex === i ? '#d32f2f' : (isActive ? '#1565c0' : '#1976d2')}
+                stroke={isActive ? '#0d47a1' : 'none'} strokeWidth={isActive ? 2 : 0}
+                style={{ cursor: 'grab' }}
+                onMouseDown={(e) => { e.stopPropagation(); setActiveIndex(i); setDragIndex(i); }} />
+            </g>
+          );
+        })}
       </svg>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        点をクリックして選択すると、左右にタンジェントハンドル（緑=in / 橙=out）が表示され、ドラッグで傾きを調整できます。
+      </Typography>
       <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
         {points.map((p, i) => (
           <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip size="small" label={`点${i}`} />
+            <Chip
+              size="small"
+              label={`点${i}`}
+              color={activeIndex === i ? 'primary' : 'default'}
+              onClick={() => setActiveIndex(i)}
+              sx={{ cursor: 'pointer' }}
+            />
             <TextField size="small" label="time" type="number" value={p.time} sx={{ width: 90 }}
               onChange={(e) => updatePoint(i, { time: Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)) })} />
             <TextField size="small" label="value" type="number" value={p.value} sx={{ width: 90 }}
               onChange={(e) => updatePoint(i, { value: parseFloat(e.target.value) || 0 })} />
+            <TextField size="small" label="inTangent" type="number" value={p.inTangent} sx={{ width: 90 }}
+              onChange={(e) => updatePoint(i, { inTangent: parseFloat(e.target.value) || 0 })} />
+            <TextField size="small" label="outTangent" type="number" value={p.outTangent} sx={{ width: 90 }}
+              onChange={(e) => updatePoint(i, { outTangent: parseFloat(e.target.value) || 0 })} />
             <IconButton size="small" color="error" disabled={points.length <= 2} onClick={() => removePoint(i)}>
               <DeleteIcon fontSize="small" />
             </IconButton>
@@ -246,6 +374,226 @@ const NumericInput = ({ label, value, onChange, isFloat = false, sx = {} }) => {
   );
 };
 
+// ============================================================
+// dictionary 値エディタ
+// キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）、値は任意の型
+// 値データ形式: { entries: [{ key, value }, ...] }
+// ============================================================
+function DictionaryScalarEditor({ type, value, options, onChange, enumValues, classDataSchemas, customClassSchemas }) {
+  const lower = (type || '').toLowerCase();
+  if (lower === 'bit') return <BitValueEditor value={value} options={options} onChange={onChange} />;
+  if (lower === 'color') return <ColorValueEditor value={value} onChange={onChange} />;
+  if (lower === 'bezier') return <BezierValueEditor value={value} options={options} onChange={onChange} />;
+  if (lower === 'bool') {
+    return (
+      <FormControlLabel
+        control={<Checkbox checked={!!value} onChange={(e) => onChange(e.target.checked)} />}
+        label={value ? 'true' : 'false'}
+      />
+    );
+  }
+  if (['int', 'short', 'long', 'byte'].includes(lower)) {
+    return <NumericInput label="" value={value ?? 0} onChange={onChange} isFloat={false} sx={{ width: 100 }} />;
+  }
+  if (['float', 'double', 'decimal'].includes(lower)) {
+    return <NumericInput label="" value={value ?? 0} onChange={onChange} isFloat sx={{ width: 100 }} />;
+  }
+  if (lower === 'string' || lower === 'char') {
+    return <TextField size="small" value={value ?? ''} onChange={(e) => onChange(e.target.value)} sx={{ minWidth: 160 }} />;
+  }
+  if (VECTOR_AXIS_LABELS[lower]) {
+    const labels = VECTOR_AXIS_LABELS[lower];
+    const arr = Array.isArray(value) ? value : Array(labels.length).fill(0);
+    return (
+      <Box sx={{ display: 'flex', gap: 0.5 }}>
+        {labels.map((l, i) => (
+          <TextField
+            key={l} size="small" label={l} type="number" value={arr[i] ?? 0} sx={{ width: 64 }}
+            onChange={(e) => { const next = [...arr]; next[i] = parseFloat(e.target.value) || 0; onChange(next); }}
+          />
+        ))}
+      </Box>
+    );
+  }
+  // Enum / ClassDataID / CustomClassDataID
+  if (enumValues[type] && enumValues[type].length > 0) {
+    const opts = [
+      { value: `${type}ID.None`, label: 'None' },
+      ...enumValues[type].map(v => {
+        const val = typeof v === 'object' ? (v.property || v.enum_property || v) : v;
+        return { value: `${type}ID.${val}`, label: val };
+      }),
+    ];
+    return (
+      <Autocomplete
+        size="small"
+        options={opts}
+        getOptionLabel={(o) => o.label}
+        value={opts.find(o => o.value === value) || null}
+        onChange={(e, nv) => onChange(nv ? nv.value : `${type}ID.None`)}
+        renderInput={(params) => <TextField {...params} size="small" />}
+        isOptionEqualToValue={(o, v) => o.value === v?.value}
+        sx={{ minWidth: 180 }}
+      />
+    );
+  }
+  // CustomClassData / ClassData (ネストしたオブジェクト)
+  const nestedSchema = customClassSchemas[type] || classDataSchemas[type];
+  if (nestedSchema && nestedSchema.length > 0) {
+    const subSchema = {
+      fields: nestedSchema.map(sub => ({
+        ...sub,
+        label: sub.label || sub.name,
+        arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
+      })),
+    };
+    const subInitialData = Object.entries(value || {}).map(([n, v]) => ({
+      name: n, value: v,
+      arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
+    }));
+    return (
+      <BaseRoleInputForm
+        schema={subSchema}
+        initialData={subInitialData}
+        onChange={(subData) => {
+          const newObj = subData.reduce((acc, { name, value: v }) => { acc[name] = v; return acc; }, {});
+          onChange(newObj);
+        }}
+      />
+    );
+  }
+  return <TextField size="small" value={value ?? ''} onChange={(e) => onChange(e.target.value)} sx={{ minWidth: 160 }} />;
+}
+
+function DictionaryKeyEditor({ keyValue, keyType, enumValues, onChange }) {
+  if ((keyType || 'int').toLowerCase() === 'int') {
+    return <NumericInput label="" value={keyValue ?? 0} onChange={onChange} isFloat={false} sx={{ width: 100 }} />;
+  }
+  const opts = (enumValues && enumValues[keyType]) || [];
+  const options = [
+    { value: `${keyType}ID.None`, label: 'None' },
+    ...opts.map(v => {
+      const val = typeof v === 'object' ? (v.property || v.enum_property || v) : v;
+      return { value: `${keyType}ID.${val}`, label: val };
+    }),
+  ];
+  return (
+    <Autocomplete
+      size="small"
+      options={options}
+      getOptionLabel={(o) => o.label}
+      value={options.find(o => o.value === keyValue) || null}
+      onChange={(e, nv) => onChange(nv ? nv.value : `${keyType}ID.None`)}
+      renderInput={(params) => <TextField {...params} size="small" />}
+      isOptionEqualToValue={(o, v) => o.value === v?.value}
+      sx={{ minWidth: 160 }}
+    />
+  );
+}
+
+function defaultDictScalar(t, enumValues, classDataSchemas, customClassSchemas) {
+  const lower = (t || '').toLowerCase();
+  if (['int', 'short', 'long', 'byte'].includes(lower)) return 0;
+  if (['float', 'double', 'decimal'].includes(lower)) return 0.0;
+  if (lower === 'bool') return false;
+  if (lower === 'string' || lower === 'char') return '';
+  if (VECTOR_AXIS_LABELS[lower]) return Array(VECTOR_AXIS_LABELS[lower].length).fill(0);
+  if (lower === 'bit') return { size: 8, bits: [] };
+  if (lower === 'color') return { r: 1, g: 1, b: 1, a: 1 };
+  if (lower === 'bezier') return { points: [{ time: 0, value: 0, inTangent: 0, outTangent: 0 }, { time: 1, value: 1, inTangent: 0, outTangent: 0 }] };
+  if (enumValues[t] && enumValues[t].length > 0) return `${t}ID.None`;
+  if (customClassSchemas[t] || classDataSchemas[t]) return {};
+  return '';
+}
+
+function DictionaryValueEditor({ value, options, onChange, enumValues, classDataSchemas, customClassSchemas }) {
+  const keyType = options?.keyType || 'int';
+  const valueType = options?.valueType || 'int';
+  const valueArraySize = options?.valueArraySize ?? 0;
+  const valueIsArray = valueArraySize !== 0;
+  const valueOptions = options?.valueOptions || {};
+  const entries = Array.isArray(value?.entries) ? value.entries : [];
+
+  const updateEntries = (next) => onChange({ entries: next });
+  const updateKey = (i, k) => updateEntries(entries.map((e, idx) => (idx === i ? { ...e, key: k } : e)));
+  const updateValue = (i, v) => updateEntries(entries.map((e, idx) => (idx === i ? { ...e, value: v } : e)));
+  const removeEntry = (i) => updateEntries(entries.filter((_, idx) => idx !== i));
+
+  const addEntry = () => {
+    const defaultKey = keyType.toLowerCase() === 'int' ? 0 : `${keyType}ID.None`;
+    const defaultVal = valueIsArray ? [] : defaultDictScalar(valueType, enumValues, classDataSchemas, customClassSchemas);
+    updateEntries([...entries, { key: defaultKey, value: defaultVal }]);
+  };
+  const addArrayItem = (entryIdx) => {
+    const arr = Array.isArray(entries[entryIdx].value) ? entries[entryIdx].value : [];
+    updateValue(entryIdx, [...arr, defaultDictScalar(valueType, enumValues, classDataSchemas, customClassSchemas)]);
+  };
+  const removeArrayItem = (entryIdx, itemIdx) => {
+    const arr = Array.isArray(entries[entryIdx].value) ? entries[entryIdx].value : [];
+    updateValue(entryIdx, arr.filter((_, i) => i !== itemIdx));
+  };
+  const updateArrayItem = (entryIdx, itemIdx, v) => {
+    const arr = Array.isArray(entries[entryIdx].value) ? [...entries[entryIdx].value] : [];
+    arr[itemIdx] = v;
+    updateValue(entryIdx, arr);
+  };
+
+  return (
+    <Box sx={{ border: '1px solid #e0e0e0', borderRadius: 1, p: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          {entries.length}件 / Dictionary&lt;{keyType}, {valueType}{valueIsArray ? '[]' : ''}&gt;
+        </Typography>
+        <Button size="small" startIcon={<AddIcon />} onClick={addEntry}>エントリを追加</Button>
+      </Box>
+      {entries.length === 0 && (
+        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', py: 1, textAlign: 'center' }}>
+          エントリがありません
+        </Typography>
+      )}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {entries.map((entry, i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 0.5, border: '1px solid #f0f0f0', borderRadius: 1 }}>
+            <Box sx={{ pt: 0.5 }}>
+              <DictionaryKeyEditor keyValue={entry.key} keyType={keyType} enumValues={enumValues} onChange={(v) => updateKey(i, v)} />
+            </Box>
+            <Typography variant="caption" sx={{ pt: 1 }}>:</Typography>
+            <Box sx={{ flex: 1 }}>
+              {valueIsArray ? (
+                <Box>
+                  {(Array.isArray(entry.value) ? entry.value : []).map((item, itemIdx) => (
+                    <Box key={itemIdx} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                      <Typography variant="caption" sx={{ minWidth: 20, color: 'text.secondary' }}>[{itemIdx}]</Typography>
+                      <DictionaryScalarEditor
+                        type={valueType} value={item} options={valueOptions}
+                        onChange={(v) => updateArrayItem(i, itemIdx, v)}
+                        enumValues={enumValues} classDataSchemas={classDataSchemas} customClassSchemas={customClassSchemas}
+                      />
+                      <IconButton size="small" color="error" onClick={() => removeArrayItem(i, itemIdx)}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))}
+                  <Button size="small" startIcon={<AddIcon />} onClick={() => addArrayItem(i)}>要素を追加</Button>
+                </Box>
+              ) : (
+                <DictionaryScalarEditor
+                  type={valueType} value={entry.value} options={valueOptions}
+                  onChange={(v) => updateValue(i, v)}
+                  enumValues={enumValues} classDataSchemas={classDataSchemas} customClassSchemas={customClassSchemas}
+                />
+              )}
+            </Box>
+            <IconButton size="small" color="error" onClick={() => removeEntry(i)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
 const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
   const [formData, setFormData] = useState(initialData || []);
   const [enumValues, setEnumValues] = useState({});
@@ -268,6 +616,7 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
           if (type === 'bit') return { size: options?.size ?? 8, bits: [] };
           if (type === 'color') return { r: 1, g: 1, b: 1, a: 1 };
           if (type === 'bezier') return { points: [{ time: 0, value: options?.min ?? 0, inTangent: 0, outTangent: 0 }, { time: 1, value: options?.max ?? 1, inTangent: 0, outTangent: 0 }] };
+          if (type === 'dictionary') return { entries: [] };
           if (type in customClassSchemas) {
             const obj = {};
             (customClassSchemas[type] || []).forEach(f => { obj[f.name] = getDefaultValue(f.type, f.arraySize, f.options); });
@@ -430,6 +779,19 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
       }
       if (field.type === 'bezier') {
         return <BezierValueEditor key={key} value={value} options={field.options} onChange={onValueChange} />;
+      }
+      if (field.type === 'dictionary') {
+        return (
+          <DictionaryValueEditor
+            key={key}
+            value={value}
+            options={field.options}
+            onChange={onValueChange}
+            enumValues={enumValues}
+            classDataSchemas={classDataSchemas}
+            customClassSchemas={customClassSchemas}
+          />
+        );
       }
 
       // CustomClassData (ネストしたオブジェクト。中にbit/color/bezierを含んでもよい)

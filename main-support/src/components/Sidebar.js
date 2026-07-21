@@ -18,8 +18,8 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'Class Data', key: 'class-data' },
         { name: 'Class Data ID', key: 'class-data-id' },
         { name: 'Class Data Matrix ID', key: 'class-data-matrix-id' },
-        { name: 'Custom Class Data', key: 'custom-class-data' },
-        { name: 'Custom Class Data ID', key: 'custom-class-data-id' },
+       // { name: 'Custom Class Data', key: 'custom-class-data' },
+        //{ name: 'Custom Class Data ID', key: 'custom-class-data-id' },
         { name: 'State', key: 'state' },
         { name: 'Behavior', key: 'behavior' },
         { name: 'Save Data', key: 'save-data' }

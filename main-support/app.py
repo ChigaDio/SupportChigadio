@@ -3218,6 +3218,42 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
             write_binary_field(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
         return
 
+    # ★ dictionary型: { entries: [{key, value}, ...] } を
+    #   [件数][キー][値][キー][値]... の順で書き込む。
+    #   値は options.valueArraySize (0=単一 / -1=可変長List / N=固定長配列) に応じて
+    #   ClassDataのフィールドと同じ規則で書き込むため、
+    #   Dictionary<T,List<~>> や Dictionary<T,Dictionary<TE,~>> のような入れ子にも
+    #   再帰的に対応できる（write_binary_field自身を再帰呼び出しするため）。
+    if type_str == 'dictionary':
+        opts = options or {}
+        key_type = opts.get('keyType', 'int')
+        value_type = opts.get('valueType', 'int')
+        value_array_size = opts.get('valueArraySize', 0) or 0
+        value_options = opts.get('valueOptions') or {}
+        entries = value.get('entries', []) if isinstance(value, dict) else []
+
+        f.write(struct.pack('i', len(entries)))
+        for entry in entries:
+            k = entry.get('key') if isinstance(entry, dict) else None
+            v = entry.get('value') if isinstance(entry, dict) else None
+
+            # キー（int / Enum / ClassDataID / CustomClassDataID のみ）
+            write_binary_field(f, k, key_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=custom_type_info)
+
+            # 値（0=単一 / -1=可変長List / N>0=固定長配列）
+            if value_array_size == -1:
+                values = v if isinstance(v, list) else []
+                f.write(struct.pack('i', len(values)))
+                for vv in values:
+                    write_binary_field(f, vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
+            elif value_array_size > 0:
+                values = v if isinstance(v, list) else [None] * value_array_size
+                for vv in values[:value_array_size]:
+                    write_binary_field(f, vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
+            else:
+                write_binary_field(f, v, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
+        return
+
     # bit / color / bezier、および CustomClassData・CustomClassDataID を参照する型は
     # pythonSrc/customclassdata.py 側の実装(既にbit/color/bezier対応済み)へ委譲する
     if type_str in ('bit', 'color', 'bezier') or (
@@ -3309,6 +3345,35 @@ def write_binary_field_extend(f, value, type_str, basic_types, unity_types, enum
         f.extend(struct.pack('i', len(values)))
         for v in values:
             write_binary_field_extend(f, v, inner_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
+        return
+
+    # ★ dictionary型（write_binary_fieldと同じ規則。f.extend版）
+    if type_str == 'dictionary':
+        opts = options or {}
+        key_type = opts.get('keyType', 'int')
+        value_type = opts.get('valueType', 'int')
+        value_array_size = opts.get('valueArraySize', 0) or 0
+        value_options = opts.get('valueOptions') or {}
+        entries = value.get('entries', []) if isinstance(value, dict) else []
+
+        f.extend(struct.pack('i', len(entries)))
+        for entry in entries:
+            k = entry.get('key') if isinstance(entry, dict) else None
+            v = entry.get('value') if isinstance(entry, dict) else None
+
+            write_binary_field_extend(f, k, key_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=custom_type_info)
+
+            if value_array_size == -1:
+                values = v if isinstance(v, list) else []
+                f.extend(struct.pack('i', len(values)))
+                for vv in values:
+                    write_binary_field_extend(f, vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
+            elif value_array_size > 0:
+                values = v if isinstance(v, list) else [None] * value_array_size
+                for vv in values[:value_array_size]:
+                    write_binary_field_extend(f, vv, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
+            else:
+                write_binary_field_extend(f, v, value_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=value_options, custom_type_info=custom_type_info)
         return
 
     if type_str in ('bit', 'color', 'bezier') or (
@@ -3976,8 +4041,136 @@ def ensure_branchnext_in_state_class(state_class_path, name, label, targets):
 
 
 # C#フィールド生成（private + ゲッター）
+# ============================================================
+# dictionary型のC#コード生成用ヘルパー
+# ・型名解決（_dict_cs_type_name）と読み込みコード生成（_dict_read_*）を分離している
+# ・valueType が 'dictionary' の場合は再帰的に解決するため、
+#   Dictionary<T,List<~>> や Dictionary<T,Dictionary<TE,~>> のような入れ子にも対応する
+# ・注意: bit / color / bezier / CustomClassData / CustomClassDataID を
+#   Dictionaryの「値」に使うケースは、pythonSrc/customclassdata.py 側の実装に
+#   深く依存するため現状未対応（該当箇所はTODOコメント付きでint読み飛ばしにフォールバックする）
+# ============================================================
+def _dict_cs_type_name(type_str, options, enum_list, class_list, class_id_list):
+    if type_str == 'dictionary':
+        opts = options or {}
+        key_cs = _dict_cs_type_name(opts.get('keyType', 'int'), None, enum_list, class_list, class_id_list)
+        value_type = opts.get('valueType', 'int')
+        value_array_size = opts.get('valueArraySize', 0) or 0
+        value_options = opts.get('valueOptions') or {}
+        value_cs = _dict_cs_type_name(value_type, value_options, enum_list, class_list, class_id_list)
+        if value_array_size == -1:
+            value_cs = f"List<{value_cs}>"
+        elif value_array_size > 0:
+            value_cs = f"{value_cs}[]"
+        return f"Dictionary<{key_cs}, {value_cs}>"
+    if type_str in enum_list:
+        return f"GameCore.Enums.{type_str}ID"
+    if type_str in class_list:
+        return f"GameCore.Classes.{type_str}"
+    if type_str in class_id_list:
+        return f"GameCore.Tables.ID.{type_str}TableID"
+    if type_str.lower() in TYPE_MAP:
+        return type_str.capitalize() if type_str.lower() in ['vector2', 'vector3'] else type_str.lower()
+    return type_str
+
+
+def _dict_read_single_stmts(target, type_str, options, enum_list, class_list, class_id_list, indent):
+    """1つの値(キー or 値。type_strが'dictionary'なら入れ子Dictionary)をreaderから
+    読み込み、ローカル変数targetへ代入するC#文のリストを返す。"""
+    if type_str == 'dictionary':
+        return _dict_read_dictionary_stmts(target, options, enum_list, class_list, class_id_list, indent)
+
+    tl = type_str.lower()
+    lines = []
+    if tl in TYPE_MAP:
+        if tl == 'string':
+            lines.append(f"{indent}int {target}_len = reader.ReadInt32();")
+            lines.append(f"{indent}{target} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes({target}_len));")
+        elif tl == 'vector2':
+            lines.append(f"{indent}{target} = new Vector2(reader.ReadSingle(), reader.ReadSingle());")
+        elif tl == 'vector3':
+            lines.append(f"{indent}{target} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());")
+        else:
+            lines.append(f"{indent}{target} = reader.{TYPE_MAP[tl]['cs_read']}();")
+    elif type_str in enum_list or type_str in class_id_list:
+        cs_type = _dict_cs_type_name(type_str, None, enum_list, class_list, class_id_list)
+        lines.append(f"{indent}{target} = ({cs_type})Enum.ToObject(typeof({cs_type}), reader.ReadInt32());")
+    elif type_str in class_list:
+        cs_type = _dict_cs_type_name(type_str, None, enum_list, class_list, class_id_list)
+        lines.append(f"{indent}{target} = new {cs_type}();")
+        lines.append(f"{indent}{target}.Read(reader);")
+    else:
+        # bit / color / bezier / CustomClassData(ID) 等: Dictionaryの値としては現状未対応
+        lines.append(f"{indent}reader.ReadInt32(); // TODO: '{type_str}' 型はDictionaryのキー/値として未対応です")
+    return lines
+
+
+def _dict_read_dictionary_stmts(target, options, enum_list, class_list, class_id_list, indent):
+    opts = options or {}
+    key_type = opts.get('keyType', 'int')
+    value_type = opts.get('valueType', 'int')
+    value_array_size = opts.get('valueArraySize', 0) or 0
+    value_options = opts.get('valueOptions') or {}
+
+    key_cs = _dict_cs_type_name(key_type, None, enum_list, class_list, class_id_list)
+    item_cs = _dict_cs_type_name(value_type, value_options, enum_list, class_list, class_id_list)
+    if value_array_size == -1:
+        value_cs = f"List<{item_cs}>"
+    elif value_array_size > 0:
+        value_cs = f"{item_cs}[]"
+    else:
+        value_cs = item_cs
+    dict_cs_type = f"Dictionary<{key_cs}, {value_cs}>"
+
+    lines = [
+        f"{indent}{target} = new {dict_cs_type}();",
+        f"{indent}int {target}_count = reader.ReadInt32();",
+        f"{indent}for (int {target}_i = 0; {target}_i < {target}_count; {target}_i++) {{",
+    ]
+    inner = indent + "    "
+    lines.append(f"{inner}{key_cs} {target}_key;")
+    lines += _dict_read_single_stmts(f"{target}_key", key_type, None, enum_list, class_list, class_id_list, inner)
+
+    if value_array_size == -1:
+        lines.append(f"{inner}var {target}_val = new List<{item_cs}>();")
+        lines.append(f"{inner}int {target}_val_count = reader.ReadInt32();")
+        lines.append(f"{inner}for (int {target}_j = 0; {target}_j < {target}_val_count; {target}_j++) {{")
+        item_indent = inner + "    "
+        lines.append(f"{item_indent}{item_cs} {target}_item;")
+        lines += _dict_read_single_stmts(f"{target}_item", value_type, value_options, enum_list, class_list, class_id_list, item_indent)
+        lines.append(f"{item_indent}{target}_val.Add({target}_item);")
+        lines.append(f"{inner}}}")
+    elif value_array_size > 0:
+        lines.append(f"{inner}var {target}_val = new {item_cs}[{value_array_size}];")
+        lines.append(f"{inner}for (int {target}_j = 0; {target}_j < {value_array_size}; {target}_j++) {{")
+        item_indent = inner + "    "
+        lines.append(f"{item_indent}{item_cs} {target}_item;")
+        lines += _dict_read_single_stmts(f"{target}_item", value_type, value_options, enum_list, class_list, class_id_list, item_indent)
+        lines.append(f"{item_indent}{target}_val[{target}_j] = {target}_item;")
+        lines.append(f"{inner}}}")
+    else:
+        lines.append(f"{inner}{item_cs} {target}_val;")
+        lines += _dict_read_single_stmts(f"{target}_val", value_type, value_options, enum_list, class_list, class_id_list, inner)
+
+    lines.append(f"{inner}{target}[{target}_key] = {target}_val;")
+    lines.append(f"{indent}}}")
+    return lines
+
+
 def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list, custom_type_info=None):
     type_str = item['type'].replace("[]", "")
+
+    # ★ dictionary型: bit/color/bezier同様にここで早期returnする（他モジュールへの委譲なしで完結）
+    if type_str == 'dictionary':
+        var_name = item['name']
+        description = item.get('description', '')
+        options = item.get('options') or {}
+        dict_cs_type = _dict_cs_type_name('dictionary', options, enum_list, class_list, class_id_list)
+        read_lines = _dict_read_dictionary_stmts(var_name, options, enum_list, class_list, class_id_list, "            ")
+        return {
+            'field': f"        [SerializeField]\n        protected {dict_cs_type} {var_name} = new {dict_cs_type}();\n        public {dict_cs_type} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
+            'read': "\n".join(read_lines) + "\n"
+        }
 
     # bit / color / bezier、CustomClassData・CustomClassDataID参照は
     # pythonSrc/customclassdata.py 側の実装(bit/color/bezier対応済み)へ委譲する

@@ -189,6 +189,7 @@ export function getDefaultValueForType(type, enumValues, classSchemas) {
     case 'bit': return { size: 8, bits: [] };
     case 'color': return { r: 1, g: 1, b: 1, a: 1 };
     case 'bezier': return { points: [{ time: 0, value: 0, inTangent: 0, outTangent: 0 }, { time: 1, value: 1, inTangent: 0, outTangent: 0 }] };
+    case 'dictionary': return { entries: [] };
     default:
       // classData型
       if (classSchemas && classSchemas[type]) {
@@ -205,12 +206,250 @@ export function getDefaultValueForType(type, enumValues, classSchemas) {
   }
 }
 
+// dictionaryのキー表示（enum/classDataID/customClassDataIDキーは "Type.Value" -> "Value" の形式に整形する）
+function formatDictKey(key, keyType) {
+  if (typeof key === 'string' && key.includes('.')) {
+    const tail = key.split('.').pop();
+    return tail === 'None' ? '(未設定)' : tail;
+  }
+  return String(key);
+}
+
+// ============================================================
+// 「新しいカラムを追加」ダイアログ用の型オプション編集コンポーネント群
+// ClassDataDetailGrid.js / CustomClassDataDetailGrid.js と同じロジック。
+// ★ これまでこのダイアログには型オプション編集が無く、bit/bezier/dictionary
+//   などの拡張型が常に固定デフォルトのままだった問題を解消するために追加。
+// ============================================================
+const OPTIONS_NUMERIC_TYPES = ['int', 'float', 'double', 'byte', 'short', 'long', 'decimal', 'uint'];
+
+function NumericOptionsEditor({ options, onChange }) {
+  return (
+    <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
+      <TextField
+        label="最小値" type="number" size="small"
+        value={options.min ?? ''}
+        onChange={(e) => onChange({ ...options, min: e.target.value === '' ? null : Number(e.target.value) })}
+      />
+      <TextField
+        label="最大値" type="number" size="small"
+        value={options.max ?? ''}
+        onChange={(e) => onChange({ ...options, max: e.target.value === '' ? null : Number(e.target.value) })}
+      />
+    </Box>
+  );
+}
+
+function BitOptionsEditor({ options, onChange, enumNames, classDataIdNames, customClassDataIdNames }) {
+  const sizeMode = options.sizeMode || 'manual';
+  const sourceNames = sizeMode === 'enum' ? enumNames
+    : sizeMode === 'classDataId' ? classDataIdNames
+    : sizeMode === 'customClassDataId' ? customClassDataIdNames
+    : [];
+
+  const flagNames = options.flagNames || [];
+  const size = options.size ?? flagNames.length ?? 8;
+
+  const setFlagName = (index, value) => {
+    const next = [...flagNames];
+    next[index] = value;
+    onChange({ ...options, flagNames: next });
+  };
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 180 }}>
+          <InputLabel>ビット数の決め方</InputLabel>
+          <Select
+            label="ビット数の決め方"
+            value={sizeMode}
+            onChange={(e) => onChange({ ...options, sizeMode: e.target.value, sizeSourceName: null })}
+          >
+            <MenuItem value="manual">手動指定</MenuItem>
+            <MenuItem value="enum">Enumの要素数から</MenuItem>
+            <MenuItem value="classDataId">ClassDataIDの要素数から</MenuItem>
+            <MenuItem value="customClassDataId">CustomClassDataIDの要素数から</MenuItem>
+          </Select>
+        </FormControl>
+
+        {sizeMode === 'manual' ? (
+          <TextField
+            label="ビット数" type="number" size="small"
+            value={size}
+            onChange={(e) => {
+              const n = Math.max(1, Number(e.target.value) || 1);
+              const nextFlags = Array.from({ length: n }, (_, i) => flagNames[i] || `Flag${i}`);
+              onChange({ ...options, size: n, flagNames: nextFlags });
+            }}
+          />
+        ) : (
+          <Autocomplete
+            size="small"
+            sx={{ minWidth: 220 }}
+            options={sourceNames}
+            value={options.sizeSourceName || null}
+            onChange={(e, v) => onChange({ ...options, sizeSourceName: v })}
+            renderInput={(params) => <TextField {...params} label="参照元" />}
+          />
+        )}
+
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>選択モード</InputLabel>
+          <Select
+            label="選択モード"
+            value={options.mode || 'multiple'}
+            onChange={(e) => onChange({ ...options, mode: e.target.value })}
+          >
+            <MenuItem value="multiple">複数選択可</MenuItem>
+            <MenuItem value="single">1つだけ選択（排他）</MenuItem>
+          </Select>
+        </FormControl>
+
+        {options.mode !== 'single' && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={!!options.allowSelectAll}
+                onChange={(e) => onChange({ ...options, allowSelectAll: e.target.checked })}
+              />
+            }
+            label="全選択ボタンを許可"
+          />
+        )}
+      </Box>
+
+      {sizeMode === 'manual' && (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="caption" color="text.secondary">フラグ名（各ビットのラベル）</Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
+            {flagNames.map((name, i) => (
+              <TextField
+                key={i}
+                size="small"
+                label={`bit ${i}`}
+                value={name}
+                onChange={(e) => setFlagName(i, e.target.value)}
+                sx={{ width: 130 }}
+              />
+            ))}
+          </Box>
+        </Box>
+      )}
+      {sizeMode !== 'manual' && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+          ※ 参照元を選択して保存すると、要素数からビット数・フラグ名が自動生成されます
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+function BezierOptionsEditor({ options, onChange }) {
+  return (
+    <Box sx={{ display: 'flex', gap: 2, mt: 1, flexWrap: 'wrap' }}>
+      <FormControl size="small" sx={{ minWidth: 120 }}>
+        <InputLabel>値の型</InputLabel>
+        <Select
+          label="値の型"
+          value={options.valueType || 'float'}
+          onChange={(e) => onChange({ ...options, valueType: e.target.value })}
+        >
+          <MenuItem value="float">float</MenuItem>
+          <MenuItem value="int">int</MenuItem>
+        </Select>
+      </FormControl>
+      <TextField
+        label="グラフの最小値" type="number" size="small"
+        value={options.min ?? 0}
+        onChange={(e) => onChange({ ...options, min: Number(e.target.value) })}
+      />
+      <TextField
+        label="グラフの最大値" type="number" size="small"
+        value={options.max ?? 1}
+        onChange={(e) => onChange({ ...options, max: Number(e.target.value) })}
+      />
+    </Box>
+  );
+}
+
+function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeOptions, enumNames, classDataIdNames, customClassDataIdNames }) {
+  const keyType = options.keyType || 'int';
+  const valueType = options.valueType || 'int';
+  const valueArraySize = options.valueArraySize ?? 0;
+  const valueOptions = options.valueOptions || {};
+  const valueIsNumeric = OPTIONS_NUMERIC_TYPES.includes(valueType);
+  const setValueOptions = (vo) => onChange({ ...options, valueOptions: vo });
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel>キーの型</InputLabel>
+          <Select
+            label="キーの型"
+            value={keyType}
+            onChange={(e) => onChange({ ...options, keyType: e.target.value })}
+          >
+            {keyTypeOptions.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+          </Select>
+        </FormControl>
+
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: 220 }}
+          options={valueTypeOptions}
+          value={valueType}
+          onChange={(e, v) => onChange({ ...options, valueType: v || 'int', valueOptions: {} })}
+          renderInput={(params) => <TextField {...params} label="値の型" />}
+        />
+
+        <TextField
+          label="値の配列サイズ（0=単一, -1=可変長, N>0=固定長）"
+          type="number" size="small" sx={{ minWidth: 260 }}
+          value={valueArraySize}
+          onChange={(e) => onChange({ ...options, valueArraySize: Number(e.target.value) || 0 })}
+        />
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）です。値はどの型でも指定できます。
+      </Typography>
+
+      {(valueIsNumeric || valueType === 'bit' || valueType === 'bezier') && (
+        <Box sx={{ mt: 1.5, p: 1, border: '1px dashed #ccc', borderRadius: 1 }}>
+          <Typography variant="caption" color="text.secondary">値の型オプション</Typography>
+          {valueIsNumeric && <NumericOptionsEditor options={valueOptions} onChange={setValueOptions} />}
+          {valueType === 'bit' && (
+            <BitOptionsEditor
+              options={valueOptions}
+              onChange={setValueOptions}
+              enumNames={enumNames}
+              classDataIdNames={classDataIdNames}
+              customClassDataIdNames={customClassDataIdNames}
+            />
+          )}
+          {valueType === 'bezier' && <BezierOptionsEditor options={valueOptions} onChange={setValueOptions} />}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function defaultOptionsForNewColumnType(type) {
+  if (OPTIONS_NUMERIC_TYPES.includes(type)) return { min: null, max: null };
+  if (type === 'bit') return { sizeMode: 'manual', sizeSourceName: null, size: 8, mode: 'multiple', allowSelectAll: true, flagNames: Array.from({ length: 8 }, (_, i) => `Flag${i}`) };
+  if (type === 'color') return {};
+  if (type === 'bezier') return { valueType: 'float', min: 0, max: 1 };
+  if (type === 'dictionary') return { keyType: 'int', valueType: 'int', valueArraySize: 0, valueOptions: {} };
+  return {};
+}
+
 // ============================================================
 // formatPreviewValue: セル表示用の「見やすい」プレビュー文字列を生成
 // classData/配列型の中身を JSON.stringify([~~~]) ではなく
 // "フィールド名=値" の形式で表示するためのユーティリティ
 // ============================================================
-function formatScalarPreview(value, baseType, classSchemas) {
+function formatScalarPreview(value, baseType, classSchemas, options) {
   if (value === null || value === undefined) return '-';
   const lower = (baseType || '').toLowerCase();
 
@@ -223,6 +462,22 @@ function formatScalarPreview(value, baseType, classSchemas) {
     return `(${value[0] ?? 0}, ${value[1] ?? 0}, ${value[2] ?? 0})`;
   }
 
+  // dictionary型: "key1: val1, key2: val2" 形式
+  if (lower === 'dictionary') {
+    const entries = Array.isArray(value?.entries) ? value.entries : [];
+    if (entries.length === 0) return '(空のDictionary)';
+    const keyType = options?.keyType || 'int';
+    const valueType = options?.valueType || 'int';
+    const valueIsArray = (options?.valueArraySize ?? 0) !== 0;
+    return entries.map(({ key, value: v }) => {
+      const kStr = formatDictKey(key, keyType);
+      const vStr = valueIsArray
+        ? formatArrayPreview(v, valueType, classSchemas, options?.valueOptions)
+        : formatScalarPreview(v, valueType, classSchemas, options?.valueOptions);
+      return `${kStr}: ${vStr}`;
+    }).join(', ');
+  }
+
   // classData型（ネスト）: "field=val, field2=val2" 形式
   if (classSchemas && classSchemas[baseType]) {
     const schema = classSchemas[baseType];
@@ -232,8 +487,8 @@ function formatScalarPreview(value, baseType, classSchemas) {
       const { isArray: fIsArray } = getFieldArrayInfo(f);
       const fv = obj[f.name];
       const preview = fIsArray
-        ? formatArrayPreview(fv, f.type, classSchemas)
-        : formatScalarPreview(fv, f.type, classSchemas);
+        ? formatArrayPreview(fv, f.type, classSchemas, f.options)
+        : formatScalarPreview(fv, f.type, classSchemas, f.options);
       return `${f.name}=${preview}`;
     }).join(', ');
   }
@@ -252,20 +507,20 @@ function formatScalarPreview(value, baseType, classSchemas) {
   return String(value);
 }
 
-function formatArrayPreview(value, baseType, classSchemas) {
+function formatArrayPreview(value, baseType, classSchemas, options) {
   const arr = Array.isArray(value) ? value : [];
   if (arr.length === 0) return '(空)';
-  return `[${arr.map(v => formatScalarPreview(v, baseType, classSchemas)).join(' / ')}]`;
+  return `[${arr.map(v => formatScalarPreview(v, baseType, classSchemas, options)).join(' / ')}]`;
 }
 
 /**
  * カラム型（"int[]" のような配列表記込み）に対する見やすいプレビュー文字列を返す
  */
-export function formatPreviewValue(value, type, classSchemas) {
+export function formatPreviewValue(value, type, classSchemas, options) {
   const { isArray, baseType } = parseType(type);
   return isArray
-    ? formatArrayPreview(value, baseType, classSchemas)
-    : formatScalarPreview(value, baseType, classSchemas);
+    ? formatArrayPreview(value, baseType, classSchemas, options)
+    : formatScalarPreview(value, baseType, classSchemas, options);
 }
 
 // ============================================================
@@ -278,14 +533,20 @@ export function formatPreviewValue(value, type, classSchemas) {
 //   → セル内容から必要な行数を事前計算し、getRowHeightに「数値」を
 //     返させることで、DOM実測（autoモード）を完全に回避する。
 // ============================================================
-function countPreviewLines(value, type, classSchemas) {
+function countPreviewLines(value, type, classSchemas, options) {
   const { isArray, baseType } = parseType(type);
   const isClass = classSchemas && classSchemas[baseType];
+  const lower = (baseType || '').toLowerCase();
 
   if (isArray) {
     const arr = Array.isArray(value) ? value : [];
     // renderMiniPreviewTableは配列の各要素を1行として描画する
     return Math.max(arr.length, 1);
+  }
+  if (lower === 'dictionary') {
+    const entries = Array.isArray(value?.entries) ? value.entries : [];
+    // renderMiniPreviewTableはdictionaryの各エントリを1行として描画する
+    return Math.max(entries.length, 1);
   }
   if (isClass) {
     const schema = classSchemas[baseType] || [];
@@ -299,9 +560,10 @@ function countPreviewLines(value, type, classSchemas) {
 // renderMiniPreviewTable: classData/配列型セルの「読みやすい」
 // ミニテーブルプレビューを縦に並べて表示する（Matrix版のセル表示を踏襲）
 // ============================================================
-export function renderMiniPreviewTable(value, type, classSchemas) {
+export function renderMiniPreviewTable(value, type, classSchemas, options) {
   const { isArray, baseType } = parseType(type);
   const isClass = classSchemas && classSchemas[baseType];
+  const lower = (baseType || '').toLowerCase();
 
   const tableSx = {
     width: '100%',
@@ -331,9 +593,35 @@ export function renderMiniPreviewTable(value, type, classSchemas) {
               <td style={{ wordBreak: 'break-word' }}>
                 {isClass
                   ? (classSchemas[baseType] || [])
-                      .map(f => `${f.name}=${formatPreviewValue(item?.[f.name], f.type, classSchemas)}`)
+                      .map(f => `${f.name}=${formatPreviewValue(item?.[f.name], f.type, classSchemas, f.options)}`)
                       .join(', ')
-                  : formatScalarPreview(item, baseType, classSchemas)}
+                  : formatScalarPreview(item, baseType, classSchemas, options)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Box>
+    );
+  }
+
+  if (lower === 'dictionary') {
+    const entries = Array.isArray(value?.entries) ? value.entries : [];
+    if (entries.length === 0) {
+      return <Typography variant="caption" color="text.disabled">(空のDictionary)</Typography>;
+    }
+    const keyType = options?.keyType || 'int';
+    const valueType = options?.valueType || 'int';
+    const valueIsArray = (options?.valueArraySize ?? 0) !== 0;
+    return (
+      <Box component="table" sx={tableSx}>
+        <tbody>
+          {entries.map(({ key, value: v }, i) => (
+            <tr key={i}>
+              <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>{formatDictKey(key, keyType)}</td>
+              <td style={{ wordBreak: 'break-word' }}>
+                {valueIsArray
+                  ? formatArrayPreview(v, valueType, classSchemas, options?.valueOptions)
+                  : formatScalarPreview(v, valueType, classSchemas, options?.valueOptions)}
               </td>
             </tr>
           ))}
@@ -357,7 +645,7 @@ export function renderMiniPreviewTable(value, type, classSchemas) {
                 {f.name}{f.description ? `（${f.description}）` : ''}
               </td>
               <td style={{ wordBreak: 'break-word' }}>
-                {formatPreviewValue(obj[f.name], f.type, classSchemas)}
+                {formatPreviewValue(obj[f.name], f.type, classSchemas, f.options)}
               </td>
             </tr>
           ))}
@@ -366,7 +654,7 @@ export function renderMiniPreviewTable(value, type, classSchemas) {
     );
   }
 
-  return <Typography variant="caption">{formatPreviewValue(value, type, classSchemas)}</Typography>;
+  return <Typography variant="caption">{formatPreviewValue(value, type, classSchemas, options)}</Typography>;
 }
 
 // ============================================================
@@ -699,6 +987,11 @@ function _hermite(p0, p1, t) {
   return h00 * p0.value + h10 * dt * p0.outTangent + h01 * p1.value + h11 * dt * p1.inTangent;
 }
 
+// タンジェントハンドルの画面上の長さ（px固定。角度だけが傾き値を表す）
+const TANGENT_HANDLE_LEN = 46;
+// ハンドルドラッグ時、傾き計算が発散しないようx方向オフセットの最小値をpxで確保する
+const TANGENT_MIN_DX = 10;
+
 function BezierFieldEditor({ value, options, onChange, readOnly }) {
   const points = (value?.points && value.points.length >= 2)
     ? [...value.points].sort((a, b) => a.time - b.time)
@@ -708,6 +1001,13 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
   const W = 420, H = 220, PAD = 24;
   const svgRef = useRef(null);
   const [dragIndex, setDragIndex] = useState(null);
+  // アクティブ（選択中）な点。選択されている間、その点の左右にタンジェントハンドルを表示する
+  const [activeIndex, setActiveIndex] = useState(null);
+  // タンジェントハンドルのドラッグ状態: { index, side: 'in' | 'out' }
+  const [dragHandle, setDragHandle] = useState(null);
+
+  const sx = (W - 2 * PAD); // px per unit time (time範囲は0-1)
+  const sy = (H - 2 * PAD) / (max - min || 1); // px per unit value
 
   const xToPx = (t) => PAD + t * (W - 2 * PAD);
   const yToPx = (val) => H - PAD - ((val - min) / (max - min || 1)) * (H - 2 * PAD);
@@ -715,6 +1015,23 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
   const pxToY = (py) => {
     const t = (H - PAD - py) / (H - 2 * PAD);
     return min + t * (max - min);
+  };
+
+  // タンジェント値 -> ハンドルの点からの相対オフセット（画面上の長さは固定）
+  const tangentToHandleOffset = (tangent, side) => {
+    const dtime = side === 'out' ? 1 : -1;
+    const dvalue = side === 'out' ? tangent : -tangent;
+    let dx = sx * dtime;
+    let dy = -sy * dvalue;
+    const len = Math.hypot(dx, dy) || 1;
+    return { dx: (dx / len) * TANGENT_HANDLE_LEN, dy: (dy / len) * TANGENT_HANDLE_LEN };
+  };
+
+  // ハンドルの相対オフセット -> タンジェント値
+  const handleOffsetToTangent = (dx, dy, side) => {
+    const minDx = side === 'out' ? TANGENT_MIN_DX : -TANGENT_MIN_DX;
+    const clampedDx = side === 'out' ? Math.max(dx, minDx) : Math.min(dx, minDx);
+    return -(dy * sx) / (clampedDx * sy);
   };
 
   const pathD = React.useMemo(() => {
@@ -739,12 +1056,24 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
   };
 
   const handleMove = (e) => {
-    if (readOnly || dragIndex === null || !svgRef.current) return;
+    if (readOnly || !svgRef.current) return;
+    if (dragIndex === null && dragHandle === null) return;
     const rect = svgRef.current.getBoundingClientRect();
     const px = (e.clientX - rect.left) * (W / rect.width);
     const py = (e.clientY - rect.top) * (H / rect.height);
-    updatePoint(dragIndex, { time: pxToX(px), value: pxToY(py) });
+    if (dragIndex !== null) {
+      updatePoint(dragIndex, { time: pxToX(px), value: pxToY(py) });
+      return;
+    }
+    if (dragHandle !== null) {
+      const p = points[dragHandle.index];
+      const cx = xToPx(p.time), cy = yToPx(p.value);
+      const tangent = handleOffsetToTangent(px - cx, py - cy, dragHandle.side);
+      updatePoint(dragHandle.index, { [`${dragHandle.side}Tangent`]: tangent });
+    }
   };
+
+  const endDrag = () => { setDragIndex(null); setDragHandle(null); };
 
   const addPoint = () => {
     if (readOnly) return;
@@ -752,6 +1081,7 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
   };
   const removePoint = (index) => {
     if (readOnly || points.length <= 2) return;
+    if (activeIndex === index) setActiveIndex(null);
     onChange({ points: points.filter((_, i) => i !== index) });
   };
 
@@ -763,26 +1093,65 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
         width="100%"
         style={{ background: '#fafafa', border: '1px solid #ddd', touchAction: 'none' }}
         onMouseMove={handleMove}
-        onMouseUp={() => setDragIndex(null)}
-        onMouseLeave={() => setDragIndex(null)}
+        onMouseUp={endDrag}
+        onMouseLeave={endDrag}
       >
         <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#bbb" />
         <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="#bbb" />
         <path d={pathD} fill="none" stroke="#1976d2" strokeWidth={2} />
-        {points.map((p, i) => (
-          <circle
-            key={i}
-            cx={xToPx(p.time)} cy={yToPx(p.value)} r={6}
-            fill={dragIndex === i ? '#d32f2f' : '#1976d2'}
-            style={{ cursor: readOnly ? 'default' : 'grab' }}
-            onMouseDown={() => !readOnly && setDragIndex(i)}
-          />
-        ))}
+        {points.map((p, i) => {
+          const cx = xToPx(p.time), cy = yToPx(p.value);
+          const isActive = activeIndex === i;
+          const inOff = tangentToHandleOffset(p.inTangent ?? 0, 'in');
+          const outOff = tangentToHandleOffset(p.outTangent ?? 0, 'out');
+          const inPos = { x: cx + inOff.dx, y: cy + inOff.dy };
+          const outPos = { x: cx + outOff.dx, y: cy + outOff.dy };
+          return (
+            <g key={i}>
+              {isActive && (
+                <>
+                  <line x1={cx} y1={cy} x2={inPos.x} y2={inPos.y} stroke="#43a047" strokeWidth={1.5} strokeDasharray="3,2" />
+                  <line x1={cx} y1={cy} x2={outPos.x} y2={outPos.y} stroke="#fb8c00" strokeWidth={1.5} strokeDasharray="3,2" />
+                  <circle
+                    cx={inPos.x} cy={inPos.y} r={5}
+                    fill={dragHandle?.index === i && dragHandle?.side === 'in' ? '#2e7d32' : '#66bb6a'}
+                    stroke="#fff" strokeWidth={1}
+                    style={{ cursor: readOnly ? 'default' : 'grab' }}
+                    onMouseDown={(e) => { e.stopPropagation(); if (!readOnly) setDragHandle({ index: i, side: 'in' }); }}
+                  />
+                  <circle
+                    cx={outPos.x} cy={outPos.y} r={5}
+                    fill={dragHandle?.index === i && dragHandle?.side === 'out' ? '#e65100' : '#ffa726'}
+                    stroke="#fff" strokeWidth={1}
+                    style={{ cursor: readOnly ? 'default' : 'grab' }}
+                    onMouseDown={(e) => { e.stopPropagation(); if (!readOnly) setDragHandle({ index: i, side: 'out' }); }}
+                  />
+                </>
+              )}
+              <circle
+                cx={cx} cy={cy} r={isActive ? 7 : 6}
+                fill={dragIndex === i ? '#d32f2f' : (isActive ? '#1565c0' : '#1976d2')}
+                stroke={isActive ? '#0d47a1' : 'none'} strokeWidth={isActive ? 2 : 0}
+                style={{ cursor: readOnly ? 'default' : 'grab' }}
+                onMouseDown={(e) => { e.stopPropagation(); setActiveIndex(i); if (!readOnly) setDragIndex(i); }}
+              />
+            </g>
+          );
+        })}
       </svg>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        点をクリックして選択すると、左右にタンジェントハンドル（緑=in / 橙=out）が表示され、ドラッグで傾きを調整できます。
+      </Typography>
       <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
         {points.map((p, i) => (
           <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip size="small" label={`点${i}`} />
+            <Chip
+              size="small"
+              label={`点${i}`}
+              color={activeIndex === i ? 'primary' : 'default'}
+              onClick={() => setActiveIndex(i)}
+              sx={{ cursor: 'pointer' }}
+            />
             <NumericTextField label="time(0-1)" allowDecimal value={p.time} readOnly={readOnly} onChange={(val) => updatePoint(i, { time: Math.max(0, Math.min(1, val)) })} sx={{ width: 100 }} />
             <NumericTextField label="value" allowDecimal value={p.value} readOnly={readOnly} onChange={(val) => updatePoint(i, { value: val })} sx={{ width: 100 }} />
             <NumericTextField label="inTangent" allowDecimal value={p.inTangent} readOnly={readOnly} onChange={(val) => updatePoint(i, { inTangent: val })} sx={{ width: 100 }} />
@@ -793,6 +1162,123 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
           </Box>
         ))}
         <Button size="small" startIcon={<AddIcon />} onClick={addPoint} disabled={readOnly} sx={{ alignSelf: 'flex-start' }}>点を追加</Button>
+      </Box>
+    </Box>
+  );
+}
+
+// ============================================================
+// DictionaryFieldEditor: dictionary型の入力コンポーネント
+// キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）、値は任意の型
+// 値データ形式: { entries: [{ key, value }, ...] }
+// ============================================================
+function DictionaryKeyEditor({ keyValue, keyType, enumValues, onChange, readOnly }) {
+  if ((keyType || 'int').toLowerCase() === 'int') {
+    return (
+      <NumericTextField
+        size="small"
+        allowDecimal={false}
+        value={keyValue ?? 0}
+        onChange={onChange}
+        readOnly={readOnly}
+        sx={{ width: 120 }}
+      />
+    );
+  }
+  // enum / classDataID / customClassDataID キー: "Type.Value" 形式のセレクト
+  const opts = (enumValues && enumValues[keyType]) || [];
+  return (
+    <FormControl size="small" sx={{ minWidth: 160 }}>
+      <Select
+        value={keyValue ?? `${keyType}ID.None`}
+        onChange={(e) => !readOnly && onChange(e.target.value)}
+        inputProps={{ readOnly }}
+      >
+        <MenuItem value={`${keyType}ID.None`}>None</MenuItem>
+        {opts.map(v => {
+          const k = v['property'] || v['enum_property'] || v;
+          return <MenuItem key={k} value={`${keyType}ID.${k}`}>{k}</MenuItem>;
+        })}
+      </Select>
+    </FormControl>
+  );
+}
+
+function DictionaryFieldEditor({ value, options, enumValues, classSchemas, onChange, readOnly }) {
+  const keyType = options?.keyType || 'int';
+  const valueType = options?.valueType || 'int';
+  const valueArraySize = options?.valueArraySize ?? 0;
+  const valueIsArray = valueArraySize !== 0;
+  const valueIsDynamic = valueArraySize === -1;
+  const valueOptions = options?.valueOptions || {};
+  const entries = Array.isArray(value?.entries) ? value.entries : [];
+
+  const updateEntries = (next) => { if (!readOnly) onChange({ entries: next }); };
+  const updateKey = (index, newKey) => updateEntries(entries.map((e, i) => (i === index ? { ...e, key: newKey } : e)));
+  const updateValue = (index, newVal) => updateEntries(entries.map((e, i) => (i === index ? { ...e, value: newVal } : e)));
+  const removeEntry = (index) => updateEntries(entries.filter((_, i) => i !== index));
+  const addEntry = () => {
+    const defaultKey = keyType.toLowerCase() === 'int' ? 0 : `${keyType}ID.None`;
+    const defaultVal = valueIsArray ? [] : getDefaultValueForType(valueType, enumValues, classSchemas);
+    updateEntries([...entries, { key: defaultKey, value: defaultVal }]);
+  };
+
+  return (
+    <Box sx={{ border: '1px solid #e0e0e0', borderRadius: 1, p: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          {entries.length}件 / Dictionary&lt;{keyType}, {valueType}{valueIsArray ? '[]' : ''}&gt;
+        </Typography>
+        <Button size="small" startIcon={<AddIcon />} onClick={addEntry} disabled={readOnly}>エントリを追加</Button>
+      </Box>
+      {entries.length === 0 && (
+        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', py: 1, textAlign: 'center' }}>
+          エントリがありません
+        </Typography>
+      )}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {entries.map((entry, i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 0.5, border: '1px solid #f0f0f0', borderRadius: 1 }}>
+            <Box sx={{ pt: 0.5 }}>
+              <DictionaryKeyEditor
+                keyValue={entry.key}
+                keyType={keyType}
+                enumValues={enumValues}
+                onChange={(v) => updateKey(i, v)}
+                readOnly={readOnly}
+              />
+            </Box>
+            <Typography variant="caption" sx={{ pt: 1 }}>:</Typography>
+            <Box sx={{ flex: 1 }}>
+              {valueIsArray ? (
+                <ArrayFieldEditor
+                  value={entry.value}
+                  baseType={valueType}
+                  enumValues={enumValues}
+                  classSchemas={classSchemas}
+                  options={valueOptions}
+                  onChange={(v) => updateValue(i, v)}
+                  readOnly={readOnly}
+                  isDynamic={valueIsDynamic}
+                  arraySize={valueArraySize}
+                />
+              ) : (
+                <SingleValueEditor
+                  value={entry.value}
+                  type={valueType}
+                  enumValues={enumValues}
+                  classSchemas={classSchemas}
+                  options={valueOptions}
+                  onChange={(v) => updateValue(i, v)}
+                  readOnly={readOnly}
+                />
+              )}
+            </Box>
+            <IconButton size="small" color="error" disabled={readOnly} onClick={() => removeEntry(i)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        ))}
       </Box>
     </Box>
   );
@@ -925,6 +1411,18 @@ export function SingleValueEditor({ value, type, enumValues, classSchemas, optio
   }
   if (lower === 'bezier') {
     return <BezierFieldEditor value={value} options={options} readOnly={readOnly} onChange={onChange} />;
+  }
+  if (lower === 'dictionary') {
+    return (
+      <DictionaryFieldEditor
+        value={value}
+        options={options}
+        enumValues={enumValues}
+        classSchemas={classSchemas}
+        onChange={onChange}
+        readOnly={readOnly}
+      />
+    );
   }
 
   // classData型（ネスト）
@@ -1066,6 +1564,10 @@ function ClassDataIdDetailGrid() {
   const [classSchemas, setClassSchemas] = useState({});
   // ★ 追加: classData型の名前リスト（配列型対応のため別管理）
   const [classList, setClassList] = useState([]);
+  // ★ 追加: 新規カラムの「型オプション」編集用（bit/bezier/dictionaryの参照元候補）
+  const [enumNames, setEnumNames] = useState([]);
+  const [classDataIdNames, setClassDataIdNames] = useState([]);
+  const [customClassDataIdNames, setCustomClassDataIdNames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openAddColumn, setOpenAddColumn] = useState(false);
   const [openDefaultRecords, setOpenDefaultRecords] = useState(false);
@@ -1074,6 +1576,7 @@ function ClassDataIdDetailGrid() {
   const [newColType, setNewColType] = useState('');
   const [newColName, setNewColName] = useState('');
   const [newColDescription, setNewColDescription] = useState('');
+  const [newColOptions, setNewColOptions] = useState({});
   const [recordCount, setRecordCount] = useState(1);
   const [columnToDelete, setColumnToDelete] = useState('');
   const apiRef = useGridApiRef();
@@ -1205,7 +1708,7 @@ function ClassDataIdDetailGrid() {
     ]).then(([enumList, classListData, classIdList, customClassList, customClassIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
-      const customTypes = ['bit', 'color', 'bezier'];
+      const customTypes = ['bit', 'color', 'bezier', 'dictionary'];
       const enumTypes = enumList.map(item => item.name);
       const classNames = classListData.map(item => item.name);
       const classIdTypes = classIdList.map(item => item.name);
@@ -1214,6 +1717,10 @@ function ClassDataIdDetailGrid() {
 
       // ★ classListを保存（配列型の判定に使う）
       setClassList(classNames);
+      // ★ 新規カラムの「型オプション」編集用に、参照元候補を保存
+      setEnumNames(enumTypes);
+      setClassDataIdNames(classIdTypes);
+      setCustomClassDataIdNames(customClassIdTypes);
 
       // 配列型のオプションを追加
       const arrayTypes = [
@@ -1301,7 +1808,7 @@ function ClassDataIdDetailGrid() {
       alert('カラム名がすでに存在します');
       return;
     }
-    const newColumn = { type: newColType, name: newColName, description: newColDescription };
+    const newColumn = { type: newColType, name: newColName, description: newColDescription, options: newColOptions };
     const defaultValue = getDefaultValue(newColType);
     const updatedColumns = [...data.columns, newColumn];
     const updatedRows = data.rows.map(row => ({
@@ -1321,6 +1828,7 @@ function ClassDataIdDetailGrid() {
     setNewColType('');
     setNewColName('');
     setNewColDescription('');
+    setNewColOptions({});
   };
 
   const handleDeleteColumn = (columnName) => {
@@ -1691,7 +2199,7 @@ function ClassDataIdDetailGrid() {
               <EditIcon fontSize="small" color="action" sx={{ flexShrink: 0 }} />
               <Typography variant="caption" color="text.disabled">クリックで編集</Typography>
             </Box>
-            {renderMiniPreviewTable(params.value, col.type, classSchemas)}
+            {renderMiniPreviewTable(params.value, col.type, classSchemas, col.options)}
           </Box>
         ),
       };
@@ -1717,11 +2225,20 @@ function ClassDataIdDetailGrid() {
     data.columns.forEach((col) => {
       // ★ 全カラムがクリックで編集方式になったため、
       //   「クリックで編集」ラベル分の1行を全カラムに加算する
-      const lines = countPreviewLines(row[col.name], col.type, classSchemas) + 1;
+      const lines = countPreviewLines(row[col.name], col.type, classSchemas, col.options) + 1;
       if (lines > maxLines) maxLines = lines;
     });
     return Math.max(ROW_BASE_HEIGHT_PX, maxLines * LINE_HEIGHT_PX + ROW_VERTICAL_PADDING_PX);
   }, [data.columns, classSchemas]);
+
+  // ★「新しいカラムを追加」ダイアログの型オプション用
+  const isNewColNumeric = OPTIONS_NUMERIC_TYPES.includes(newColType);
+  const newColKeyTypeOptions = ['int', ...enumNames, ...classDataIdNames, ...customClassDataIdNames];
+  const newColValueTypeOptions = typeOptions.filter(t => t !== 'dictionary' && !t.endsWith('[]'));
+  const handleNewColTypeChange = (t) => {
+    setNewColType(t || '');
+    setNewColOptions(defaultOptionsForNewColumnType(t || ''));
+  };
 
   // ============================================================
   // レンダリング
@@ -1830,7 +2347,7 @@ function ClassDataIdDetailGrid() {
             options={typeOptions}
             renderInput={(params) => <TextField {...params} label="型" margin="dense" fullWidth />}
             value={newColType}
-            onChange={(e, newValue) => setNewColType(newValue || '')}
+            onChange={(e, newValue) => handleNewColTypeChange(newValue)}
           />
           <TextField
             label="名前"
@@ -1846,9 +2363,46 @@ function ClassDataIdDetailGrid() {
             value={newColDescription}
             onChange={(e) => setNewColDescription(e.target.value)}
           />
+
+          {(isNewColNumeric || ['bit', 'color', 'bezier', 'dictionary'].includes(newColType)) && (
+            <>
+              <Box sx={{ borderTop: '1px solid #eee', mt: 2, pt: 1 }}>
+                <Typography variant="subtitle2">型オプション</Typography>
+                {isNewColNumeric && <NumericOptionsEditor options={newColOptions} onChange={setNewColOptions} />}
+                {newColType === 'bit' && (
+                  <BitOptionsEditor
+                    options={newColOptions}
+                    onChange={setNewColOptions}
+                    enumNames={enumNames}
+                    classDataIdNames={classDataIdNames}
+                    customClassDataIdNames={customClassDataIdNames}
+                  />
+                )}
+                {newColType === 'color' && (
+                  <Typography variant="caption" color="text.secondary">
+                    RGBAカラー型です。実際の色の値は各レコードで設定します。
+                  </Typography>
+                )}
+                {newColType === 'bezier' && (
+                  <BezierOptionsEditor options={newColOptions} onChange={setNewColOptions} />
+                )}
+                {newColType === 'dictionary' && (
+                  <DictionaryOptionsEditor
+                    options={newColOptions}
+                    onChange={setNewColOptions}
+                    keyTypeOptions={newColKeyTypeOptions}
+                    valueTypeOptions={newColValueTypeOptions}
+                    enumNames={enumNames}
+                    classDataIdNames={classDataIdNames}
+                    customClassDataIdNames={customClassDataIdNames}
+                  />
+                )}
+              </Box>
+            </>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setOpenAddColumn(false); setNewColDescription(''); }}>キャンセル</Button>
+          <Button onClick={() => { setOpenAddColumn(false); setNewColDescription(''); setNewColOptions({}); }}>キャンセル</Button>
           <Button onClick={handleAddColumn}>追加</Button>
         </DialogActions>
       </Dialog>

@@ -12,6 +12,7 @@ import EditIcon from '@mui/icons-material/Edit';
 function defaultOptionsForType(type) {
   if (type === 'bit') return { sizeMode: 'manual', sizeSourceName: null, size: 8, mode: 'multiple', allowSelectAll: true, flagNames: Array.from({ length: 8 }, (_, i) => `Flag${i}`) };
   if (type === 'bezier') return { valueType: 'float', min: 0, max: 1 };
+  if (type === 'dictionary') return { keyType: 'int', valueType: 'int', valueArraySize: 0, valueOptions: {} };
   return {};
 }
 
@@ -120,6 +121,67 @@ function BezierOptionsEditor({ options, onChange }) {
   );
 }
 
+// ============================================================
+// オプション編集: dictionary
+// キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）に限定し、
+// 値はすべての型（配列・bit/bezierを含む）に対応する
+// ============================================================
+function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeOptions, enumNames, classDataIdNames, customClassDataIdNames }) {
+  const keyType = options.keyType || 'int';
+  const valueType = options.valueType || 'int';
+  const valueArraySize = options.valueArraySize ?? 0;
+  const valueOptions = options.valueOptions || {};
+  const setValueOptions = (vo) => onChange({ ...options, valueOptions: vo });
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel>キーの型</InputLabel>
+          <Select label="キーの型" value={keyType} onChange={(e) => onChange({ ...options, keyType: e.target.value })}>
+            {keyTypeOptions.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+          </Select>
+        </FormControl>
+
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: 220 }}
+          options={valueTypeOptions}
+          value={valueType}
+          onChange={(e, v) => onChange({ ...options, valueType: v || 'int', valueOptions: {} })}
+          renderInput={(params) => <TextField {...params} label="値の型" />}
+        />
+
+        <TextField
+          label="値の配列サイズ（0=単一, -1=可変長, N>0=固定長）"
+          type="number" size="small" sx={{ minWidth: 260 }}
+          value={valueArraySize}
+          onChange={(e) => onChange({ ...options, valueArraySize: Number(e.target.value) || 0 })}
+        />
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）です。値はどの型でも指定できます。
+      </Typography>
+
+      {(valueType === 'bit' || valueType === 'bezier') && (
+        <Box sx={{ mt: 1.5, p: 1, border: '1px dashed #ccc', borderRadius: 1 }}>
+          <Typography variant="caption" color="text.secondary">値の型オプション</Typography>
+          {valueType === 'bit' && (
+            <BitOptionsEditor
+              options={valueOptions}
+              onChange={setValueOptions}
+              enumNames={enumNames}
+              classDataIdNames={classDataIdNames}
+              customClassDataIdNames={customClassDataIdNames}
+            />
+          )}
+          {valueType === 'bezier' && <BezierOptionsEditor options={valueOptions} onChange={setValueOptions} />}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 function ScenarioRoleDetailGrid() {
   const { name } = useParams();
   const navigate = useNavigate();
@@ -141,6 +203,11 @@ function ScenarioRoleDetailGrid() {
 
   // 既存行のoptions編集用
   const [optionsEditRow, setOptionsEditRow] = useState(null); // { id, type, options }
+
+  // dictionaryのキー型候補: int(数値) + Enum + ClassDataID + CustomClassDataID のみ
+  const keyTypeOptions = React.useMemo(() => Array.from(new Set([
+    'int', ...enumNames, ...classDataIdNames, ...customClassDataIdNames,
+  ])), [enumNames, classDataIdNames, customClassDataIdNames]);
 
   // Fetch data for the role
   useEffect(() => {
@@ -174,7 +241,7 @@ function ScenarioRoleDetailGrid() {
       const classIdTypes = classIdList.map(item => item.name);
       const customClassTypes = customOptions.custom_class_list || [];
       const customClassIdTypes = customOptions.custom_class_id_list || [];
-      const customValueTypes = customOptions.custom_types || []; // ['bit', 'color', 'bezier']
+      const customValueTypes = Array.from(new Set([...(customOptions.custom_types || []), 'dictionary'])); // ['bit', 'color', 'bezier', 'dictionary']
       setTypeOptions([
         ...basicTypes, ...unityTypes,
         ...enumTypes, ...classTypes, ...classIdTypes,
@@ -199,7 +266,7 @@ function ScenarioRoleDetailGrid() {
       name: newName,
       description: newDescription,
       arraySize: parseInt(newArraySize, 10) || 0,
-      options: ['bit', 'bezier'].includes(newType) ? newOptions : undefined,
+      options: ['bit', 'bezier', 'dictionary'].includes(newType) ? newOptions : undefined,
     };
     setData([...data, newRow]);
     setOpen(false);
@@ -292,7 +359,7 @@ function ScenarioRoleDetailGrid() {
       headerName: 'オプション',
       width: 110,
       renderCell: (params) => (
-        ['bit', 'bezier'].includes(params.row.type) ? (
+        ['bit', 'bezier', 'dictionary'].includes(params.row.type) ? (
           <Button
             size="small" startIcon={<EditIcon fontSize="small" />}
             onClick={() => setOptionsEditRow({ id: params.row.id, type: params.row.type, options: params.row.options || defaultOptionsForType(params.row.type) })}
@@ -363,7 +430,7 @@ function ScenarioRoleDetailGrid() {
             value={newType}
             onChange={(e, newValue) => {
               setNewType(newValue);
-              setNewOptions(['bit', 'bezier'].includes(newValue) ? defaultOptionsForType(newValue) : {});
+              setNewOptions(['bit', 'bezier', 'dictionary'].includes(newValue) ? defaultOptionsForType(newValue) : {});
             }}
           />
           <TextField label="名前" margin="dense" fullWidth value={newName} onChange={(e) => setNewName(e.target.value)} />
@@ -377,6 +444,14 @@ function ScenarioRoleDetailGrid() {
           )}
           {newType === 'bezier' && (
             <BezierOptionsEditor options={newOptions} onChange={setNewOptions} />
+          )}
+          {newType === 'dictionary' && (
+            <DictionaryOptionsEditor
+              options={newOptions} onChange={setNewOptions}
+              keyTypeOptions={keyTypeOptions}
+              valueTypeOptions={typeOptions.filter(t => t !== 'dictionary')}
+              enumNames={enumNames} classDataIdNames={classDataIdNames} customClassDataIdNames={customClassDataIdNames}
+            />
           )}
         </DialogContent>
         <DialogActions>
@@ -400,6 +475,15 @@ function ScenarioRoleDetailGrid() {
             <BezierOptionsEditor
               options={optionsEditRow.options}
               onChange={(opts) => setOptionsEditRow({ ...optionsEditRow, options: opts })}
+            />
+          )}
+          {optionsEditRow && optionsEditRow.type === 'dictionary' && (
+            <DictionaryOptionsEditor
+              options={optionsEditRow.options}
+              onChange={(opts) => setOptionsEditRow({ ...optionsEditRow, options: opts })}
+              keyTypeOptions={keyTypeOptions}
+              valueTypeOptions={typeOptions.filter(t => t !== 'dictionary')}
+              enumNames={enumNames} classDataIdNames={classDataIdNames} customClassDataIdNames={customClassDataIdNames}
             />
           )}
         </DialogContent>

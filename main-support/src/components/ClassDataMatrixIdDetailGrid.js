@@ -261,7 +261,7 @@ function ClassDataMatrixIdDetailGrid() {
     ]).then(([enumList, classListData, classIdList, customClassList, customClassIdList]) => {
       const basicTypes = ['int', 'float', 'bool', 'string'];
       const unityTypes = ['Vector2', 'Vector3'];
-      const customTypes = ['bit', 'color', 'bezier'];
+      const customTypes = ['bit', 'color', 'bezier', 'dictionary'];
       const enumTypes = enumList.map(item => item.name);
       const classTypes = classListData.map(item => item.name);
       const classIdTypes = classIdList.map(item => item.name);
@@ -549,7 +549,7 @@ function ClassDataMatrixIdDetailGrid() {
               <tbody>
                 {data.fields.map(f => {
                   const fieldValue = value[f.name] ?? getDefaultValue(f.type);
-                  const preview = formatPreviewValue(fieldValue, f.type, classSchemas);
+                  const preview = formatPreviewValue(fieldValue, f.type, classSchemas, f.options);
                   return (
                     <tr key={f.name}>
                       <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>
