@@ -2959,109 +2959,32 @@ def generate_class_data_id_cs(name):
             lf.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\n\n")
             lf.write("namespace GameCore.Tables\n{\n")
             lf.write(f"    public class {name}Row : BaseClassDataRow\n    {{\n")
+            # dictionary型を含め、generate_csharp_field に処理を委譲して
+            # フィールド宣言とRead()コードの両方をここで生成する
+            # (以前はここで型変換ロジックを独自に再実装しており、dictionary型を考慮していなかった)
+            custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+            read_code = ""
             for col in columns:
-                type_str = col['type'].replace("[]", "")
-                if type_str in enum_list:
-                    type_str = f"GameCore.Enums.{type_str}ID"
-                elif type_str in class_list:
-                    type_str = f"GameCore.Classes.{type_str}"
-                elif type_str in class_data_id_list:
-                    type_str = f"GameCore.Tables.ID.{type_str}TableID"
-                elif type_str.lower() in ['vector2', 'vector3']:
-                    type_str = type_str.capitalize()
-                if "[]" in col['type']:
-                    type_str = f"List<{type_str}>"
-                lf.write(f"            private {type_str} {col['name']};\n")
-                lf.write(f"            public {type_str} {col['name'].capitalize()} {{ get => {col['name']}; }}\n")
-                
+                field_for_cs = dict(col)
+                if isinstance(field_for_cs.get('type'), str) and field_for_cs['type'].endswith('[]'):
+                    field_for_cs['type'] = field_for_cs['type'][:-2]
+                    field_for_cs['arraySize'] = -1  # 動的配列(List)として扱う
+                else:
+                    field_for_cs.setdefault('arraySize', 0)
+                field_info = generate_csharp_field(
+                    field_for_cs, enum_list, class_list, unity_types, basic_types,
+                    class_data_id_list, custom_type_info=custom_type_info
+                )
+                lf.write(field_info['field'])
+                read_code += field_info['read']
+
             # --- Read Method ---
-            lf.write("\n            public override void Read(BinaryReader reader)\n")
-            lf.write("            {\n")
-            for i, col in enumerate(columns):
-                type_lower = col['type'].lower().replace("[]", "")
-                
-                array_type = ""
-                if col['type'].replace("[]", "") in class_data_id_list:
-                    array_type = f"GameCore.Tables.ID.{col['type'].replace('[]', '')}TableID"
-                elif col['type'].replace("[]", "") in enum_list:
-                    array_type = f"GameCore.Enums.{col['type'].replace('[]', '')}ID"
-                elif col['type'].replace("[]", "") in class_list:
-                    array_type = f"GameCore.Classes.{col['type'].replace('[]', '')}"
-            
-                #配列対応
-                array_size = 0
-                if "[]" in col['type']:
-                    array_size = -1
-                if array_size == -1:
-                    col['type'] = col['type'].replace("[]", "")
-                    lf.write(f"                int count{i} = reader.ReadInt32();\n")
-                    lf.write(f"                {col['name']} = new List<{array_type if array_type else col['type']}>();\n")
-                    lf.write(f"                for(int j=0; j<count{i}; j++) {{\n")
-                    if type_lower in TYPE_MAP:
-                        if type_lower == 'string':
-                            lf.write(f"                    int len{col['name']} = reader.ReadInt32();\n")
-                            lf.write(f"                    {col['name']}.Add(System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{col['name']})));\n")
-                        elif type_lower == 'vector2':
-                            lf.write(f"                    {col['name']}.Add(new Vector2(reader.ReadSingle(), reader.ReadSingle()));\n")
-                        elif type_lower == 'vector3':
-                            lf.write(f"                    {col['name']}.Add(new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));\n")
-                            
-                        else:
-                            lf.write(f"                    {col['name']}.Add(reader.{TYPE_MAP[type_lower]['cs_read']}());\n")
-                    elif col['type'] in enum_list:
-                        lf.write(f"                    {col['name']}.Add((GameCore.Enums.{col['type']}ID)Enum.ToObject(typeof(GameCore.Enums.{col['type']}ID), reader.ReadInt32()));\n")
-                    elif col['type'] in class_list:
-                        lf.write(f"                    var item = new GameCore.Classes.{col['type']}();\n                    item.Read(reader);\n                    {col['name']}.Add(item);\n")
-                    elif col['type'] in class_data_id_list:
-                        lf.write(f"                    {col['name']}.Add((GameCore.Tables.ID.{col['type']}TableID)Enum.ToObject(typeof(GameCore.Tables.ID.{col['type']}TableID), reader.ReadInt32()));\n")
-                    else:
-                        lf.write(f"                    reader.BaseStream.Seek({TYPE_MAP.get(type_lower, {}).get('size', 4)}, SeekOrigin.Current); // Unsupported type, skip\n")
-                    lf.write("                }\n")
-                elif array_size > 0:
-                    col['type'] = col['type'].replace("[]", "")
-                    lf.write(f"                {col['name']} = new {array_type if array_type else col['type']}[{array_size}];\n")
-                    lf.write(f"                for(int j=0; j<{array_size}; j++) {{\n")
-                    if type_lower in TYPE_MAP:
-                            if type_lower == 'string':
-                                lf.write(f"                    int len{col['name']} = reader.ReadInt32();\n")
-                                lf.write(f"                    {col['name']}[j] = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{col['name']}));\n")
-                            elif type_lower == 'vector2':
-                                lf.write(f"                    {col['name']}[j] = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
-                            elif type_lower == 'vector3':
-                                lf.write(f"                    {col['name']}[j] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
-                            else:
-                                lf.write(f"                    {col['name']}[j] = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
-                    elif col['type'] in enum_list:
-                            lf.write(f"                    {col['name']}[j] = (GameCore.Enums.{col['type']}ID)Enum.ToObject(typeof(GameCore.Enums.{col['type']}ID), reader.ReadInt32());\n")
-                    elif col['type'] in class_list:
-                            lf.write(f"                    var item = new GameCore.Classes.{col['type']}();\n                    item.Read(reader);\n                    {col['name']}[j] = item;\n")
-                    elif col['type'] in class_data_id_list:
-                            lf.write(f"                    {col['name']}[j] = (GameCore.Tables.ID.{col['type']}TableID)Enum.ToObject(typeof(GameCore.Tables.ID.{col['type']}TableID), reader.ReadInt32());\n")
-                    else:
-                            lf.write(f"                    reader.BaseStream.Seek({TYPE_MAP.get(type_lower, {}).get('size', 4)}, SeekOrigin.Current); // Unsupported type, skip\n")
-                    lf.write("                }\n")
-                if array_size == 0:
-                    if type_lower in TYPE_MAP:
-                        if type_lower == 'string':
-                            lf.write(f"                int len{i} = reader.ReadInt32();\n")
-                            lf.write(f"                {col['name']} = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len{i}));\n")
-                        elif type_lower == 'vector2':
-                            lf.write(f"                {col['name']} = new Vector2(reader.ReadSingle(), reader.ReadSingle());\n")
-                        elif type_lower == 'vector3':
-                            lf.write(f"                {col['name']} = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());\n")
-                        else:
-                            lf.write(f"                {col['name']} = reader.{TYPE_MAP[type_lower]['cs_read']}();\n")
-                    elif col['type'] in enum_list:
-                        lf.write(f"                {col['name']} = (GameCore.Enums.{col['type']}ID)Enum.ToObject(typeof(GameCore.Enums.{col['type']}ID), reader.ReadInt32());\n")
-                    elif col['type'] in class_list:
-                        lf.write(f"                {col['name']} = new GameCore.Classes.{col['type']}();\n                {col['name']}.Read(reader);\n")
-                    elif col['type'] in class_data_id_list:
-                        lf.write(f"                {col['name']} = (GameCore.Tables.ID.{col['type']}TableID)Enum.ToObject(typeof(GameCore.Tables.ID.{col['type']}TableID), reader.ReadInt32());\n")
-                    else:
-                        lf.write(f"                {col['name']} = default; // Unsupported\n")
-            lf.write("            }\n")
-            lf.write("        }\n\n")
-            lf.write("}\n\n")
+            lf.write("\n        public override void Read(BinaryReader reader)\n")
+            lf.write("        {\n")
+            lf.write(read_code)
+            lf.write("        }\n")
+            lf.write("    }\n\n")
+            lf.write("}\n")
 
         # --- Main Table File ---
         cs_path = os.path.join(table_dir, f"{name}Table.cs")
