@@ -548,6 +548,8 @@ namespace GameCore.DebugCommand
         // 手動で使いたい場合の汎用フィールド（不要なら未使用のままでよい）
         public string TextLog;
         public object TextData;
+        
+        public JsonObject Data = new JsonObject();
 
         // 各コマンド固有のフィールドをJsonObjectに詰める処理。
         // 自動生成される {Name}Result 側でオーバーライドされる。
@@ -560,6 +562,7 @@ namespace GameCore.DebugCommand
             json["time"] = Time;
             if (TextLog != null) json["textLog"] = TextLog;
             if (TextData != null) json["textData"] = TextData;
+            json["JsonData"] = Data;
             WriteFields(json);
             return json;
         }
@@ -817,6 +820,8 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("        }")
     lines.append("    }")
     lines.append("")
+    
+    has_return = True
 
     # --- 戻り値クラス（ある場合のみ） ---
     # DebugCommandResultBase を継承する。CommandName / Time は
