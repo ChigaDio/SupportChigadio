@@ -3885,6 +3885,8 @@ def generate_gameobject_csharp():
         f.write('    public enum GameObjectGroup { None')
         for group in data['groups']:
             f.write(f', {group}')
+        if "Particle" not in data["groups"]:
+            f.write(f', Particle')
         f.write(' ,Max\n  };\n')
         gameobject_id_counter = 1
         gameobject_id_map = {'None': 0}
@@ -3894,6 +3896,7 @@ def generate_gameobject_csharp():
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
+
         f.write('}\n')
 
     # SubGroup用enum（GameObject_{Group}ID）を各グループごとに生成／同期
@@ -5200,6 +5203,7 @@ using GameCore.MaterialData;
 /// <summary>
 /// {desc}
 /// </summary>
+[System.Serializable]
 public class {class_name} : BaseMaterialData
 {{
 
@@ -5393,6 +5397,7 @@ namespace GameCore.MaterialData
     /// <summary>
     /// Material CS生成機能によって生成される各クラスの共通基底クラス
     /// </summary>
+    [System.Serializable]
     public abstract class BaseMaterialData 
     {
         [SerializeField] protected Renderer targetRenderer;
