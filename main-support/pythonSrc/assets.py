@@ -108,7 +108,7 @@ def generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroup_
 
     enum_name = f"{category_name}_{group_name}"
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {enum_name}\n    {{\n"
+    cs_content += f"    public enum {enum_name}ID\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, sub_name in enumerate(subgroup_names, start=1):
         cs_content += f"        {sub_name} = {i},\n"
