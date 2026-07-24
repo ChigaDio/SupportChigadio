@@ -162,6 +162,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
 
     generate_single_file = all([data_dir, namespace, class_name, group_enum_name, id_enum_name])
     single_lines = []
+    pool_lines = []
     if generate_single_file:
         single_lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
         single_lines.append("using System;")
@@ -191,7 +192,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
 
             if generate_single_file:
                 table_name = f"_{detail_enum_name}To{id_enum_name}"
-                single_lines.append(f"        private static readonly {id_enum_name}[] {table_name} = new {id_enum_name}[]")
+                single_lines.append(f"        public static readonly {id_enum_name}[] {table_name} = new {id_enum_name}[]")
                 single_lines.append("        {")
                 single_lines.append(f"            {id_enum_name}.None, // {detail_enum_name}.None")
                 for item in value:
@@ -229,6 +230,125 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"       public Material GetMaterial({detail_enum_name}ID id)")
                     single_lines.append(f"            => GetMaterial({group_enum_name}.{group_name}, {table_name}[(int)id]);")
                     single_lines.append("")
+                elif "TextureCore" == class_name:
+                    for item in value:
+                        sprite_table_name = f"_{detail_enum_name}_{item["name"]}To{id_enum_name}"
+                        sprites = item.get("sprites",[])
+                        sprite_name = item.get("name","")
+                        
+                        single_lines.append(f"       public Texture2D GetTexture({detail_enum_name}ID id)")
+                        single_lines.append(f"            => GetTexture({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                        single_lines.append("") 
+                        
+                        if len(sprites) == 0 or sprite_name == "":
+                            continue
+
+                        single_lines.append(f"       public Sprite GetSprite({detail_enum_name}ID id)")
+                        single_lines.append(f"            => GetSprite({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                        single_lines.append("") 
+
+                        generic_name = f"{detail_enum_name}_{sprite_name}ID";
+                        single_lines.append(f"       public Sprite GetSprite({generic_name} spriteIndex, int fallbackIndex = -1)")
+                        single_lines.append(f"            => GetSprite<{generic_name}>({group_enum_name}.{group_name}, {category_name}ID.{group_name}_{sprite_name},spriteIndex,fallbackIndex);")
+                        single_lines.append("")
+                        
+                # ==========================================================
+                # SoundObjectPool / ParticleObjectPool 用ラッパー
+                # ==========================================================
+                # SoundPool用
+                if class_name == "SoundCore":
+                    pool_lines.append("    public sealed partial class SoundObjectPool")
+                    pool_lines.append("    {")
+                    # PlaySE
+                    pool_lines.append(
+                        f"        public static UniTask<SoundHandle> PlaySE("
+                        f"{detail_enum_name}ID id, "
+                        f"Vector3 position, "
+                        f"float volume = 1f, "
+                        f"float pitch = 1f, "
+                        f"float forceDuration = -1f, "
+                        f"float distance = 0f, "
+                        f"Action<SoundHandle> onCompleted = null)"
+                    )
+                    pool_lines.append(
+                        f"            => PlaySE("
+                        f"SoundGroup.{group_name}, "
+                        f"{class_name}.{table_name}[(int)id], "
+                        f"position, "
+                        f"volume, "
+                        f"pitch, "
+                        f"forceDuration, "
+                        f"distance, "
+                        f"onCompleted);"
+                    )
+                    pool_lines.append("")
+                    # PlayBGM
+                    pool_lines.append(
+                        f"        public static UniTask PlayBGM("
+                        f"int channel, "
+                        f"{detail_enum_name}ID id, "
+                        f"float fadeIn = 1f, "
+                        f"float volume = 1f)"
+                    )
+                    pool_lines.append(
+                        f"            => PlayBGM("
+                        f"channel, "
+                        f"SoundGroup.{group_name}, "
+                        f"{class_name}.{table_name}[(int)id], "
+                        f"fadeIn, "
+                        f"volume);"
+                    )
+                    pool_lines.append("")
+                    # StopSE
+                    pool_lines.append(
+                        f"        public void StopSE({detail_enum_name}ID id)"
+                    )
+                    pool_lines.append(
+                        f"            => StopSE("
+                        f"SoundGroup.{group_name}, "
+                        f"{class_name}.{table_name}[(int)id]);"
+                    )
+                    pool_lines.append("    }")
+                    pool_lines.append("")
+                # ParticlePool用（GameObjectカテゴリの中でもParticleグループだけ）
+                elif class_name == "GameObjectCore" and group_name == "Particle":
+                    pool_lines.append("    public sealed partial class ParticleObjectPool")
+                    pool_lines.append("    {")
+                    # Play
+                    pool_lines.append(
+                        f"        public static UniTask<ParticleHandle> Play("
+                        f"{detail_enum_name}ID id, "
+                        f"Vector3 position, "
+                        f"Quaternion rotation = default, "
+                        f"Transform parent = null, "
+                        f"float forceDuration = -1f, "
+                        f"TimedAction[] timedActions = null, "
+                        f"Action<ParticleHandle> onCompleted = null)"
+                    )
+                    pool_lines.append(
+                        f"            => Play("
+                        f"{class_name}.{table_name}[(int)id], "
+                        f"position, "
+                        f"rotation, "
+                        f"parent, "
+                        f"forceDuration, "
+                        f"timedActions, "
+                        f"onCompleted);"
+                    )
+                    pool_lines.append("")
+                    # StopParticle
+                    pool_lines.append(
+                        f"        public void StopParticle({detail_enum_name}ID id)"
+                    )
+                    pool_lines.append(
+                        f"            => StopParticle("
+                        f"{class_name}.{table_name}[(int)id]);"
+                    )
+                    pool_lines.append("    }")
+                    pool_lines.append("")
+                        
+
+                        
                                      
                     
 
@@ -242,8 +362,17 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     pass
 
     if generate_single_file:
+        # まず元の {class_name} partial class を閉じる
         single_lines.append("    }")
+
+        # Pool用ラッパーがある場合は同じnamespace内に追加   
+        if pool_lines:
+            single_lines.append("")
+            single_lines.extend(pool_lines)
+
+        # namespaceを閉じる
         single_lines.append("}")
+
         with open(os.path.join(data_dir, f"{class_name}Single.cs"), 'w', encoding='utf-8') as f:
             f.write("\n".join(single_lines))
 
@@ -2094,7 +2223,7 @@ namespace GameCore.Sound
     // =============================================================
     // メインクラス：SoundObjectPool
     // =============================================================
-    public sealed class SoundObjectPool : BaseSingleton<SoundObjectPool>
+    public sealed partial class SoundObjectPool : BaseSingleton<SoundObjectPool>
     {
         private readonly Dictionary<(SoundGroup group, SoundID id), SoundPool> sePools = new();
         private readonly ConcurrentDictionary<(SoundGroup group, SoundID id), UniTask<SoundPool>> creatingPools = new();
@@ -2634,6 +2763,8 @@ namespace GameCore.Sound
 
     # SoundCoreSubGroups.cs（SubGroup単位のLoad/Unload専用メソッド。毎回再生成される）
     generate_sound_core_subgroups(data)
+    
+    #SoundPoolのラッパー関数を作成
 
 
 def generate_sound_core_subgroups(data):
@@ -2860,6 +2991,42 @@ def reload_texture_file(group_name, index):
     save_texture_data(data)
     return entry
 
+def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
+    target_dir = os.path.join(ENUM_DIR, f"{group_name}_{subgroup_name}_{sprite_name}")
+    
+    os.makedirs(target_dir, exist_ok=True)
+    enum_name = f"{group_name}_{subgroup_name}_{sprite_name}"
+    
+    #enum作成
+    cs_content = "namespace GameCore.Enums\n{\n"
+    cs_content += f"    public enum {enum_name}ID\n    {{\n"
+    cs_content += "        None = 0, // デフォルト値\n"
+    for i, id in enumerate(sprites, start=1):
+        cs_content += f"        {id} = {i},\n"
+    cs_content += f"        Max = {len(sprites) + 1}\n"
+    cs_content += "    }\n}"
+    
+    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(cs_content)
+    
+    
+    
+    #json作成
+    json_dict: list[dict[str, object]] = []
+    js_path = os.path.join(target_dir, f"{group_name}_{group_name}_{subgroup_name}.json")
+    with open(js_path,'w',encoding='utf-8') as f:
+        for i, item in enumerate(sprites, start=1):
+            json_dict.append({
+                "description": f"{item}",
+                "id": i,
+                "property": f"{item}",
+                "value": i
+            })
+        json.dump(json_dict, f, ensure_ascii=False, indent=4)
+    
+    return enum_name
+
 def generate_texture_csharp():
     """
     テクスチャ関連のC#コードとJSONを生成
@@ -2891,6 +3058,9 @@ def generate_texture_csharp():
             for texture in group_value['items']:
                 texture_id = f"{group}_{texture['name']}"
                 if len(texture.get('sprites', [])) <= 1:
+                    # EnumクラスやJsonを作成
+                    enum_name = generate_texture_sprite_enum(group,texture['subgroup'],texture['name'],texture.get('sprites', []))
+                    register_enum_names(ENUM_DIR,enum_name)
                     for sprite in texture.get('sprites', []):
                         sprite_id = f"{group}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
@@ -4452,7 +4622,7 @@ using GameCore.Gameobject;
 
 namespace GameCore.Gameobject
 {
-    public sealed class ParticleObjectPool : BaseSingleton<ParticleObjectPool>
+    public sealed partial class ParticleObjectPool : BaseSingleton<ParticleObjectPool>
     {
         private readonly Dictionary<GameObjectID, ParticlePool> pools = new();
         private readonly ConcurrentDictionary<GameObjectID, UniTask<ParticlePool>> creatingPools = new();
