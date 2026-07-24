@@ -416,7 +416,6 @@ def _generate_registry_cs(base_dir):
 
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json.Linq;
 
 namespace GameCore.DebugCommand
 {
@@ -439,6 +438,15 @@ namespace GameCore.DebugCommand
         public static void Register(DebugCommandBase command)
         {
             _commands[command.CommandName] = command;
+        }
+        
+        public static void ChangeCommand(DebugCommandBase command)
+        {
+            if(_commands.ContainsKey(command.CommandName))
+            {
+                _commands[command.CommandName] = null;
+                _commands[command.CommandName] = command;
+            }
         }
 
         public static bool TryGet(string name, out DebugCommandBase command)
@@ -512,6 +520,57 @@ namespace GameCore.DebugCommand
     return path
 
 
+def _generate_result_base_cs(base_dir):
+    """全DebugCommand戻り値の基底クラス（自動生成・編集不要）。
+    CommandName / Time はフレームワーク側(Base{Name}DebugCommand.Invoke)が自動的にセットする。
+    各コマンドの手動実装(Execute)側では、渡された result 引数に対して
+    固有のフィールド(自動生成された {Name}Result 側で定義される)、または
+    TextLog(簡易ログ文字列) / TextData(任意オブジェクト。List<object> 等をそのまま入れられる)
+    に値を代入するだけでよい。"""
+    path = os.path.join(base_dir, "DebugCommandResultBase.cs")
+    content = '''
+namespace GameCore.DebugCommand
+{
+    // 全DebugCommandの戻り値(Result)が継承する基底クラス（自動生成・編集不要）
+    //
+    //  ・CommandName / Time は Base{Name}DebugCommand.Invoke() が自動的にセットします。
+    //    Execute() 内で手動で設定する必要はありません（してはいけません）。
+    //  ・TextLog / TextData は、専用の戻り値フィールドを増やすほどではない
+    //    簡易なログ文字列や任意のデータ（List<object> / Dictionary<string,object> など、
+    //    MiniJson がそのままシリアライズできる型）を返したい場合に使ってください。
+    //    例: result.TextData = charactersList; // List<object>
+    public abstract class DebugCommandResultBase
+    {
+        // フレームワークが自動的に設定する。Execute() 内では触らないこと。
+        public string CommandName { get; internal set; }
+        public string Time { get; internal set; }
+
+        // 手動で使いたい場合の汎用フィールド（不要なら未使用のままでよい）
+        public string TextLog;
+        public object TextData;
+
+        // 各コマンド固有のフィールドをJsonObjectに詰める処理。
+        // 自動生成される {Name}Result 側でオーバーライドされる。
+        protected virtual void WriteFields(JsonObject json) { }
+
+        public JsonObject ToJson()
+        {
+            var json = new JsonObject();
+            json["commandName"] = CommandName;
+            json["time"] = Time;
+            if (TextLog != null) json["textLog"] = TextLog;
+            if (TextData != null) json["textData"] = TextData;
+            WriteFields(json);
+            return json;
+        }
+    }
+}
+'''
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return path
+
+
 def _generate_websocket_handler_cs(base_dir):
     """dbgServer.py(ws://localhost:8765)に接続し、DebugCommandの受信・実行・応答送信を行う
     Unity側のハンドラ。シーンに配置するだけで動作する（自動生成・編集不要）。"""
@@ -548,7 +607,7 @@ namespace GameCore.DebugCommand
                 var go = new GameObject("DebugCommand");
                 UnityEngine.Object.DontDestroyOnLoad(go);
                 go.AddComponent<DebugCommandWebSocketHandler>();
-                //DebugCommandInstaller.InstallAll();
+                DebugCommandInstaller.InstallAll();
             }
         }
         [Conditional("UNITY_EDITOR")]
@@ -657,16 +716,18 @@ namespace GameCore.DebugCommand
 
 def generate_base(data_dir):
     """共通基盤一式を生成する（起動時に毎回上書き。手動編集不要）。
-      DebugCommandJson.cs              ... 自前JSONパーサ/シリアライザ（Newtonsoft非依存）
+      DebugCommandJson.cs              ... 自前JSONパーサ/シリアライザ（外部ライブラリ非依存）
       DebugCommandBase.cs              ... 基底クラス + レジストリ + ディスパッチャ
+      DebugCommandResultBase.cs        ... 全コマンド戻り値の基底クラス（時間/コマンド名を自動設定）
       DebugCommandWebSocketHandler.cs  ... Unity側WebSocketクライアント（受信→実行→応答送信）
     """
     base_dir = os.path.join(data_dir, DEBUG_COMMAND)
     os.makedirs(base_dir, exist_ok=True)
     json_path = _generate_json_cs(base_dir)
     registry_path = _generate_registry_cs(base_dir)
+    result_base_path = _generate_result_base_cs(base_dir)
     handler_path = _generate_websocket_handler_cs(base_dir)
-    return json_path, registry_path, handler_path
+    return json_path, registry_path, result_base_path, handler_path
 
 
 def generate_installer(data_dir, names):
@@ -686,6 +747,12 @@ def generate_installer(data_dir, names):
     for n in names:
         lines.append(f"            DebugCommandRegistry.Register(new {n}DebugCommand());")
     lines.append("        }")
+    
+    lines.append("        public static void ChangeCommand(DebugCommandBase command)")
+    lines.append("        {")
+    lines.append("            DebugCommandRegistry.ChangeCommand(command);")
+    lines.append("        }")
+    
     lines.append("    }")
     lines.append("}")
 
@@ -726,12 +793,9 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     cmd_dir = os.path.join(data_dir, DEBUG_COMMAND, name)
     os.makedirs(cmd_dir, exist_ok=True)
 
-    result_type = f"{name}Result" if has_return else "void"
-
     lines = []
     lines.append("using System;")
     lines.append("using UnityEngine;")
-    lines.append("using Newtonsoft.Json.Linq;")
     lines.append("")
     lines.append("namespace GameCore.DebugCommand")
     lines.append("{")
@@ -755,19 +819,21 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("")
 
     # --- 戻り値クラス（ある場合のみ） ---
+    # DebugCommandResultBase を継承する。CommandName / Time は
+    # Base{Name}DebugCommand.Invoke() が自動的に設定するため、Execute() 側では
+    # 下記の固有フィールド（と、必要であれば継承した TextLog / TextData）だけを埋めればよい。
     if has_return:
-        lines.append(f"    // {name} コマンドの戻り値（自動生成）")
-        lines.append(f"    public class {name}Result")
+        lines.append(f"    // {name} コマンドの戻り値（自動生成）。")
+        lines.append(f"    // 固有フィールドはここに追加されるが、値の設定は {name}DebugCommand.Execute() 側（手動実装ファイル）で行う。")
+        lines.append(f"    public class {name}Result : DebugCommandResultBase")
         lines.append("    {")
         for r in return_fields:
             lines.append(f"        public {_cs_type(r['type'])} {r['name']};")
         lines.append("")
-        lines.append("        public JObject ToJson()")
+        lines.append("        protected override void WriteFields(JsonObject json)")
         lines.append("        {")
-        lines.append("            var json = new JObject();")
         for r in return_fields:
             lines.append(f"            {_to_json_stmt(r['type'], r['name'])}")
-        lines.append("            return json;")
         lines.append("        }")
         lines.append("    }")
         lines.append("")
@@ -779,18 +845,25 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("    {")
     lines.append(f'        public override string CommandName => "{name}";')
     lines.append("")
-    lines.append("        public override JObject Invoke(JsonObject argsJson)")
+    lines.append("        public override JsonObject Invoke(JsonObject argsJson)")
     lines.append("        {")
     lines.append(f"            var args = {name}Args.FromJson(argsJson);")
     if has_return:
-        lines.append("            var result = Execute(args);")
-        lines.append("            return result?.ToJson();")
+        lines.append(f"            var result = new {name}Result();")
+        lines.append("            // 時間・コマンド名は自動設定。Execute()側では手動で返したいデータのみ埋めればよい")
+        lines.append("            result.CommandName = CommandName;")
+        lines.append('            result.Time = DateTime.Now.ToString("HH:mm:ss.fff");')
+        lines.append("            Execute(args, result);")
+        lines.append("            return result.ToJson();")
     else:
         lines.append("            Execute(args);")
         lines.append("            return null;")
     lines.append("        }")
     lines.append("")
-    lines.append(f"        protected abstract {result_type} Execute({name}Args args);")
+    if has_return:
+        lines.append(f"        protected abstract void Execute({name}Args args, {name}Result result);")
+    else:
+        lines.append(f"        protected abstract void Execute({name}Args args);")
     lines.append("    }")
     lines.append("}")
 
@@ -803,7 +876,7 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     if not os.path.exists(stub_path):
         stub_lines = []
         stub_lines.append("using UnityEngine;")
-        stub_lines.append("using Newtonsoft.Json.Linq;")
+        stub_lines.append("using System.Collections.Generic;")
         stub_lines.append("")
         stub_lines.append("namespace GameCore.DebugCommand")
         stub_lines.append("{")
@@ -811,11 +884,17 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
         stub_lines.append(f"    // このファイルは初回生成時にのみ作られ、以後の生成では上書きされません。")
         stub_lines.append(f"    public class {name}DebugCommand : Base{name}DebugCommand")
         stub_lines.append("    {")
-        stub_lines.append(f"        protected override {result_type} Execute({name}Args args)")
-        stub_lines.append("        {")
-        stub_lines.append("            // TODO: ここに実装")
         if has_return:
-            stub_lines.append(f"            return new {name}Result();")
+            stub_lines.append(f"        protected override void Execute({name}Args args, {name}Result result)")
+            stub_lines.append("        {")
+            stub_lines.append("            // TODO: ここに実装。time/commandNameは自動設定済みなので触らないこと。")
+            stub_lines.append("            // 固有フィールドがあれば代入: result.someField = ...;")
+            stub_lines.append("            // List/Dictionary等をそのまま返したい場合は TextData を使う:")
+            stub_lines.append("            // result.TextData = new List<object> { ... };")
+        else:
+            stub_lines.append(f"        protected override void Execute({name}Args args)")
+            stub_lines.append("        {")
+            stub_lines.append("            // TODO: ここに実装")
         stub_lines.append("        }")
         stub_lines.append("    }")
         stub_lines.append("}")
@@ -838,10 +917,25 @@ def register(app, data_dir):
 
     # 共通基盤(DebugCommandBase.cs)は起動時に必ず最新化しておく
     generate_base(data_dir)
-    
-    generate_base_installer(data_dir)
 
     list_path = os.path.join(cmd_root, 'debug_command_list.json')
+
+    # Installerは初回のみ空の状態で作成する。既に存在する場合は、
+    # 常に上書きしていた従来の挙動（＝再起動のたびに登録済みコマンドが消える）をやめ、
+    # 現在の登録一覧から再生成して同期させる。
+    installer_path = os.path.join(cmd_root, "DebugCommandInstaller.cs")
+    if not os.path.exists(installer_path):
+        generate_base_installer(data_dir)
+    else:
+        try:
+            if os.path.exists(list_path):
+                with open(list_path, 'r', encoding='utf-8') as f:
+                    _names = [item['name'] for item in json.load(f)]
+            else:
+                _names = []
+            generate_installer(data_dir, _names)
+        except Exception as e:
+            logger.error(f"DebugCommandInstaller再同期エラー: {str(e)}")
 
     def _load_list():
         if not os.path.exists(list_path):
@@ -859,9 +953,18 @@ def register(app, data_dir):
     def _load_detail(name):
         path = _detail_path(name)
         if not os.path.exists(path):
-            return {"args": [], "hasReturn": False, "returnFields": []}
+            return {"args": [], "hasReturn": False, "returnFields": [], "description": ""}
         with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            detail = json.load(f)
+            detail.setdefault("description", "")
+            return detail
+
+    def _sync_installer():
+        """登録済み全コマンド名からインストーラを再生成する。
+        削除・追加のたびに呼ぶことで、Installer側は常に最新の一覧と一致する
+        （古いコマンドの登録は自動的に消え、新しいものは自動的に追加される）。"""
+        names = [item['name'] for item in _load_list()]
+        return generate_installer(data_dir, names)
 
     # --- 一覧取得 / 新規登録 / 削除 ---
     @app.route('/api/debug-command', methods=['GET', 'POST', 'PATCH'])
@@ -894,7 +997,7 @@ def register(app, data_dir):
                 data_file_path = _detail_path(name)
                 os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
                 with open(data_file_path, 'w', encoding='utf-8') as f:
-                    json.dump({"args": [], "hasReturn": False, "returnFields": []}, f, ensure_ascii=False, indent=2)
+                    json.dump({"args": [], "hasReturn": False, "returnFields": [], "description": body.get('description', '')}, f, ensure_ascii=False, indent=2)
 
                 logger.info(f"DebugCommandを作成しました: {name}")
                 return jsonify({"message": f"DebugCommand {name} を作成しました", "data": new_entry}), 201
@@ -919,6 +1022,9 @@ def register(app, data_dir):
                 if os.path.exists(cmd_dir):
                     shutil.rmtree(cmd_dir)
 
+                # Installerから削除済みコマンドの登録行を消す
+                _sync_installer()
+
                 logger.info(f"DebugCommandを削除しました: {delete_name}")
                 return jsonify({"message": f"DebugCommand {delete_name} を削除しました"}), 200
             except Exception as e:
@@ -941,6 +1047,7 @@ def register(app, data_dir):
                 args = body.get('args', [])
                 has_return = bool(body.get('hasReturn', False))
                 return_fields = body.get('returnFields', [])
+                description = body.get('description', '')
 
                 err = _validate_fields(args)
                 if err:
@@ -952,7 +1059,7 @@ def register(app, data_dir):
                 else:
                     return_fields = []
 
-                detail = {"args": args, "hasReturn": has_return, "returnFields": return_fields}
+                detail = {"args": args, "hasReturn": has_return, "returnFields": return_fields, "description": description}
                 path = _detail_path(name)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f:
@@ -986,7 +1093,10 @@ def register(app, data_dir):
                 data_dir, name, detail.get('args', []),
                 detail.get('hasReturn', False), detail.get('returnFields', [])
             )
-            return jsonify({"message": f"C#ファイルを生成しました: {base_path}, {stub_path}"}), 200
+            # このコマンドをInstallerにも反映する（現在の登録一覧全体から再生成するため、
+            # 古い/削除済みのコマンドは自動的に消え、このコマンドは自動的に追加/上書きされる）
+            installer_path = _sync_installer()
+            return jsonify({"message": f"C#ファイルを生成しました: {base_path}, {stub_path}, {installer_path}"}), 200
         except Exception as e:
             logger.error(f"DebugCommand CS生成エラー {name}: {str(e)}")
             return jsonify({"error": str(e)}), 500
@@ -1005,11 +1115,8 @@ def register(app, data_dir):
                     detail.get('hasReturn', False), detail.get('returnFields', [])
                 )
                 names.append(name)
-            installer_path = generate_installer(data_dir, names)
+            installer_path = _sync_installer()
             return jsonify({"message": f"{len(names)}件のDebugCommandを生成しました", "installer": installer_path}), 200
         except Exception as e:
             logger.error(f"DebugCommand一括生成エラー: {str(e)}")
             return jsonify({"error": str(e)}), 500
-        
-
-    

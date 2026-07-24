@@ -163,6 +163,7 @@ const btnStyle = (color) => ({
 function NewCommandForm({ onCreated }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [args, setArgs] = useState([]);
   const [hasReturn, setHasReturn] = useState(false);
   const [returnFields, setReturnFields] = useState([]);
@@ -170,6 +171,7 @@ function NewCommandForm({ onCreated }) {
 
   const reset = () => {
     setName('');
+    setDescription('');
     setArgs([]);
     setHasReturn(false);
     setReturnFields([]);
@@ -193,7 +195,7 @@ function NewCommandForm({ onCreated }) {
       const detailRes = await fetch(`/api/debug-command/${encodeURIComponent(name.trim())}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ args, hasReturn, returnFields }),
+        body: JSON.stringify({ args, hasReturn, returnFields, description }),
       });
       const detailJson = await detailRes.json();
       if (!detailRes.ok) throw new Error(detailJson.error || '詳細保存失敗');
@@ -229,6 +231,17 @@ function NewCommandForm({ onCreated }) {
       <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
         <span style={{ color: COLOR_GREEN_DIM, fontSize: 12 }}>name:</span>
         <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle(220)} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-start' }}>
+        <span style={{ color: COLOR_GREEN_DIM, fontSize: 12, marginTop: 4 }}>desc:</span>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="このコマンドの説明（何をするコマンドか）"
+          rows={2}
+          style={{ ...inputStyle(360), resize: 'vertical', fontFamily: FONT }}
+        />
       </div>
 
       <FieldListEditor title="ARGS" fields={args} onChange={setArgs} />
@@ -272,6 +285,7 @@ function CommandTable({ commands, onDelete, onGenerate, onGenerateAll }) {
         <thead>
           <tr style={{ color: COLOR_GREEN_DIM, textAlign: 'left', borderBottom: `1px solid ${COLOR_GREEN_DIM}` }}>
             <th style={{ padding: '4px 6px' }}>NAME</th>
+            <th style={{ padding: '4px 6px' }}>DESCRIPTION</th>
             <th style={{ padding: '4px 6px' }}>ARGS</th>
             <th style={{ padding: '4px 6px' }}>RETURN</th>
             <th style={{ padding: '4px 6px' }}>ACTION</th>
@@ -281,6 +295,9 @@ function CommandTable({ commands, onDelete, onGenerate, onGenerateAll }) {
           {commands.map((c) => (
             <tr key={c.id} style={{ borderBottom: `1px solid #0f2413` }}>
               <td style={{ padding: '4px 6px', color: COLOR_GREEN }}>{c.name}</td>
+              <td style={{ padding: '4px 6px', color: COLOR_GREEN_DIM, maxWidth: 260 }}>
+                {c.description || '-'}
+              </td>
               <td style={{ padding: '4px 6px', color: COLOR_GREEN_DIM }}>
                 {c.args.map((a) => `${a.name}:${a.type}`).join(', ') || '(なし)'}
               </td>
@@ -299,7 +316,7 @@ function CommandTable({ commands, onDelete, onGenerate, onGenerateAll }) {
           ))}
           {commands.length === 0 && (
             <tr>
-              <td colSpan={4} style={{ padding: '8px 6px', color: COLOR_GREEN_DIM }}>
+              <td colSpan={5} style={{ padding: '8px 6px', color: COLOR_GREEN_DIM }}>
                 (登録済みのDebugCommandはありません)
               </td>
             </tr>
@@ -319,10 +336,13 @@ function DebugCommandConsole() {
   const [input, setInput] = useState('');
   const [history, setHistory] = useState([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const [commandHistory, setCommandHistory] = useState([]); // 入力送信履歴（古い→新しい順）
 
   const socketRef = useRef(null);
   const inputRef = useRef(null);
   const logEndRef = useRef(null);
+  const historyIndexRef = useRef(null); // null = 履歴を辿っていない（現在入力中）。0が最新履歴。
+  const draftRef = useRef(''); // 履歴を辿り始める直前に入力していた内容（↓で戻ってくる用）
 
   const fetchCommands = useCallback(() => {
     fetch('/api/debug-command-full')
@@ -382,7 +402,7 @@ function DebugCommandConsole() {
         .map((c) => ({
           type: 'command',
           label: c.name,
-          hint: `${c.args.length}引数${c.hasReturn ? ' / 戻り値あり' : ''}`,
+          hint: `${c.args.length}引数${c.hasReturn ? ' / 戻り値あり' : ''}${c.description ? ' - ' + c.description : ''}`,
         }));
     }
     const cmdDef = commands.find((c) => c.name === tokens[0]);
@@ -412,6 +432,12 @@ function DebugCommandConsole() {
   const sendCommand = () => {
     const trimmed = input.trim();
     if (!trimmed) return;
+
+    // コマンド履歴に記録（直前と同じ内容は積み増ししない）
+    setCommandHistory((prev) => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
+    historyIndexRef.current = null;
+    draftRef.current = '';
+
     const tokens = trimmed.split(/\s+/);
     const cmdName = tokens[0];
     const cmdDef = commands.find((c) => c.name === cmdName);
@@ -447,16 +473,55 @@ function DebugCommandConsole() {
     setInput('');
   };
 
+  // ↑↓でこれまで送信したコマンドを呼び出す（シェルのコマンド履歴と同じ挙動）。
+  // dir: 'up' = より古い履歴へ, 'down' = より新しい履歴へ（さらに進むと入力途中の内容に戻る）
+  const recallHistory = (dir) => {
+    if (commandHistory.length === 0) return;
+    if (dir === 'up') {
+      if (historyIndexRef.current === null) {
+        draftRef.current = input;
+        historyIndexRef.current = 0;
+      } else if (historyIndexRef.current < commandHistory.length - 1) {
+        historyIndexRef.current += 1;
+      }
+      const idx = commandHistory.length - 1 - historyIndexRef.current;
+      setInput(commandHistory[idx]);
+    } else {
+      if (historyIndexRef.current === null) return;
+      if (historyIndexRef.current === 0) {
+        historyIndexRef.current = null;
+        setInput(draftRef.current);
+      } else {
+        historyIndexRef.current -= 1;
+        const idx = commandHistory.length - 1 - historyIndexRef.current;
+        setInput(commandHistory[idx]);
+      }
+    }
+    // カーソルを末尾に置く
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
   const handleKeyDown = (e) => {
     if (e.key === 'Tab') {
       e.preventDefault();
       if (suggestions.length > 0) acceptSuggestion(suggestions[selectedSuggestion] || suggestions[0]);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedSuggestion((s) => Math.min(s + 1, Math.max(suggestions.length - 1, 0)));
+      if (suggestions.length > 0) {
+        setSelectedSuggestion((s) => Math.min(s + 1, Math.max(suggestions.length - 1, 0)));
+      } else {
+        recallHistory('down');
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedSuggestion((s) => Math.max(s - 1, 0));
+      if (suggestions.length > 0) {
+        setSelectedSuggestion((s) => Math.max(s - 1, 0));
+      } else {
+        recallHistory('up');
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       sendCommand();
@@ -591,7 +656,10 @@ function DebugCommandConsole() {
           <input
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              historyIndexRef.current = null;
+              setInput(e.target.value);
+            }}
             onKeyDown={handleKeyDown}
             placeholder="command arg1=value1 arg2=value2 ..."
             style={{
@@ -646,7 +714,7 @@ function DebugCommandConsole() {
         )}
       </div>
       <div style={{ color: COLOR_GREEN_DIM, fontSize: 11, marginTop: 6 }}>
-        Tab: 候補確定 / ↑↓: 候補選択 / Enter: 実行 &nbsp;|&nbsp; 例: SpawnEnemy posX=1.5 posY=2.0
+        Tab: 候補確定 / ↑↓: 候補選択(候補表示中) or 送信済みコマンド履歴を呼び出す / Enter: 実行 &nbsp;|&nbsp; 例: SpawnEnemy posX=1.5 posY=2.0
       </div>
     </div>
   );
