@@ -6,7 +6,7 @@ import json
 connected_clients = set()
 
 # WebSocket server to handle clients (Unity C# and React)
-async def handle_websocket(websocket, path):
+async def handle_websocket(websocket):
     # Register client
     connected_clients.add(websocket)
     print(f"Client connected. Total clients: {len(connected_clients)}")

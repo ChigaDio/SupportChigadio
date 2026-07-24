@@ -604,7 +604,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseTable.cs")):
         public abstract class BaseTable
         {
 
-            public abstract void Read(int id,BinaryReader reader);
+            public abstract void Read(BinaryReader reader);
             public abstract void Release();
 
         }
