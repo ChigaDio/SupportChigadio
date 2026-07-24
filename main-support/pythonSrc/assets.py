@@ -54,7 +54,7 @@ def generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, s
     
     #enum作成
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {enum_name}\n    {{\n"
+    cs_content += f"    public enum {enum_name}ID\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, id in enumerate(items, start=1):
         cs_content += f"        {id['name']} = {i},\n"
