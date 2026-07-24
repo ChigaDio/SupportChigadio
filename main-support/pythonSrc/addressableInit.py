@@ -232,8 +232,17 @@ namespace AddressableSystem
                 if (data != null)
                 {
                     data.Release();
-                    return;
                 }
+                // 元データへ委譲した後も、このコピー自身が isSetup/isLoaded = true のまま
+                // 古い参照を保持し続けてしまうため、コピー自身の状態も必ずリセットする。
+                addressableObject = null;
+                addressableArray = null;
+                typedAddressableObject = null;
+                typedAddressableArray = null;
+                isSetup = false;
+                isLoaded = false;
+                isInstantiated = false;
+                return;
             }
             if (!IsLoadedAndSetup) return;
 
@@ -281,7 +290,6 @@ namespace AddressableSystem
         }
     }
 }
-
 
 
     """
@@ -332,6 +340,7 @@ namespace AddressableSystem
         int GetGroupCount(GroupCategory group);
         int GetCategoryCount(GroupCategory group, AssetCategory category);
         void Add(GroupCategory group, AssetCategory category, BaseAddressableData data);
+        void Remove(GroupCategory group, AssetCategory category, BaseAddressableData data);
         BaseAddressableData Find(GroupCategory group, AssetCategory category, int index);
         BaseAddressableData Find(GroupCategory group, AssetCategory category, string path);
         BaseAddressableData Find(BaseAddressableData data);
@@ -424,6 +433,28 @@ namespace AddressableSystem
                 return;
             }
             list.Add(data);
+        }
+
+        /// <summary>
+        /// Single/SubGroup単位の解放時に、追跡リストから該当エントリのみを取り除く。
+        /// isCopy（他インスタンスへのエイリアス）はそもそもリストに追加されていないため何もしない。
+        /// </summary>
+        public void Remove(GroupCategory group, AssetCategory category, BaseAddressableData data)
+        {
+            if (data == null || data.isCopy) return;
+            if (!groupDataMap.TryGetValue(group, out var categoryMap)) return;
+            if (!categoryMap.TryGetValue(category, out var list) || list == null) return;
+
+            if (!list.Remove(data)) return; // 参照一致で削除。見つからなければ何もしない
+
+            if (list.Count == 0)
+            {
+                categoryMap.Remove(category);
+                if (categoryMap.Count == 0)
+                {
+                    groupDataMap.Remove(group);
+                }
+            }
         }
 
         public BaseAddressableData Find(GroupCategory group, AssetCategory category, int index)
@@ -542,14 +573,28 @@ namespace AddressableSystem
 
         public void ReleaseAssetCategory(AssetCategory asset)
         {
-            foreach(var list in groupDataMap.Values)
+            var emptyGroups = new List<GroupCategory>();
+            foreach (var groupKvp in groupDataMap)
             {
-                if (!list.ContainsKey(asset)) continue;
-                foreach (var data in list[asset])
+                var categoryMap = groupKvp.Value;
+                if (!categoryMap.TryGetValue(asset, out var list) || list == null) continue;
+
+                foreach (var data in list)
                 {
                     data.Release();
                 }
-                list[asset].Clear();
+                list.Clear();
+                categoryMap.Remove(asset);
+
+                if (categoryMap.Count == 0)
+                {
+                    emptyGroups.Add(groupKvp.Key);
+                }
+            }
+
+            foreach (var group in emptyGroups)
+            {
+                groupDataMap.Remove(group);
             }
         }
 
@@ -589,12 +634,11 @@ namespace AddressableSystem
         }
     }
 }
-
     """
     generate_file(os.path.join(ADDRESSABLE_LIB_DIR,"AddressableDataContainer.cs"),code_str)
 
     code_str = """
-    using Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -764,6 +808,16 @@ namespace AddressableSystem
         }
 
         /// <summary>
+        /// Single/SubGroup単位の解放で使用。data自身が保持するgroupCategory/assetCategoryを使って
+        /// 追跡リストから当該エントリのみを除去する（Group/Category単位の一括解放では使わないこと）。
+        /// </summary>
+        public void RemoveData(BaseAddressableData data)
+        {
+            if (data == null) return;
+            dataContainer?.Remove(data.groupCategory, data.assetCategory, data);
+        }
+
+        /// <summary>
         /// Finds addressable data by index in the specified group and category.
         /// </summary>
         public BaseAddressableData Find(GroupCategory group, AssetCategory category, int index)
@@ -929,7 +983,7 @@ namespace AddressableSystem
     generate_file(os.path.join(ADDRESSABLE_LIB_DIR,"AddressableObject.cs"),code_str)
 
     code_str = """
-    using UnityEngine;
+using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace AddressableSystem
@@ -938,6 +992,7 @@ namespace AddressableSystem
     /// 管理用の非ジェネリック基底。
     /// ロードメソッド自体は派生側に実装させる（T 型のラムダを受け取る）。
     /// </summary>
+    
     public abstract class BaseAddressableData
     {
         protected bool isArray;
@@ -978,6 +1033,24 @@ namespace AddressableSystem
         /// 派生で実装する（型付きの Load/LoadArray を実装すること）。
         /// </summary>
         public abstract void Release();
+
+        /// <summary>
+        /// Single / SubGroup 単位の解放用。
+        /// Release() に加えて AddressableDataCore の追跡リスト（AddressableDataContainer）からも
+        /// 自分自身を除去する。これを呼ばないと、同じ path で再ロードした際に
+        /// 「解放済みだが追跡リストに残ったままの古いエントリ」が Find() にヒットしてしまい、
+        /// 新しいインスタンスが isCopy = true にされ、実体が二度とロードされない古いデータの
+        /// 完了待ちで無限ループ（デッドロック）する不具合につながる。
+        ///
+        /// 注意: Group / Category 単位の一括解放（ReleaseGroup / ReleaseCategory 等）では
+        /// 使用しないこと。呼び出し元がリストを foreach しながら Clear() する処理と衝突し、
+        /// コレクション変更例外（InvalidOperationException）を誘発する。
+        /// </summary>
+        public void ReleaseAndUntrack()
+        {
+            Release();
+            AddressableDataCore.Instance.RemoveData(this);
+        }
     }
 }
 

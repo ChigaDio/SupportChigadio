@@ -48,6 +48,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
       name: 'Debug',
       subItems: [
         { name: 'Log', key: 'log' },
+        { name: 'Command', key : 'command'}
       ],
     },
   ];

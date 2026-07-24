@@ -42,6 +42,8 @@ import Scene from './assets/scene';
 
 import DbgLog from './components/DebugLog'
 
+import DbgCommand from './components/DebugCommandConsole'
+
 function AppContent() {
   const navigate = useNavigate();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
@@ -128,6 +130,10 @@ function AppContent() {
         case 'log':
           navigate('log');
           break;
+        case 'command':
+          navigate('command');
+            break;
+          
       }
     }
     else {
@@ -176,6 +182,7 @@ function AppContent() {
           <Route path="/scene" element={<Scene />} />
           <Route path="/save-data" element={<SaveDataGrid />} />
           <Route path="/log" element={<DbgLog />} />
+          <Route path="/command" element={<DbgCommand />} />
 
         </Routes>
       </Box>

@@ -24,7 +24,7 @@ import pythonSrc.scene as scene
 import pythonSrc.savedata as savedata
 import pythonSrc.expansion as expansion
 import pythonSrc.customclassdata
-
+import pythonSrc.debugcommand as dbgcommand
 
 if getattr(sys, 'frozen', False):
     # exe実行時
@@ -5541,22 +5541,81 @@ def delete_texture_group():
     assets.delete_texture_group(data['group_name'])
     return jsonify({'status': 'success'})
 
+@app.route('/api/texture/add_subgroup', methods=['POST'])
+def add_texture_subgroup():
+    data = request.json
+    try:
+        assets.add_texture_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture SubGroup追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/texture/delete_subgroup', methods=['POST'])
+def delete_texture_subgroup():
+    data = request.json
+    try:
+        assets.delete_texture_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture SubGroup削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/texture/add_texture', methods=['POST'])
 def add_texture():
     data = request.json
-    assets.add_texture(
-        data['group_name'],
-        data['name'],
-        data['desc'],
-        data['isSpriteRender']
-    )
-    return jsonify({'status': 'success'})
+    try:
+        assets.add_texture(
+            data['group_name'],
+            data['name'],
+            data['desc'],
+            data['isSpriteRender'],
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/texture/delete_texture', methods=['POST'])
 def delete_texture():
     data = request.json
     assets.delete_texture(data['group_name'], data['index'])
     return jsonify({'status': 'success'})
+
+@app.route('/api/texture/edit_texture', methods=['POST'])
+def edit_texture():
+    """
+    既存テクスチャエントリの編集（ファイルの再選択は行わない）
+    """
+    data = request.json
+    try:
+        assets.edit_texture(
+            data['group_name'],
+            data['index'],
+            name=data.get('name'),
+            desc=data.get('desc'),
+            isSpriteRender=data.get('isSpriteRender'),
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture編集エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/texture/reload_texture', methods=['POST'])
+def reload_texture():
+    """
+    既存テクスチャエントリのファイル参照を再選択する。
+    エクスプローラーは、以前保存していたファイルのパスから開く。
+    """
+    data = request.json
+    try:
+        entry = assets.reload_texture_file(data['group_name'], data['index'])
+        return jsonify({'status': 'success', 'entry': entry})
+    except Exception as e:
+        logger.error(f"Textureリロードエラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/texture/generate', methods=['POST'])
 def generate_texture_files():
@@ -5588,21 +5647,79 @@ def delete_gameobject_group():
     assets.delete_gameobject_group(data['group_name'])
     return jsonify({'status': 'success'})
 
+@app.route('/api/gameobject/add_subgroup', methods=['POST'])
+def add_gameobject_subgroup():
+    data = request.json
+    try:
+        assets.add_gameobject_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject SubGroup追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gameobject/delete_subgroup', methods=['POST'])
+def delete_gameobject_subgroup():
+    data = request.json
+    try:
+        assets.delete_gameobject_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject SubGroup削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/gameobject/add_gameobject', methods=['POST'])
 def add_gameobject():
     data = request.json
-    assets.add_gameobject(
-        data['group_name'],
-        data['name'],
-        data['desc']
-    )
-    return jsonify({'status': 'success'})
+    try:
+        assets.add_gameobject(
+            data['group_name'],
+            data['name'],
+            data['desc'],
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/gameobject/delete_gameobject', methods=['POST'])
 def delete_gameobject():
     data = request.json
     assets.delete_gameobject(data['group_name'], data['index'])
     return jsonify({'status': 'success'})
+
+@app.route('/api/gameobject/edit_gameobject', methods=['POST'])
+def edit_gameobject():
+    """
+    既存ゲームオブジェクトエントリの編集（ファイルの再選択は行わない）
+    """
+    data = request.json
+    try:
+        assets.edit_gameobject(
+            data['group_name'],
+            data['index'],
+            name=data.get('name'),
+            desc=data.get('desc'),
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject編集エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gameobject/reload_gameobject', methods=['POST'])
+def reload_gameobject():
+    """
+    既存ゲームオブジェクトエントリのファイル参照を再選択する。
+    エクスプローラーは、以前保存していたファイルのパスから開く。
+    """
+    data = request.json
+    try:
+        entry = assets.reload_gameobject_file(data['group_name'], data['index'])
+        return jsonify({'status': 'success', 'entry': entry})
+    except Exception as e:
+        logger.error(f"GameObjectリロードエラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/gameobject/generate', methods=['POST'])
 def generate_gameobject_files():
@@ -5638,6 +5755,26 @@ def delete_material_group():
         logger.error(f"Materialグループ削除エラー: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/material/add_subgroup', methods=['POST'])
+def add_material_subgroup():
+    data = request.get_json()
+    try:
+        assets.add_material_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({"message": "SubGroupを追加しました。"}), 200
+    except Exception as e:
+        logger.error(f"Material SubGroup追加エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/delete_subgroup', methods=['POST'])
+def delete_material_subgroup():
+    data = request.get_json()
+    try:
+        assets.delete_material_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({"message": "SubGroupを削除しました。"}), 200
+    except Exception as e:
+        logger.error(f"Material SubGroup削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/material/select_file', methods=['POST'])
 def select_material_file():
     """
@@ -5666,7 +5803,8 @@ def generate_material():
             data.get('class_name'),
             data.get('desc', ''),
             data.get('absolute_path'),
-            selected_names
+            selected_names,
+            subgroup_name=data.get('subgroup_name')
         )
         return jsonify({"message": "C#ファイルを生成しました。"}), 200
     except Exception as e:
@@ -5698,6 +5836,56 @@ def delete_material():
         return jsonify({"error": str(e)}), 500
 
 
+#=================================================-----
+# Material CS-only（Group/SubGroup/Enum/バイナリに一切含めない、クラス生成のみのモード）
+
+@app.route('/api/material/cs_only', methods=['GET'])
+def get_material_cs_only():
+    return jsonify(assets.get_material_cs_only_data())
+
+@app.route('/api/material/cs_only/generate', methods=['POST'])
+def generate_material_cs_only():
+    """
+    クラス名・説明・選択されたプロパティ名を元に、Unityへ再通信して
+    最新のプロパティ(型含む)とAddressableパスを取得し直し、
+    MaterialPropertyBlock操作用のC#クラスだけを生成する。
+    Group/SubGroupへの追加、MaterialGroup/MaterialID Enumへの登録、
+    バイナリへの梱包はいずれも行わない。
+    """
+    data = request.get_json()
+    try:
+        selected_names = [p['name'] for p in data.get('properties', []) if p.get('name')]
+        assets.generate_material_cs_only(
+            data.get('class_name'),
+            data.get('desc', ''),
+            data.get('absolute_path'),
+            selected_names
+        )
+        return jsonify({"message": "C#ファイルを生成しました（CS-only）。"}), 200
+    except Exception as e:
+        logger.error(f"Material CS-only生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/cs_only/regenerate', methods=['POST'])
+def regenerate_material_cs_only():
+    data = request.get_json()
+    try:
+        assets.regenerate_material_cs_only(data['class_name'])
+        return jsonify({"message": "再生成しました（CS-only）。"}), 200
+    except Exception as e:
+        logger.error(f"Material CS-only再生成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/material/cs_only/delete', methods=['POST'])
+def delete_material_cs_only():
+    data = request.get_json()
+    try:
+        assets.delete_material_cs_only(data['class_name'])
+        return jsonify({"message": "削除しました（CS-only）。"}), 200
+    except Exception as e:
+        logger.error(f"Material CS-only削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 
 #=================================================-----
 # Sound
@@ -5718,17 +5906,42 @@ def delete_group():
     assets.delete_sound_group(data['group_name'])
     return jsonify({'status': 'success'})
 
+@app.route('/api/sound/add_subgroup', methods=['POST'])
+def add_sound_subgroup():
+    data = request.json
+    try:
+        assets.add_sound_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound SubGroup追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sound/delete_subgroup', methods=['POST'])
+def delete_sound_subgroup():
+    data = request.json
+    try:
+        assets.delete_sound_subgroup(data['group_name'], data['subgroup_name'])
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound SubGroup削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/sound/add_sound', methods=['POST'])
 def add_sound():
     data = request.json
-    assets.add_sound(
-        data['group_name'],
-        data['name'],
-        data['desc'],
-        data['volume'],
-        data['type']
-    )
-    return jsonify({'status': 'success'})
+    try:
+        assets.add_sound(
+            data['group_name'],
+            data['name'],
+            data['desc'],
+            data['volume'],
+            data['type'],
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sound/delete_sound', methods=['POST'])
 def delete_sound():
@@ -5736,11 +5949,56 @@ def delete_sound():
     assets.delete_sound(data['group_name'], data['index'])
     return jsonify({'status': 'success'})
 
+@app.route('/api/sound/edit_sound', methods=['POST'])
+def edit_sound():
+    """
+    既存サウンドエントリの編集（ファイルの再選択は行わない）
+    """
+    data = request.json
+    try:
+        assets.edit_sound(
+            data['group_name'],
+            data['index'],
+            name=data.get('name'),
+            desc=data.get('desc'),
+            volume=data.get('volume'),
+            sound_type=data.get('type'),
+            subgroup_name=data.get('subgroup_name')
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound編集エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sound/reload_sound', methods=['POST'])
+def reload_sound():
+    """
+    既存サウンドエントリのファイル参照を再選択する。
+    エクスプローラーは、以前保存していたファイルのパスから開く。
+    """
+    data = request.json
+    try:
+        entry = assets.reload_sound_file(data['group_name'], data['index'])
+        return jsonify({'status': 'success', 'entry': entry})
+    except Exception as e:
+        logger.error(f"Soundリロードエラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/sound/generate', methods=['POST'])
 def generate_files():
     assets.generate_sound_csharp()
     assets.generate_sound_bin()
     return jsonify({'status': 'success'})
+    
+    
+# Sound serve endpoint for playback
+@app.route('/api/sound/serve/<group_name>/<int:index>')
+def serve_sound(group_name, index):
+    file_path = assets.get_sound_file_path(group_name, index)
+    if file_path and os.path.exists(file_path):
+        return send_file(file_path, mimetype='audio/mpeg')
+    return jsonify({'error': 'File not found'}), 404
+
 
 @app.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
 def open_code(state_name, node_label):
@@ -5799,15 +6057,6 @@ def open_code(state_name, node_label):
         return jsonify({"message": "Opened in Visual Studio"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-# Sound serve endpoint for playback
-@app.route('/api/sound/serve/<group_name>/<int:index>')
-def serve_sound(group_name, index):
-    file_path = assets.get_sound_file_path(group_name, index)
-    if file_path and os.path.exists(file_path):
-        return send_file(file_path, mimetype='audio/mpeg')
-    return jsonify({'error': 'File not found'}), 404
-
 # =================================================
 # Behavior Tree API (追加部分)
 
@@ -7038,6 +7287,7 @@ if __name__ == '__main__':
     
     # ディレクトリ作成やルート定義が終わったあたり（app生成後ならどこでもOK）に追加
     pythonSrc.customclassdata.register(app, DATA_DIR)
+    pythonSrc.debugcommand.register(app, DATA_DIR)   # ← 追加
 
     # Keep the main thread alive
     try:

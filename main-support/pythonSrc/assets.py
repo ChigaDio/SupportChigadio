@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog
 import shutil
 import uuid
+from collections import defaultdict
 
 def generate_enum_csharp(json_path, name, enum_dir):
     """
@@ -45,6 +46,269 @@ def generate_enum_csharp(json_path, name, enum_dir):
     with open(cs_path, 'w', encoding='utf-8') as f:
         f.write(cs_content)
 
+def generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, subgroup_name,items):
+    
+    target_dir = os.path.join(enum_dir, f"{category_name}_{group_name}_{subgroup_name}")
+    os.makedirs(target_dir, exist_ok=True)
+    enum_name = f"{category_name}_{group_name}_{subgroup_name}"
+    
+    #enum作成
+    cs_content = "namespace GameCore.Enums\n{\n"
+    cs_content += f"    public enum {enum_name}\n    {{\n"
+    cs_content += "        None = 0, // デフォルト値\n"
+    for i, id in enumerate(items, start=1):
+        cs_content += f"        {id['name']} = {i},\n"
+    cs_content += f"        Max = {len(items) + 1}\n"
+    cs_content += "    }\n}"
+    
+    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(cs_content)
+    
+    
+    
+    #json作成
+    json_dict: list[dict[str, object]] = []
+    js_path = os.path.join(target_dir, f"{category_name}_{group_name}_{subgroup_name}.json")
+    with open(js_path,'w',encoding='utf-8') as f:
+        for i, item in enumerate(items, start=1):
+            json_dict.append({
+                "description": f"{item["desc"]}",
+                "id": i,
+                "property": f"{item['name']}",
+                "value": i
+            })
+        json.dump(json_dict, f, ensure_ascii=False, indent=4)
+        
+    #enum_list.jsonに追加
+
+    return enum_name
+
+def generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroup_names):
+    """
+    グループの中に定義されたSubGroup用のenumを生成する。
+
+    カテゴリ全体のGroup enum（例: GameObjectGroup）と同じ考え方で、
+    「そのグループの中にあるSubGroup一覧」を表す専用enumを1つ作る。
+    命名規則: {category_name}_{group_name}ID
+    例: GameObjectカテゴリの "Enemy" グループなら GameObject_EnemyID を
+        ENUM_DIR/{category_name}/{category_name}_{group_name}ID.cs に生成する。
+
+    Args:
+        enum_dir (str): ENUM_DIRのパス
+        category_name (str): カテゴリ名（GameObject/Texture/Sound/Material）
+        group_name (str): SubGroupの親となるGroup名
+        subgroup_names (list[str]): そのグループに登録されているSubGroup名のリスト（登録順）
+
+    Returns:
+        str: 生成したenum名（{category_name}_{group_name}ID）
+    """
+    target_dir = os.path.join(enum_dir, f"{category_name}_{group_name}")
+    os.makedirs(target_dir, exist_ok=True)
+
+    enum_name = f"{category_name}_{group_name}"
+    cs_content = "namespace GameCore.Enums\n{\n"
+    cs_content += f"    public enum {enum_name}\n    {{\n"
+    cs_content += "        None = 0, // デフォルト値\n"
+    for i, sub_name in enumerate(subgroup_names, start=1):
+        cs_content += f"        {sub_name} = {i},\n"
+    cs_content += f"        Max = {len(subgroup_names) + 1}\n"
+    cs_content += "    }\n}"
+    
+
+    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(cs_content)
+        
+    #json作成
+    json_dict: list[dict[str, object]] = []
+    js_path = os.path.join(target_dir, f"{category_name}_{group_name}.json")
+    with open(js_path,'w',encoding='utf-8') as f:
+        for i, sub_name in enumerate(subgroup_names, start=1):
+            json_dict.append({
+                "description": f"{category_name}_{group_name}_{sub_name}",
+                "id": i,
+                "property": f"{sub_name}",
+                "value": i
+            })
+        json.dump(json_dict, f, ensure_ascii=False, indent=4)
+        
+    return enum_name
+
+
+def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
+                              data_dir=None, namespace=None, class_name=None,
+                              group_enum_name=None, id_enum_name=None,
+                              global_key_field='name'):
+    """
+    現在のgroups_dict（{group_name: {'items':[...], 'subgroups':[...]}}）に基づいて
+    SubGroup enumファイル一式を再生成し、既に存在しない（削除された）グループ／
+    SubGroupのenumファイルは掃除する。
+
+    data_dir/namespace/class_name/group_enum_name/id_enum_name が指定された場合は、
+    SubGroup詳細enum（{category_name}_{group}_{subgroup}）の値を
+    {id_enum_name}（グローバルなID enum）へ static readonly 配列で高速変換したうえで
+    LoadSingle/UnloadSingle を呼び出すオーバーロードを {class_name}Single.cs に生成する。
+    （ローカルenumの値をそのまま配列インデックスとして使うのでO(1)変換）
+
+    Returns:
+        list[str]: 生成された{category_name}_{group}ID の一覧（enum_list.json登録用）
+    """
+    target_dir = os.path.join(enum_dir, category_name)
+    os.makedirs(target_dir, exist_ok=True)
+
+    expected_files = set()
+    generated_names = []
+
+    generate_single_file = all([data_dir, namespace, class_name, group_enum_name, id_enum_name])
+    single_lines = []
+    if generate_single_file:
+        single_lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+        single_lines.append("using System;")
+        single_lines.append("using GameCore.Enums;")
+        single_lines.append("")
+        single_lines.append(f"namespace {namespace}")
+        single_lines.append("{")
+        single_lines.append(f"    public partial class {class_name}")
+        single_lines.append("    {")
+
+    for group_name, group_value in groups_dict.items():
+        subgroups = group_value.get('subgroups', []) if isinstance(group_value, dict) else []
+        if not subgroups:
+            continue
+        enum_name = generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroups)
+        expected_files.add(f"{enum_name}.cs")
+        generated_names.append(enum_name)
+        #さらにサブグループごとのIDを作成
+        #まずはグループ分け
+        subgroup_dict = defaultdict(list)
+        for item in group_value["items"]:
+            subgroup_dict[item["subgroup"]].append(item)
+        for key, value in subgroup_dict.items():
+            detail_enum_name = generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, key, value)
+            generated_names.append(detail_enum_name)
+
+            if generate_single_file:
+                table_name = f"_{detail_enum_name}To{id_enum_name}"
+                single_lines.append(f"        private static readonly {id_enum_name}[] {table_name} = new {id_enum_name}[]")
+                single_lines.append("        {")
+                single_lines.append(f"            {id_enum_name}.None, // {detail_enum_name}.None")
+                for item in value:
+                    global_key = item.get(global_key_field) or item.get('name')
+                    global_name = f"{group_name}_{global_key}"
+                    single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item['name']}")
+                single_lines.append("        };")
+                single_lines.append("")
+                single_lines.append(f"        public void LoadSingle({detail_enum_name} id, GroupCategory groupCategory, Action onCompleted = null)")
+                single_lines.append(f"            => LoadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
+                single_lines.append("")
+                single_lines.append(f"        public void UnloadSingle({detail_enum_name} id, Action onCompleted = null)")
+                single_lines.append(f"            => UnloadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
+                single_lines.append("")
+
+    # 削除されたグループ／SubGroupが無くなった分の残骸ファイルを掃除
+    if os.path.isdir(target_dir):
+        for fname in os.listdir(target_dir):
+            if fname.endswith("ID.cs") and fname not in expected_files:
+                try:
+                    os.remove(os.path.join(target_dir, fname))
+                except OSError:
+                    pass
+
+    if generate_single_file:
+        single_lines.append("    }")
+        single_lines.append("}")
+        with open(os.path.join(data_dir, f"{class_name}Single.cs"), 'w', encoding='utf-8') as f:
+            f.write("\n".join(single_lines))
+
+    return generated_names
+
+
+def register_enum_names(enum_dir, names):
+    """
+    enum_list.json に生成済みenum名を（重複を避けつつ）一括登録する
+    """
+    if not names:
+        return
+    enum_list_path = os.path.join(enum_dir, 'enum_list.json')
+    if not os.path.exists(enum_list_path):
+        return
+    with open(enum_list_path, 'r+', encoding='utf-8') as f:
+        enum_list = json.load(f)
+        existing_names = [e['name'] for e in enum_list]
+        max_id = max([e['id'] for e in enum_list if 'id' in e], default=0)
+        for name in names:
+            if name not in existing_names:
+                max_id += 1
+                enum_list.append({'id': max_id, 'name': name, 'view': False})
+                existing_names.append(name)
+        f.seek(0)
+        json.dump(enum_list, f, ensure_ascii=False, indent=4)
+        f.truncate()
+
+
+def _migrate_group_value(value):
+    """
+    旧形式（アイテムのリストのみ）を新形式（items/subgroupsを持つdict）へ移行する
+    """
+    if isinstance(value, list):
+        return {'items': value, 'subgroups': []}
+    if isinstance(value, dict):
+        value.setdefault('items', [])
+        value.setdefault('subgroups', [])
+        return value
+    return {'items': [], 'subgroups': []}
+
+
+def migrate_groups_data(data):
+    """
+    data['groups'] の各グループ値を新形式（{'items':[...], 'subgroups':[...]}）へ移行する。
+    既に新形式の場合はそのまま返す（冪等）。
+    """
+    data.setdefault('groups', {})
+    for group_name, value in list(data['groups'].items()):
+        data['groups'][group_name] = _migrate_group_value(value)
+    return data
+
+
+def add_subgroup_to_group(data, group_name, subgroup_name):
+    """
+    指定グループにSubGroup名を登録する（登録順がそのままSubGroup enumのID順になる）
+    """
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    if not subgroup_name:
+        raise Exception("SubGroup名を入力してください。")
+    group = data['groups'][group_name]
+    if subgroup_name not in group['subgroups']:
+        group['subgroups'].append(subgroup_name)
+    return data
+
+
+def delete_subgroup_from_group(data, group_name, subgroup_name):
+    """
+    指定グループからSubGroupを削除する。
+    そのSubGroupに属していたアイテムはグループ直下（SubGroup無し）に戻す
+    （アイテム自体は削除しない）。
+    """
+    if group_name not in data['groups']:
+        return data
+    group = data['groups'][group_name]
+    if subgroup_name in group['subgroups']:
+        group['subgroups'].remove(subgroup_name)
+    for item in group['items']:
+        if item.get('subgroup') == subgroup_name:
+            item['subgroup'] = None
+    return data
+
+
+def _subgroup_index_map(subgroup_names):
+    """
+    SubGroup名 -> SubGroup ID（1始まり、Noneは0）の対応表を作る
+    """
+    return {name: i for i, name in enumerate(subgroup_names, start=1)}
+
+
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -62,6 +326,9 @@ GAMEOBJECT_DATA = os.path.join(ASSETS_DATA, 'gameobject')
 GAMEOBJECT_JSON = os.path.join(GAMEOBJECT_DATA, 'assets_gameobject.json')
 MATERIAL_DATA = os.path.join(ASSETS_DATA, 'material')
 MATERIAL_JSON = os.path.join(MATERIAL_DATA, 'assets_material.json')
+# Material「CS生成のみ」モード用（Enumへの登録・バイナリへの梱包を一切行わない、独立した保管場所）
+MATERIAL_CS_ONLY_DATA = os.path.join(MATERIAL_DATA, 'cs_only')
+MATERIAL_CS_ONLY_JSON = os.path.join(MATERIAL_CS_ONLY_DATA, 'assets_material_cs_only.json')
 EDITOR_DATA = os.path.join(ASSETS_DATA, 'Editor')
 ENUM_DIR = os.path.join(DATA_DIR, 'enum')
 
@@ -79,6 +346,8 @@ def generate_base():
         os.makedirs(GAMEOBJECT_DATA)
     if not os.path.exists(MATERIAL_DATA):
         os.makedirs(MATERIAL_DATA)
+    if not os.path.exists(MATERIAL_CS_ONLY_DATA):
+        os.makedirs(MATERIAL_CS_ONLY_DATA)
     if not os.path.exists(EDITOR_DATA):
         os.makedirs(EDITOR_DATA)
     if not os.path.exists(ENUM_DIR):
@@ -670,7 +939,8 @@ def load_sound_data():
     """
     if os.path.exists(SOUND_JSON):
         with open(SOUND_JSON, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        return migrate_groups_data(data)
     return {'groups': {}}
 
 def save_sound_data(data):
@@ -686,7 +956,8 @@ def load_texture_data():
     """
     if os.path.exists(TEXTURE_JSON):
         with open(TEXTURE_JSON, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        return migrate_groups_data(data)
     return {'groups': {}}
 
 def save_texture_data(data):
@@ -702,7 +973,8 @@ def load_gameobject_data():
     """
     if os.path.exists(GAMEOBJECT_JSON):
         with open(GAMEOBJECT_JSON, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        return migrate_groups_data(data)
     return {'groups': {}}
 
 def save_gameobject_data(data):
@@ -724,7 +996,7 @@ def load_material_data():
         if 'groups' not in data:
             old_entries = data.get('entries', [])
             data = {'groups': ({'Default': old_entries} if old_entries else {})}
-        return data
+        return migrate_groups_data(data)
     return {'groups': {}}
 
 def save_material_data(data):
@@ -798,7 +1070,7 @@ def add_sound_group(group_name):
     """
     data = load_sound_data()
     if group_name and group_name not in data['groups']:
-        data['groups'][group_name] = []
+        data['groups'][group_name] = {'items': [], 'subgroups': []}
         save_sound_data(data)
 
 def delete_sound_group(group_name):
@@ -809,11 +1081,29 @@ def delete_sound_group(group_name):
     data['groups'].pop(group_name, None)
     save_sound_data(data)
 
-def add_sound(group_name, name, desc, volume, sound_type):
+def add_sound_subgroup(group_name, subgroup_name):
     """
-    サウンドをグループに追加
+    サウンドグループの中にSubGroupを追加する
     """
     data = load_sound_data()
+    add_subgroup_to_group(data, group_name, subgroup_name)
+    save_sound_data(data)
+
+def delete_sound_subgroup(group_name, subgroup_name):
+    """
+    サウンドグループからSubGroupを削除する
+    """
+    data = load_sound_data()
+    delete_subgroup_from_group(data, group_name, subgroup_name)
+    save_sound_data(data)
+
+def add_sound(group_name, name, desc, volume, sound_type, subgroup_name=None):
+    """
+    サウンドをグループ（必要であればSubGroup）に追加
+    """
+    data = load_sound_data()
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -823,13 +1113,14 @@ def add_sound(group_name, name, desc, volume, sound_type):
     addr_path = get_addressable_path(file_path)
     if not addr_path:
         raise Exception("アドレス指定可能なパスを取得できませんでした。")
-    data['groups'][group_name].append({
+    data['groups'][group_name]['items'].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
         'absolute_path': os.path.abspath(file_path),
         'volume': volume, 
-        'type': sound_type
+        'type': sound_type,
+        'subgroup': subgroup_name or None
     })
     save_sound_data(data)
 
@@ -838,8 +1129,63 @@ def delete_sound(group_name, index):
     サウンドをグループから削除
     """
     data = load_sound_data()
-    del data['groups'][group_name][index]
+    del data['groups'][group_name]['items'][index]
     save_sound_data(data)
+
+def edit_sound(group_name, index, name=None, desc=None, volume=None, sound_type=None, subgroup_name=None):
+    """
+    既存のサウンドエントリを編集する（ファイルの再選択は行わない）
+    """
+    data = load_sound_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+
+    entry = items[index]
+    if name is not None:
+        entry['name'] = name
+    if desc is not None:
+        entry['desc'] = desc
+    if volume is not None:
+        entry['volume'] = volume
+    if sound_type is not None:
+        entry['type'] = sound_type
+    entry['subgroup'] = subgroup_name or None
+    save_sound_data(data)
+
+def reload_sound_file(group_name, index):
+    """
+    既存エントリのファイル参照だけを再選択・再取得する。
+    エクスプローラーは、そのエントリで前回選択済みのパスのフォルダから開く。
+    """
+    data = load_sound_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+
+    entry = items[index]
+    prev_path = entry.get('absolute_path')
+    initial_dir = os.path.dirname(prev_path) if prev_path and os.path.isdir(os.path.dirname(prev_path)) else get_unity_project_path()
+    if not initial_dir:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    file_path = select_file(initial_dir, [("音声ファイル", "*.mp3 *.wav")])
+    if not file_path:
+        raise Exception("ファイルが選択されていません。")
+    addr_path = get_addressable_path(file_path)
+    if not addr_path:
+        raise Exception("アドレス指定可能なパスを取得できませんでした。")
+
+    entry['path'] = addr_path
+    entry['absolute_path'] = os.path.abspath(file_path)
+    save_sound_data(data)
+    return entry
 
 def generate_sound_csharp():
     """
@@ -860,13 +1206,21 @@ def generate_sound_csharp():
         f.write('    public enum SoundType { SE, BGM };\n')
         sound_id_counter = 1
         sound_id_map = {'None': 0}
-        for group, sounds in data['groups'].items():
-            for sound in sounds:
+        for group, group_value in data['groups'].items():
+            for sound in group_value['items']:
                 sound_id = f"{group}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
                     sound_id_counter += 1
         f.write('}\n')
+
+    # SubGroup用enum（Sound_{Group}ID）を各グループごとに生成／同期
+    subgroup_enum_names = sync_subgroup_enum_files(
+    ENUM_DIR, "Sound", data['groups'],
+    data_dir=SOUND_DATA, namespace="GameCore.Sound", class_name="SoundCore",
+    group_enum_name="SoundGroup", id_enum_name="SoundID"
+    )
+    register_enum_names(ENUM_DIR, subgroup_enum_names)
 
     # SoundCore.cs
     if not os.path.exists(os.path.join(SOUND_DATA, "SoundCore.cs")):
@@ -883,7 +1237,7 @@ using System.Threading;
 
 namespace GameCore.Sound
 {
-    public class SoundCore : BaseSingleton<SoundCore>
+    public partial class SoundCore : BaseSingleton<SoundCore>
     {
         // =============================================================
         // 爆速キャッシュ（LINQ完全排除、Dictionary 1段）
@@ -893,8 +1247,10 @@ namespace GameCore.Sound
         private readonly Dictionary<(SoundGroup group, SoundID id), SoundType> typeCache = new();
         private readonly HashSet<(SoundGroup group, SoundID id)> loadingKeys = new();
 
-        // Addressable本体はUnload用にグループ単位で保持
-        private readonly Dictionary<SoundGroup, List<AddressableData<AudioClip>>> groupAddressables = new();
+        // Addressable本体は (group, id) 単位で保持。
+        // グループ一括ロード／個別ロード／SubGroupロードのいずれでも同じ辞書を使い、
+        // 専用の管理は持たない（Unloadは対象のkeyを絞り込んで、このDictionaryから解放するだけ）。
+        private readonly Dictionary<(SoundGroup group, SoundID id), AddressableData<AudioClip>> soundAddressables = new();
 
         private SoundDatabase database;
 
@@ -1032,9 +1388,6 @@ namespace GameCore.Sound
             var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
             if (groupData == null) { onCompleted?.Invoke(); return; }
 
-            var addressables = new List<AddressableData<AudioClip>>();
-            groupAddressables[group] = addressables;
-
             var tasks = new List<UniTask>();
 
             foreach (var sound in groupData.Sounds)
@@ -1045,7 +1398,6 @@ namespace GameCore.Sound
                 loadingKeys.Add(key);
 
                 var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
-                addressables.Add(addressable);
 
                 tasks.Add(addressable.LoadAsync(clip =>
                 {
@@ -1054,6 +1406,7 @@ namespace GameCore.Sound
                         clipCache[key] = clip;
                         volumeCache[key] = sound.BaseVolume;
                         typeCache[key] = sound.Type;
+                        soundAddressables[key] = addressable;
                     }
                     loadingKeys.Remove(key);
                 }, ex =>
@@ -1072,22 +1425,162 @@ namespace GameCore.Sound
 
         private async UniTask UnloadGroupAsync(SoundGroup group, Action onCompleted)
         {
-            if (groupAddressables.TryGetValue(group, out var list))
-            {
-                foreach (var addr in list)
-                    addr.Release();
-                groupAddressables.Remove(group);
-            }
-
             var keysToRemove = new List<(SoundGroup, SoundID)>();
             foreach (var kv in clipCache)
                 if (kv.Key.group == group) keysToRemove.Add(kv.Key);
 
             foreach (var key in keysToRemove)
             {
+                if (soundAddressables.TryGetValue(key, out var addressable))
+                {
+                    addressable.ReleaseAndUntrack();
+                    soundAddressables.Remove(key);
+                }
                 clipCache.Remove(key);
                 volumeCache.Remove(key);
                 typeCache.Remove(key);
+            }
+
+            onCompleted?.Invoke();
+            await UniTask.CompletedTask;
+        }
+
+        // =============================================================
+        // 個別ID単位のロード／アンロード
+        // グループロードと同じ soundAddressables / clipCache 等をそのまま使う。
+        // =============================================================
+        public void LoadSingle(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
+            => LoadSingleAsync(group, id, category, onCompleted).Forget();
+
+        public async UniTask LoadSingleAsync(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
+        {
+            while (!IsLoadDatabase)
+                await UniTask.Yield(combinedToken);
+
+            var key = (group, id);
+            if (clipCache.ContainsKey(key) || loadingKeys.Contains(key))
+            {
+                onCompleted?.Invoke();
+                return;
+            }
+
+            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            var sound = groupData?.Sounds.FirstOrDefault(s => s.SoundID == id);
+            if (sound == null) { onCompleted?.Invoke(); return; }
+
+            loadingKeys.Add(key);
+            var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
+            await addressable.LoadAsync(clip =>
+            {
+                if (addressable.IsLoadedAndSetup)
+                {
+                    clipCache[key] = clip;
+                    volumeCache[key] = sound.BaseVolume;
+                    typeCache[key] = sound.Type;
+                    soundAddressables[key] = addressable;
+                }
+                loadingKeys.Remove(key);
+            }, ex =>
+            {
+                Debug.LogError($"[SoundCore] Load failed (single) {id}: {ex.Message}");
+                loadingKeys.Remove(key);
+            }).AttachExternalCancellation(combinedToken);
+
+            onCompleted?.Invoke();
+        }
+
+        public void UnloadSingle(SoundGroup group, SoundID id, Action onCompleted = null)
+            => UnloadSingleAsync(group, id, onCompleted).Forget();
+
+        public async UniTask UnloadSingleAsync(SoundGroup group, SoundID id, Action onCompleted = null)
+        {
+            var key = (group, id);
+            if (soundAddressables.TryGetValue(key, out var addressable))
+            {
+                addressable.ReleaseAndUntrack();
+                soundAddressables.Remove(key);
+                clipCache.Remove(key);
+                volumeCache.Remove(key);
+                typeCache.Remove(key);
+            }
+            onCompleted?.Invoke();
+            await UniTask.CompletedTask;
+        }
+
+        // =============================================================
+        // SubGroup単位のロード／アンロード（内部実装）
+        // 公開APIは SoundCoreSubGroups.cs 側で、グループごとの
+        // 専用enum（例: Sound_EnemyID）を受け取るオーバーロードとして生成される。
+        // どのサウンドがどのSubGroupに属するかは SoundData.SubGroupId から都度判定する。
+        // グループロードと同じ soundAddressables / clipCache 等をそのまま使い、
+        // 専用の管理は持たない。
+        // =============================================================
+        internal void LoadSubGroupInternal(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+            => LoadSubGroupInternalAsync(group, subGroupId, category, onCompleted).Forget();
+
+        internal async UniTask LoadSubGroupInternalAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+        {
+            while (!IsLoadDatabase)
+                await UniTask.Yield(combinedToken);
+
+            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            if (groupData == null) { onCompleted?.Invoke(); return; }
+
+            var tasks = new List<UniTask>();
+            foreach (var sound in groupData.Sounds)
+            {
+                if (sound.SubGroupId != subGroupId) continue;
+                var key = (group, sound.SoundID);
+                if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
+
+                loadingKeys.Add(key);
+                var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
+
+                tasks.Add(addressable.LoadAsync(clip =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                    {
+                        clipCache[key] = clip;
+                        volumeCache[key] = sound.BaseVolume;
+                        typeCache[key] = sound.Type;
+                        soundAddressables[key] = addressable;
+                    }
+                    loadingKeys.Remove(key);
+                }, ex =>
+                {
+                    Debug.LogError($"[SoundCore] Load failed (subgroup) {sound.SoundID}: {ex.Message}");
+                    loadingKeys.Remove(key);
+                }).AttachExternalCancellation(combinedToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            onCompleted?.Invoke();
+        }
+
+        internal void UnloadSubGroupInternal(SoundGroup group, int subGroupId, Action onCompleted = null)
+            => UnloadSubGroupInternalAsync(group, subGroupId, onCompleted).Forget();
+
+        internal async UniTask UnloadSubGroupInternalAsync(SoundGroup group, int subGroupId, Action onCompleted = null)
+        {
+            if (database != null)
+            {
+                var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+                if (groupData != null)
+                {
+                    foreach (var sound in groupData.Sounds)
+                    {
+                        if (sound.SubGroupId != subGroupId) continue;
+                        var key = (group, sound.SoundID);
+                        if (soundAddressables.TryGetValue(key, out var addressable))
+                        {
+                            addressable.ReleaseAndUntrack();
+                            soundAddressables.Remove(key);
+                        }
+                        clipCache.Remove(key);
+                        volumeCache.Remove(key);
+                        typeCache.Remove(key);
+                    }
+                }
             }
 
             onCompleted?.Invoke();
@@ -1291,14 +1784,13 @@ namespace GameCore.Sound
         {
             StopAllAndCancelAllTasks();
 
-            foreach (var list in groupAddressables.Values)
-                foreach (var addr in list)
-                    addr.Release();
+            foreach (var addr in soundAddressables.Values)
+                addr.Release();
 
             clipCache.Clear();
             volumeCache.Clear();
             typeCache.Clear();
-            groupAddressables.Clear();
+            soundAddressables.Clear();
         }
     }
 }
@@ -1326,19 +1818,23 @@ namespace GameCore.Sound
             private readonly float baseVolume;
             private readonly SoundType type;
             private readonly SoundID soundID;
-            public SoundData(SoundID soundID, string idName, string addressablePath, float baseVolume, SoundType type)
+            private readonly int subGroupId;
+            public SoundData(SoundID soundID, string idName, string addressablePath, float baseVolume, SoundType type, int subGroupId = 0)
             {
                 this.idName = idName;
                 this.addressablePath = addressablePath;
                 this.baseVolume = baseVolume;
                 this.type = type;
                 this.soundID = soundID;
+                this.subGroupId = subGroupId;
             }
             public string IdName => idName;
             public string AddressablePath => addressablePath;
             public float BaseVolume => baseVolume;
             public SoundID SoundID => soundID;
             public SoundType Type => type;
+            // SubGroup ID（0 = SubGroupなし）。専用enum(例:Sound_EnemyID)にキャストして使う
+            public int SubGroupId => subGroupId;
         }
         [System.Serializable]
         public class GroupedSounds
@@ -1510,6 +2006,7 @@ namespace GameCore.Sound
                     float volume = reader.ReadSingle();
                     byte typeByte = reader.ReadByte();
                     SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
+                    int subGroupId = reader.ReadInt32();
 
                     string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
 
@@ -1518,7 +2015,8 @@ namespace GameCore.Sound
                         addressablePath: addressablePath,
                         baseVolume: volume,
                         type: type,
-                        soundID: (SoundID)id
+                        soundID: (SoundID)id,
+                        subGroupId: subGroupId
                     ));
                 }
 
@@ -2095,8 +2593,8 @@ namespace GameCore.Sound
     # Sound.json を生成
     with open(os.path.join(ENUM_DIR, "Sound", "Sound.json"), 'w', encoding='utf-8') as f:
         sound_id_list = []
-        for group, sounds in data['groups'].items():
-            for sound in sounds:
+        for group, group_value in data['groups'].items():
+            for sound in group_value['items']:
                 sound_id = f"{group}_{sound['name']}"
                 sound_id_list.append({
                     'description': sound['desc'],
@@ -2107,6 +2605,45 @@ namespace GameCore.Sound
         json.dump(sound_id_list, f, ensure_ascii=False, indent=4)
 
     generate_enum_csharp(os.path.join(ENUM_DIR, "Sound", "Sound.json"), "Sound", ENUM_DIR)
+
+    # SoundCoreSubGroups.cs（SubGroup単位のLoad/Unload専用メソッド。毎回再生成される）
+    generate_sound_core_subgroups(data)
+
+
+def generate_sound_core_subgroups(data):
+    """
+    グループごとのSubGroup専用enum（Sound_{Group}ID）を引数に取る
+    LoadSubGroup / UnloadSubGroup のオーバーロードを、partial classとして
+    SoundCoreSubGroups.cs に生成する（毎回上書き）。
+    """
+    lines = []
+    lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+    lines.append("using System;")
+    lines.append("using GameCore.Enums;")
+    lines.append("")
+    lines.append("namespace GameCore.Sound")
+    lines.append("{")
+    lines.append("    public partial class SoundCore")
+    lines.append("    {")
+
+    for group_name, group_value in data['groups'].items():
+        subgroups = group_value.get('subgroups', [])
+        if not subgroups:
+            continue
+        enum_name = f"Sound_{group_name}ID"
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory category, Action onCompleted = null)")
+        lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => UnloadSubGroupInternal(SoundGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+
+    lines.append("    }")
+    lines.append("}")
+
+    with open(os.path.join(SOUND_DATA, "SoundCoreSubGroups.cs"), 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+
 
 def generate_sound_bin():
     """
@@ -2124,8 +2661,8 @@ def generate_sound_bin():
 
         sound_id_map = {'None': 0}
         sound_id_counter = 1
-        for group, sounds in data['groups'].items():
-            for sound in sounds:
+        for group, group_value in data['groups'].items():
+            for sound in group_value['items']:
                 sound_id = f"{group}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
@@ -2133,7 +2670,9 @@ def generate_sound_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            sounds = data['groups'][group]
+            group_value = data['groups'][group]
+            sounds = group_value['items']
+            subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(sounds)))
             for sound in sounds:
                 sound_id = sound_id_map.get(f"{group}_{sound['name']}", 0)
@@ -2143,6 +2682,8 @@ def generate_sound_bin():
                 f.write(struct.pack('f', sound['volume']))
                 type_byte = 0 if sound['type'] == 'SE' else 1
                 f.write(struct.pack('B', type_byte))
+                sub_group_id = subgroup_map.get(sound.get('subgroup'), 0)
+                f.write(struct.pack('i', sub_group_id))
             current_offset = f.tell()
         f.seek(offset_pos)
         f.write(struct.pack('i' * group_count, *offsets))
@@ -2160,7 +2701,7 @@ def add_texture_group(group_name):
     """
     data = load_texture_data()
     if group_name and group_name not in data['groups']:
-        data['groups'][group_name] = []
+        data['groups'][group_name] = {'items': [], 'subgroups': []}
         save_texture_data(data)
 
 def delete_texture_group(group_name):
@@ -2171,11 +2712,29 @@ def delete_texture_group(group_name):
     data['groups'].pop(group_name, None)
     save_texture_data(data)
 
-def add_texture(group_name, name, desc,isSpriteRender):
+def add_texture_subgroup(group_name, subgroup_name):
     """
-    テクスチャをグループに追加
+    テクスチャグループの中にSubGroupを追加する
     """
     data = load_texture_data()
+    add_subgroup_to_group(data, group_name, subgroup_name)
+    save_texture_data(data)
+
+def delete_texture_subgroup(group_name, subgroup_name):
+    """
+    テクスチャグループからSubGroupを削除する
+    """
+    data = load_texture_data()
+    delete_subgroup_from_group(data, group_name, subgroup_name)
+    save_texture_data(data)
+
+def add_texture(group_name, name, desc, isSpriteRender, subgroup_name=None):
+    """
+    テクスチャをグループ（必要であればSubGroup）に追加
+    """
+    data = load_texture_data()
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -2193,13 +2752,14 @@ def add_texture(group_name, name, desc,isSpriteRender):
             sprite_info = sprite_data.get('items', []) if isinstance(sprite_data, dict) else []
         except json.JSONDecodeError:
             print(f"スプライト情報の解析に失敗しました: {sprite_info_raw}")
-    data['groups'][group_name].append({
+    data['groups'][group_name]['items'].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
         'isSpriteRender' : isSpriteRender,
         'absolute_path': os.path.abspath(file_path),
-        'sprites': sprite_info
+        'sprites': sprite_info,
+        'subgroup': subgroup_name or None
     })
     save_texture_data(data)
 
@@ -2208,8 +2768,71 @@ def delete_texture(group_name, index):
     テクスチャをグループから削除
     """
     data = load_texture_data()
-    del data['groups'][group_name][index]
+    del data['groups'][group_name]['items'][index]
     save_texture_data(data)
+
+def edit_texture(group_name, index, name=None, desc=None, isSpriteRender=None, subgroup_name=None):
+    """
+    既存のテクスチャエントリを編集する（ファイルの再選択は行わない）
+    """
+    data = load_texture_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+
+    entry = items[index]
+    if name is not None:
+        entry['name'] = name
+    if desc is not None:
+        entry['desc'] = desc
+    if isSpriteRender is not None:
+        entry['isSpriteRender'] = isSpriteRender
+    entry['subgroup'] = subgroup_name or None
+    save_texture_data(data)
+
+def reload_texture_file(group_name, index):
+    """
+    既存エントリのファイル参照だけを再選択・再取得する（スプライト情報も取り直す）。
+    エクスプローラーは、そのエントリで前回選択済みのパスのフォルダから開く。
+    """
+    data = load_texture_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+
+    entry = items[index]
+    prev_path = entry.get('absolute_path')
+    initial_dir = os.path.dirname(prev_path) if prev_path and os.path.isdir(os.path.dirname(prev_path)) else get_unity_project_path()
+    if not initial_dir:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    file_path = select_file(initial_dir, [("画像ファイル", "*.png *.jpg *.jpeg")])
+    if not file_path:
+        raise Exception("ファイルが選択されていません。")
+    addr_path = get_addressable_path(file_path)
+    if not addr_path:
+        raise Exception("アドレス指定可能なパスを取得できませんでした。")
+
+    sprite_info_raw = get_sprite_info(file_path)
+    sprite_info = []
+    if sprite_info_raw:
+        try:
+            sprite_data = json.loads(sprite_info_raw)
+            sprite_info = sprite_data.get('items', []) if isinstance(sprite_data, dict) else []
+        except json.JSONDecodeError:
+            print(f"スプライト情報の解析に失敗しました: {sprite_info_raw}")
+
+    entry['path'] = addr_path
+    entry['absolute_path'] = os.path.abspath(file_path)
+    entry['sprites'] = sprite_info
+    save_texture_data(data)
+    return entry
 
 def generate_texture_csharp():
     """
@@ -2228,8 +2851,8 @@ def generate_texture_csharp():
         f.write(' ,Max\n  };\n')
         texture_id_counter = 1
         texture_id_map = {'None': 0}
-        for group, textures in data['groups'].items():
-            for texture in textures:
+        for group, group_value in data['groups'].items():
+            for texture in group_value['items']:
                 texture_id = f"{group}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
@@ -2238,8 +2861,8 @@ def generate_texture_csharp():
         # SpriteID の生成
         sprite_id_counter = 1
         sprite_id_map = {'None': 0}
-        for group, textures in data['groups'].items():
-            for texture in textures:
+        for group, group_value in data['groups'].items():
+            for texture in group_value['items']:
                 texture_id = f"{group}_{texture['name']}"
                 if len(texture.get('sprites', [])) <= 1:
                     for sprite in texture.get('sprites', []):
@@ -2254,8 +2877,8 @@ def generate_texture_csharp():
                         sprite_id_counter += 1
         
         # スプライトシート用の専用列挙型
-        for group, textures in data['groups'].items():
-            for texture in textures:
+        for group, group_value in data['groups'].items():
+            for texture in group_value['items']:
                 if len(texture.get('sprites', [])) > 1:
                     sprite_enum_name = f"{group}_{texture['name']}"
                     sprite_id_counter = 0
@@ -2263,6 +2886,14 @@ def generate_texture_csharp():
                         sprite_id_counter += 1
         
         f.write('}\n')
+
+    # SubGroup用enum（Texture_{Group}ID）を各グループごとに生成／同期
+    subgroup_enum_names = sync_subgroup_enum_files(
+    ENUM_DIR, "Texture", data['groups'],
+    data_dir=TEXTURE_DATA, namespace="GameCore.Texture", class_name="TextureCore",
+    group_enum_name="TextureGroup", id_enum_name="TextureID"
+    )
+    register_enum_names(ENUM_DIR, subgroup_enum_names)
 
     # TextureCore.cs
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
@@ -2278,7 +2909,7 @@ using GameCore.Enums;
 
 namespace GameCore.Texture
 {
-    public class TextureCore : BaseSingleton<TextureCore>
+    public partial class TextureCore : BaseSingleton<TextureCore>
     {
         private TextureDatabase database;
         private Dictionary<TextureGroup, Dictionary<TextureID, TextureAddressableData>> loadedAssets =
@@ -2387,7 +3018,127 @@ namespace GameCore.Texture
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
 
-        
+        // =============================================================
+        // 個別ID単位のロード／アンロード
+        // 既存の loadedAssets（グループロードと同じキャッシュ）をそのまま使う。
+        // =============================================================
+        public void LoadSingle(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
+            => LoadSingleAsync(group, id, groupCategory, action).Forget();
+
+        public async UniTask LoadSingleAsync(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+                await UniTask.Yield(cancellationToken: destroyToken);
+
+            if (loadedAssets.TryGetValue(group, out var existing) && existing.ContainsKey(id))
+            {
+                action?.Invoke();
+                return;
+            }
+
+            var groupData = database.GroupedTexturesList.FirstOrDefault(d => d.Group == group);
+            var texture = groupData?.Textures.FirstOrDefault(t => t.TextureID == id);
+            if (texture == null) { action?.Invoke(); return; }
+
+            if (!loadedAssets.ContainsKey(group))
+                loadedAssets[group] = new Dictionary<TextureID, TextureAddressableData>();
+
+            var addressable = new TextureAddressableData(groupCategory, texture.IsSpriteSheet ? AssetCategory.Sprite : AssetCategory.Texture, texture.AddressablePath, texture.IsSpriteSheet);
+            await addressable.LoadAsync(texture.AddressablePath, texture.IsSpriteSheet ? texture.Sprites.Count : 0, obj =>
+            {
+                if (addressable.IsLoadedAndSetup)
+                {
+                    loadedAssets[group][id] = addressable;
+                }
+            }, ex =>
+            {
+                Debug.LogError($"Failed to load single texture {id} at {texture.AddressablePath}: {ex.Message}");
+            });
+
+            action?.Invoke();
+        }
+
+        public void UnloadSingle(TextureGroup group, TextureID id, Action action = null)
+            => UnloadSingleAsync(group, id, action).Forget();
+
+        public async UniTask UnloadSingleAsync(TextureGroup group, TextureID id, Action action = null)
+        {
+            if (loadedAssets.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
+            {
+                addressable.ReleaseAndUntrack();
+                dict.Remove(id);
+            }
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
+        // =============================================================
+        // SubGroup単位のロード／アンロード（内部実装）
+        // 公開APIは TextureCoreSubGroups.cs 側で、グループごとの
+        // 専用enum（例: Texture_EnemyID）を受け取るオーバーロードとして生成される。
+        // どのテクスチャがどのSubGroupに属するかは TextureData.SubGroupId から都度判定する。
+        // 既存の loadedAssets キャッシュをそのまま使い、専用の管理は持たない。
+        // =============================================================
+        internal void LoadSubGroupInternal(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+
+        internal async UniTask LoadSubGroupInternalAsync(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+                await UniTask.Yield(cancellationToken: destroyToken);
+
+            var groupData = database.GroupedTexturesList.FirstOrDefault(d => d.Group == group);
+            if (groupData == null) { action?.Invoke(); return; }
+
+            if (!loadedAssets.ContainsKey(group))
+                loadedAssets[group] = new Dictionary<TextureID, TextureAddressableData>();
+
+            var tasks = new List<UniTask>();
+            foreach (var texture in groupData.Textures)
+            {
+                if (texture.SubGroupId != subGroupId) continue;
+                if (loadedAssets[group].ContainsKey(texture.TextureID)) continue;
+
+                var addressable = new TextureAddressableData(groupCategory, texture.IsSpriteSheet ? AssetCategory.Sprite : AssetCategory.Texture, texture.AddressablePath, texture.IsSpriteSheet);
+                tasks.Add(addressable.LoadAsync(texture.AddressablePath, texture.IsSpriteSheet ? texture.Sprites.Count : 0, obj =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                        loadedAssets[group][texture.TextureID] = addressable;
+                }, ex =>
+                {
+                    Debug.LogError($"Failed to load texture for {texture.TextureID} at {texture.AddressablePath}: {ex.Message}");
+                }));
+            }
+
+            await UniTask.WhenAll(tasks);
+            action?.Invoke();
+        }
+
+        internal void UnloadSubGroupInternal(TextureGroup group, int subGroupId, Action action = null)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+
+        internal async UniTask UnloadSubGroupInternalAsync(TextureGroup group, int subGroupId, Action action = null)
+        {
+            if (loadedAssets.TryGetValue(group, out var dict) && database != null)
+            {
+                var groupData = database.GroupedTexturesList.FirstOrDefault(d => d.Group == group);
+                if (groupData != null)
+                {
+                    foreach (var texture in groupData.Textures)
+                    {
+                        if (texture.SubGroupId != subGroupId) continue;
+                        if (dict.TryGetValue(texture.TextureID, out var addressable))
+                        {
+                            addressable.ReleaseAndUntrack();
+                            dict.Remove(texture.TextureID);
+                        }
+                    }
+                }
+            }
+
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
 
         public Texture2D GetTexture(TextureGroup group, TextureID id)
         {
@@ -2464,10 +3215,6 @@ namespace GameCore.Texture
         }
     }
 }
-
-
-
-
 
 """
         with open(os.path.join(TEXTURE_DATA, "TextureCore.cs"), 'w', encoding='utf-8') as f:
@@ -2595,19 +3342,23 @@ namespace GameCore.Texture
             private readonly TextureID textureID;
             private readonly List<SpriteData> sprites;
             private readonly bool isSpriteSheet;
-            public TextureData(TextureID textureID, string idName, string addressablePath, List<SpriteData> sprites, bool isSpriteSheet)
+            private readonly int subGroupId;
+            public TextureData(TextureID textureID, string idName, string addressablePath, List<SpriteData> sprites, bool isSpriteSheet, int subGroupId = 0)
             {
                 this.idName = idName;
                 this.addressablePath = addressablePath;
                 this.textureID = textureID;
                 this.sprites = sprites ?? new List<SpriteData>();
                 this.isSpriteSheet = isSpriteSheet;
+                this.subGroupId = subGroupId;
             }
             public string IdName => idName;
             public string AddressablePath => addressablePath;
             public TextureID TextureID => textureID;
             public List<SpriteData> Sprites => sprites;
             public bool IsSpriteSheet => isSpriteSheet;
+            // SubGroup ID（0 = SubGroupなし）。専用enum(例:Texture_EnemyID)にキャストして使う
+            public int SubGroupId => subGroupId;
         }
 
         [System.Serializable]
@@ -2790,12 +3541,15 @@ namespace GameCore.Texture
                         ));
                     }
 
+                    int subGroupId = reader.ReadInt32();
+
                     textures.Add(new TextureDatabase.TextureData(
                         textureID: (TextureID)textureId,
                         idName: textureIdName,
                         addressablePath: addressablePath,
                         sprites: sprites,
-                        isSpriteSheet: isSpriteSheet
+                        isSpriteSheet: isSpriteSheet,
+                        subGroupId: subGroupId
                     ));
                 }
 
@@ -2832,8 +3586,8 @@ namespace GameCore.Texture
     # TextureSprite.json を生成（TextureとSpriteを統合）
     with open(os.path.join(ENUM_DIR, "Texture", "Texture.json"), 'w', encoding='utf-8') as f:
             texture_id_list = []
-            for group, textures in data['groups'].items():
-                for texture in textures:
+            for group, group_value in data['groups'].items():
+                for texture in group_value['items']:
                     texture_id = f"{group}_{texture['name']}"
                     texture_id_list.append({
                         'description': texture['desc'],
@@ -2846,8 +3600,8 @@ namespace GameCore.Texture
             
     # TextureSprite.json を生成（Spriteのエントリ、複数スプライトの場合）
     added_names = []
-    for group, textures in data['groups'].items():
-        for texture in textures:
+    for group, group_value in data['groups'].items():
+        for texture in group_value['items']:
             if len(texture.get('sprites', [])) > 1:
                 name = f"{group}_{texture['name']}"
                 if not os.path.exists(os.path.join(ENUM_DIR, f"{name}")):
@@ -2885,6 +3639,45 @@ namespace GameCore.Texture
             json.dump(enum_list, f, ensure_ascii=False, indent=4)
             f.truncate()
 
+    # TextureCoreSubGroups.cs（SubGroup単位のLoad/Unload専用メソッド。毎回再生成される）
+    generate_texture_core_subgroups(data)
+
+
+def generate_texture_core_subgroups(data):
+    """
+    グループごとのSubGroup専用enum（Texture_{Group}ID）を引数に取る
+    LoadSubGroup / UnloadSubGroup のオーバーロードを、partial classとして
+    TextureCoreSubGroups.cs に生成する（毎回上書き）。
+    """
+    lines = []
+    lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+    lines.append("using System;")
+    lines.append("using GameCore.Enums;")
+    lines.append("")
+    lines.append("namespace GameCore.Texture")
+    lines.append("{")
+    lines.append("    public partial class TextureCore")
+    lines.append("    {")
+
+    for group_name, group_value in data['groups'].items():
+        subgroups = group_value.get('subgroups', [])
+        if not subgroups:
+            continue
+        enum_name = f"Texture_{group_name}ID"
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => LoadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => UnloadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+
+    lines.append("    }")
+    lines.append("}")
+
+    with open(os.path.join(TEXTURE_DATA, "TextureCoreSubGroups.cs"), 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+
+
 def generate_texture_bin():
     """
     テクスチャデータのバイナリファイルを生成
@@ -2903,8 +3696,8 @@ def generate_texture_bin():
         sprite_id_map = {'None': 0}
         texture_id_counter = 1
         sprite_id_counter = 1
-        for group, textures in data['groups'].items():
-            for texture in textures:
+        for group, group_value in data['groups'].items():
+            for texture in group_value['items']:
                 texture_id = f"{group}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
@@ -2923,7 +3716,9 @@ def generate_texture_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            textures = data['groups'][group]
+            group_value = data['groups'][group]
+            textures = group_value['items']
+            subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(textures)))
             for texture in textures:
                 texture_id = texture_id_map.get(f"{group}_{texture['name']}", 0)
@@ -2944,6 +3739,8 @@ def generate_texture_bin():
                     f.write(sprite_name)
                     sprite_path = f"{texture['path']}#{sprite}".encode('utf-8') + b'\0'
                     f.write(sprite_path)
+                sub_group_id = subgroup_map.get(texture.get('subgroup'), 0)
+                f.write(struct.pack('i', sub_group_id))
             current_offset = f.tell()
         f.seek(offset_pos)
         f.write(struct.pack('i' * group_count, *offsets))
@@ -2961,7 +3758,7 @@ def add_gameobject_group(group_name):
     """
     data = load_gameobject_data()
     if group_name and group_name not in data['groups']:
-        data['groups'][group_name] = []
+        data['groups'][group_name] = {'items': [], 'subgroups': []}
         save_gameobject_data(data)
 
 def delete_gameobject_group(group_name):
@@ -2972,11 +3769,31 @@ def delete_gameobject_group(group_name):
     data['groups'].pop(group_name, None)
     save_gameobject_data(data)
 
-def add_gameobject(group_name, name, desc):
+def add_gameobject_subgroup(group_name, subgroup_name):
     """
-    ゲームオブジェクトをグループに追加
+    ゲームオブジェクトグループの中にSubGroupを追加する
+    （登録順がそのままGameObject_{group}ID enumのID順になる）
     """
     data = load_gameobject_data()
+    add_subgroup_to_group(data, group_name, subgroup_name)
+    save_gameobject_data(data)
+
+def delete_gameobject_subgroup(group_name, subgroup_name):
+    """
+    ゲームオブジェクトグループからSubGroupを削除する
+    （所属していたアイテムはグループ直下に戻る）
+    """
+    data = load_gameobject_data()
+    delete_subgroup_from_group(data, group_name, subgroup_name)
+    save_gameobject_data(data)
+
+def add_gameobject(group_name, name, desc, subgroup_name=None):
+    """
+    ゲームオブジェクトをグループ（必要であればSubGroup）に追加
+    """
+    data = load_gameobject_data()
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -2986,11 +3803,12 @@ def add_gameobject(group_name, name, desc):
     addr_path = get_addressable_path(file_path)
     if not addr_path:
         raise Exception("アドレス指定可能なパスを取得できませんでした。")
-    data['groups'][group_name].append({
+    data['groups'][group_name]['items'].append({
         'name': name, 
         'desc': desc, 
         'path': addr_path,
-        'absolute_path': os.path.abspath(file_path)
+        'absolute_path': os.path.abspath(file_path),
+        'subgroup': subgroup_name or None
     })
     save_gameobject_data(data)
 
@@ -2999,8 +3817,59 @@ def delete_gameobject(group_name, index):
     ゲームオブジェクトをグループから削除
     """
     data = load_gameobject_data()
-    del data['groups'][group_name][index]
+    del data['groups'][group_name]['items'][index]
     save_gameobject_data(data)
+
+def edit_gameobject(group_name, index, name=None, desc=None, subgroup_name=None):
+    """
+    既存のゲームオブジェクトエントリを編集する（ファイルの再選択は行わない）
+    """
+    data = load_gameobject_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+
+    entry = items[index]
+    if name is not None:
+        entry['name'] = name
+    if desc is not None:
+        entry['desc'] = desc
+    entry['subgroup'] = subgroup_name or None
+    save_gameobject_data(data)
+
+def reload_gameobject_file(group_name, index):
+    """
+    既存エントリのファイル参照だけを再選択・再取得する。
+    エクスプローラーは、そのエントリで前回選択済みのパスのフォルダから開く。
+    """
+    data = load_gameobject_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    items = data['groups'][group_name]['items']
+    if index < 0 or index >= len(items):
+        raise Exception("対象のデータが見つかりません。")
+
+    entry = items[index]
+    prev_path = entry.get('absolute_path')
+    initial_dir = os.path.dirname(prev_path) if prev_path and os.path.isdir(os.path.dirname(prev_path)) else get_unity_project_path()
+    if not initial_dir:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    file_path = select_file(initial_dir, [("プレハブファイル", "*.prefab")])
+    if not file_path:
+        raise Exception("ファイルが選択されていません。")
+    addr_path = get_addressable_path(file_path)
+    if not addr_path:
+        raise Exception("アドレス指定可能なパスを取得できませんでした。")
+
+    entry['path'] = addr_path
+    entry['absolute_path'] = os.path.abspath(file_path)
+    save_gameobject_data(data)
+    return entry
 
 def generate_gameobject_csharp():
     """
@@ -3019,13 +3888,21 @@ def generate_gameobject_csharp():
         f.write(' ,Max\n  };\n')
         gameobject_id_counter = 1
         gameobject_id_map = {'None': 0}
-        for group, gameobjects in data['groups'].items():
-            for go in gameobjects:
+        for group, group_value in data['groups'].items():
+            for go in group_value['items']:
                 go_id = f"{group}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
         f.write('}\n')
+
+    # SubGroup用enum（GameObject_{Group}ID）を各グループごとに生成／同期
+    subgroup_enum_names = sync_subgroup_enum_files(
+    ENUM_DIR, "GameObject", data['groups'],
+    data_dir=GAMEOBJECT_DATA, namespace="GameCore.Gameobject", class_name="GameObjectCore",
+    group_enum_name="GameObjectGroup", id_enum_name="GameObjectID"
+    )
+    register_enum_names(ENUM_DIR, subgroup_enum_names)
 
     # GameObjectCore.cs
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs")):
@@ -3042,7 +3919,7 @@ using AddressableSystem;
 using GameCore.Enums;
 namespace GameCore.Gameobject
 {
-    public class GameObjectCore : BaseSingleton<GameObjectCore>
+    public partial class GameObjectCore : BaseSingleton<GameObjectCore>
     {
         private GameObjectDatabase database;
         private Dictionary<GameObjectGroup, Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>> loadedGameObjects =
@@ -3154,7 +4031,131 @@ namespace GameCore.Gameobject
 
         }
 
+        // =============================================================
+        // 個別ID単位のロード／アンロード
+        // 既存の loadedGameObjects（グループロードと同じキャッシュ）をそのまま使う。
+        // 個別専用の管理は持たない。
+        // =============================================================
+        public void LoadSingle(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
+            => LoadSingleAsync(group, id, groupCategory, action).Forget();
 
+        public async UniTask LoadSingleAsync(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+            {
+                await UniTask.Yield(cancellationToken: destroyToken);
+            }
+            if (loadedGameObjects.TryGetValue(group, out var existing) && existing.ContainsKey(id))
+            {
+                action?.Invoke();
+                return;
+            }
+
+            var groupData = database.GroupedGameObjectsList.FirstOrDefault(d => d.Group == group);
+            var target = groupData?.GameObjects.FirstOrDefault(g => g.GameObjectID == id);
+            if (target == null) { action?.Invoke(); return; }
+
+            if (!loadedGameObjects.ContainsKey(group))
+                loadedGameObjects[group] = new Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>();
+
+            var addressable = new AddressableData<UnityEngine.GameObject>(groupCategory, AssetCategory.Prefab, target.AddressablePath);
+            await addressable.LoadAsync(obj =>
+            {
+                if (addressable.IsLoadedAndSetup)
+                {
+                    loadedGameObjects[group][id] = addressable;
+                }
+            }, ex =>
+            {
+                Debug.LogError($"Failed to load single gameobject {id} at {target.AddressablePath}: {ex.Message}");
+            }).AttachExternalCancellation(destroyToken);
+
+            action?.Invoke();
+        }
+
+        public void UnloadSingle(GameObjectGroup group, GameObjectID id, Action action = null)
+            => UnloadSingleAsync(group, id, action).Forget();
+
+        public async UniTask UnloadSingleAsync(GameObjectGroup group, GameObjectID id, Action action = null)
+        {
+            if (loadedGameObjects.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
+            {
+                addressable.ReleaseAndUntrack();
+                dict.Remove(id);
+            }
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
+        // =============================================================
+        // SubGroup単位のロード／アンロード（内部実装）
+        // 公開APIは {Category}CoreSubGroups.cs 側で、グループごとの
+        // 専用enum（例: GameObject_EnemyID）を受け取るオーバーロードとして生成される。
+        // どのアイテムがどのSubGroupに属するかは GameObjectData.SubGroupId
+        // （バイナリ生成時に書き出し済み）から都度判定する。
+        // 既存の loadedGameObjects キャッシュをそのまま使い、専用の管理は持たない。
+        // =============================================================
+        internal void LoadSubGroupInternal(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+
+        internal async UniTask LoadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+            {
+                await UniTask.Yield(cancellationToken: destroyToken);
+            }
+            var groupData = database.GroupedGameObjectsList.FirstOrDefault(d => d.Group == group);
+            if (groupData == null) { action?.Invoke(); return; }
+
+            if (!loadedGameObjects.ContainsKey(group))
+                loadedGameObjects[group] = new Dictionary<GameObjectID, AddressableData<UnityEngine.GameObject>>();
+
+            var tasks = new List<UniTask>();
+            foreach (var go in groupData.GameObjects)
+            {
+                if (go.SubGroupId != subGroupId) continue;
+                if (loadedGameObjects[group].ContainsKey(go.GameObjectID)) continue;
+
+                var addressable = new AddressableData<UnityEngine.GameObject>(groupCategory, AssetCategory.Prefab, go.AddressablePath);
+                tasks.Add(addressable.LoadAsync(obj =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                        loadedGameObjects[group][go.GameObjectID] = addressable;
+                }, ex =>
+                {
+                    Debug.LogError($"Failed to load gameobject for {go.GameObjectID} at {go.AddressablePath}: {ex.Message}");
+                }).AttachExternalCancellation(destroyToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            action?.Invoke();
+        }
+
+        internal void UnloadSubGroupInternal(GameObjectGroup group, int subGroupId, Action action = null)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+
+        internal async UniTask UnloadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, Action action = null)
+        {
+            if (loadedGameObjects.TryGetValue(group, out var dict) && database != null)
+            {
+                var groupData = database.GroupedGameObjectsList.FirstOrDefault(d => d.Group == group);
+                if (groupData != null)
+                {
+                    foreach (var go in groupData.GameObjects)
+                    {
+                        if (go.SubGroupId != subGroupId) continue;
+                        if (dict.TryGetValue(go.GameObjectID, out var addressable))
+                        {
+                            addressable.ReleaseAndUntrack();
+                            dict.Remove(go.GameObjectID);
+                        }
+                    }
+                }
+            }
+
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
 
         public UnityEngine.GameObject GetGameObject(GameObjectGroup group, GameObjectID id)
         {
@@ -3198,15 +4199,19 @@ namespace GameCore.Gameobject
             private readonly string idName;
             private readonly string addressablePath;
             private readonly GameObjectID gameObjectID;
-            public GameObjectData(GameObjectID gameObjectID, string idName, string addressablePath)
+            private readonly int subGroupId;
+            public GameObjectData(GameObjectID gameObjectID, string idName, string addressablePath, int subGroupId = 0)
             {
                 this.idName = idName;
                 this.addressablePath = addressablePath;
                 this.gameObjectID = gameObjectID;
+                this.subGroupId = subGroupId;
             }
             public string IdName => idName;
             public string AddressablePath => addressablePath;
             public GameObjectID GameObjectID => gameObjectID;
+            // SubGroup ID（0 = SubGroupなし）。専用enum(例:GameObject_EnemyID)にキャストして使う
+            public int SubGroupId => subGroupId;
         }
 
         [System.Serializable]
@@ -3367,11 +4372,13 @@ namespace GameCore.Gameobject
                     int gameObjectId = reader.ReadInt32();
                     string idName = ReadNullTerminatedString(reader);
                     string addressablePath = ReadNullTerminatedString(reader);
+                    int subGroupId = reader.ReadInt32();
 
                     gameObjects.Add(new GameObjectDatabase.GameObjectData(
                         gameObjectID: (GameObjectID)gameObjectId,
                         idName: idName,
-                        addressablePath: addressablePath
+                        addressablePath: addressablePath,
+                        subGroupId: subGroupId
                     ));
                 }
 
@@ -3831,8 +4838,8 @@ namespace GameCore.Gameobject
     # GameObject.json を生成
     with open(os.path.join(ENUM_DIR, "GameObject", "GameObject.json"), 'w', encoding='utf-8') as f:
         gameobject_id_list = []
-        for group, gameobjects in data['groups'].items():
-            for go in gameobjects:
+        for group, group_value in data['groups'].items():
+            for go in group_value['items']:
                 go_id = f"{group}_{go['name']}"
                 gameobject_id_list.append({
                     'description': go['desc'],
@@ -3842,7 +4849,45 @@ namespace GameCore.Gameobject
                 })
         json.dump(gameobject_id_list, f, ensure_ascii=False, indent=4)
     generate_enum_csharp(os.path.join(ENUM_DIR, "GameObject", "GameObject.json"), "GameObject", ENUM_DIR)
-    
+
+    # GameObjectCoreSubGroups.cs（SubGroup単位のLoad/Unload専用メソッド。毎回再生成される）
+    generate_gameobject_core_subgroups(data)
+
+
+def generate_gameobject_core_subgroups(data):
+    """
+    グループごとのSubGroup専用enum（GameObject_{Group}ID）を引数に取る
+    LoadSubGroup / UnloadSubGroup のオーバーロードを、partial classとして
+    GameObjectCoreSubGroups.cs に生成する。
+    このファイルは（GameObjectCore.cs自体とは違い）呼び出すたびに毎回上書きされる。
+    """
+    lines = []
+    lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+    lines.append("using System;")
+    lines.append("using GameCore.Enums;")
+    lines.append("")
+    lines.append("namespace GameCore.Gameobject")
+    lines.append("{")
+    lines.append("    public partial class GameObjectCore")
+    lines.append("    {")
+
+    for group_name, group_value in data['groups'].items():
+        subgroups = group_value.get('subgroups', [])
+        if not subgroups:
+            continue
+        enum_name = f"GameObject_{group_name}ID"
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => LoadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => UnloadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+
+    lines.append("    }")
+    lines.append("}")
+
+    with open(os.path.join(GAMEOBJECT_DATA, "GameObjectCoreSubGroups.cs"), 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
 
 
 def generate_gameobject_bin():
@@ -3861,8 +4906,8 @@ def generate_gameobject_bin():
 
         gameobject_id_map = {'None': 0}
         gameobject_id_counter = 1
-        for group, gameobjects in data['groups'].items():
-            for go in gameobjects:
+        for group, group_value in data['groups'].items():
+            for go in group_value['items']:
                 go_id = f"{group}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
@@ -3870,7 +4915,9 @@ def generate_gameobject_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            gameobjects = data['groups'][group]
+            group_value = data['groups'][group]
+            gameobjects = group_value['items']
+            subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(gameobjects)))
             for go in gameobjects:
                 go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
@@ -3879,6 +4926,8 @@ def generate_gameobject_bin():
                 f.write(id_name)
                 path_bytes = go['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
+                sub_group_id = subgroup_map.get(go.get('subgroup'), 0)
+                f.write(struct.pack('i', sub_group_id))
             current_offset = f.tell()
         f.seek(offset_pos)
         f.write(struct.pack('i' * group_count, *offsets))
@@ -3971,7 +5020,7 @@ def add_material_group(group_name):
     """
     data = load_material_data()
     if group_name and group_name not in data['groups']:
-        data['groups'][group_name] = []
+        data['groups'][group_name] = {'items': [], 'subgroups': []}
         save_material_data(data)
 
 def delete_material_group(group_name):
@@ -3980,18 +5029,37 @@ def delete_material_group(group_name):
     Enum・Core・バイナリを再生成する
     """
     data = load_material_data()
-    entries = data['groups'].pop(group_name, [])
+    group_value = data['groups'].pop(group_name, {'items': []})
+    entries = group_value.get('items', []) if isinstance(group_value, dict) else group_value
     save_material_data(data)
 
     for entry in entries:
-        cs_path = os.path.join(MATERIAL_DATA, f"{entry['class_name']}.cs")
-        if os.path.exists(cs_path):
-            os.remove(cs_path)
+        cs_dir = os.path.join(MATERIAL_DATA, f"{entry['class_name']}")
+        if os.path.isdir(cs_dir):
+            shutil.rmtree(cs_dir)
 
     generate_material_enum_csharp()
     generate_material_bin()
 
-def generate_material_entry(group_name, class_name, desc, absolute_path, selected_property_names):
+def add_material_subgroup(group_name, subgroup_name):
+    """
+    Materialグループの中にSubGroupを追加する
+    （Enum/バイナリへの反映は他カテゴリ同様、Generateボタン実行時に行われる）
+    """
+    data = load_material_data()
+    add_subgroup_to_group(data, group_name, subgroup_name)
+    save_material_data(data)
+
+def delete_material_subgroup(group_name, subgroup_name):
+    """
+    Materialグループから SubGroup を削除する
+    （Enum/バイナリへの反映は他カテゴリ同様、Generateボタン実行時に行われる）
+    """
+    data = load_material_data()
+    delete_subgroup_from_group(data, group_name, subgroup_name)
+    save_material_data(data)
+
+def generate_material_entry(group_name, class_name, desc, absolute_path, selected_property_names, subgroup_name=None):
     """
     CS生成ボタンから呼ばれるメイン処理。
     jsonに保持しているabsolute_pathを使い、Unityと再度通信して
@@ -4010,6 +5078,8 @@ def generate_material_entry(group_name, class_name, desc, absolute_path, selecte
     data = load_material_data()
     if group_name not in data['groups']:
         raise Exception(f"グループ '{group_name}' が見つかりません。先にグループを作成してください。")
+    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
+        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
 
     # 再通信して最新のプロパティ・Addressableパスを取得
     fetched = _request_material_properties_from_unity(absolute_path)
@@ -4021,13 +5091,15 @@ def generate_material_entry(group_name, class_name, desc, absolute_path, selecte
         raise Exception("選択したプロパティがシェーダーから見つかりませんでした。ファイルが変更された可能性があります。")
 
     # JSONエントリを更新（同グループ内で同名クラスは上書き。absolute_pathを保持し続ける）
-    data['groups'][group_name] = [e for e in data['groups'][group_name] if e['class_name'] != class_name]
-    data['groups'][group_name].append({
+    items = data['groups'][group_name]['items']
+    data['groups'][group_name]['items'] = [e for e in items if e['class_name'] != class_name]
+    data['groups'][group_name]['items'].append({
         'class_name': class_name,
         'desc': desc or '',
         'absolute_path': absolute_path,
         'addressable_path': addressable_path,
-        'properties': properties
+        'properties': properties,
+        'subgroup': subgroup_name or None
     })
     save_material_data(data)
 
@@ -4043,8 +5115,8 @@ def regenerate_material_entry(group_name, class_name):
     これまで選択していたプロパティ名を使って、Unityに再問い合わせしてから再生成する。
     """
     data = load_material_data()
-    entries = data['groups'].get(group_name, [])
-    entry = next((e for e in entries if e['class_name'] == class_name), None)
+    items = data['groups'].get(group_name, {}).get('items', [])
+    entry = next((e for e in items if e['class_name'] == class_name), None)
     if entry is None:
         raise Exception(f"{class_name} のデータが見つかりません。")
 
@@ -4054,7 +5126,8 @@ def regenerate_material_entry(group_name, class_name):
         entry['class_name'],
         entry.get('desc', ''),
         entry.get('absolute_path'),
-        selected_names
+        selected_names,
+        entry.get('subgroup')
     )
 
 def delete_material_entry(group_name, class_name):
@@ -4063,31 +5136,23 @@ def delete_material_entry(group_name, class_name):
     """
     data = load_material_data()
     if group_name in data['groups']:
-        data['groups'][group_name] = [e for e in data['groups'][group_name] if e['class_name'] != class_name]
+        items = data['groups'][group_name]['items']
+        data['groups'][group_name]['items'] = [e for e in items if e['class_name'] != class_name]
     save_material_data(data)
 
-    cs_path = os.path.join(MATERIAL_DATA, f"{class_name}.cs")
-    if os.path.exists(cs_path):
-        os.remove(cs_path)
+    cs_dir = os.path.join(MATERIAL_DATA, f"{class_name}")
+    if os.path.isdir(cs_dir):
+        shutil.rmtree(cs_dir)
 
     generate_material_enum_csharp()
     generate_material_bin()
 
-def generate_material_csharp(group_name, class_name):
+def _build_material_cs_code(class_name, desc, properties):
     """
     選択されたプロパティに基づき、MaterialPropertyBlockを使った
-    高効率なマテリアル操作用のC#クラスを1ファイル生成する
+    高効率なマテリアル操作用のC#クラスのソースコード文字列を組み立てる
+    （グループ登録あり／CS-onlyのどちらからも呼ばれる共通ロジック）
     """
-    _ensure_base_material_data()
-
-    data = load_material_data()
-    entry = next((e for e in data['groups'].get(group_name, []) if e['class_name'] == class_name), None)
-    if entry is None:
-        raise Exception(f"{class_name} のデータが見つかりません。")
-
-    properties = entry.get('properties', [])
-    desc = entry.get('desc', '')
-
     id_field_lines = []
     setter_method_blocks = []
     used_field_names = set()
@@ -4129,7 +5194,7 @@ def generate_material_csharp(group_name, class_name):
     id_fields_str = "\n".join(id_field_lines) if id_field_lines else "    // プロパティが選択されていません"
     setters_str = "".join(setter_method_blocks)
 
-    code_str = f"""using UnityEngine;
+    return f"""using UnityEngine;
 using GameCore.MaterialData;
 
 /// <summary>
@@ -4145,6 +5210,24 @@ public class {class_name} : BaseMaterialData
 
 }}
 """
+
+def generate_material_csharp(group_name, class_name):
+    """
+    選択されたプロパティに基づき、MaterialPropertyBlockを使った
+    高効率なマテリアル操作用のC#クラスを1ファイル生成する（グループ登録あり・Enum/バイナリ対象）
+    """
+    _ensure_base_material_data()
+
+    data = load_material_data()
+    items = data['groups'].get(group_name, {}).get('items', [])
+    entry = next((e for e in items if e['class_name'] == class_name), None)
+    if entry is None:
+        raise Exception(f"{class_name} のデータが見つかりません。")
+
+    properties = entry.get('properties', [])
+    desc = entry.get('desc', '')
+    code_str = _build_material_cs_code(class_name, desc, properties)
+
     if not os.path.exists(os.path.join(MATERIAL_DATA,f"{class_name}")):        
         os.mkdir(os.path.join(MATERIAL_DATA,f"{class_name}"))
     cs_path = os.path.join(MATERIAL_DATA,f"{class_name}", f"{class_name}.cs")
@@ -4156,11 +5239,12 @@ def _material_id_map(data):
     """
     "{group}_{class_name}" -> MaterialID の対応表を作る（None=0固定、以降は登場順）
     GameObjectのgameobject_id_mapと同じ考え方（グループをまたいでユニークなID）。
+    ※ CS-only（Enum非登録）のエントリはここには含まれない。
     """
     id_map = {'None': 0}
     counter = 1
-    for group, entries in data['groups'].items():
-        for e in entries:
+    for group, group_value in data['groups'].items():
+        for e in group_value['items']:
             key = f"{group}_{e['class_name']}"
             if key not in id_map:
                 id_map[key] = counter
@@ -4193,8 +5277,8 @@ def generate_material_enum_csharp():
     material_json_path = os.path.join(material_dir, "Material.json")
     with open(material_json_path, 'w', encoding='utf-8') as f:
         material_id_list = []
-        for group, entries in data['groups'].items():
-            for e in entries:
+        for group, group_value in data['groups'].items():
+            for e in group_value['items']:
                 key = f"{group}_{e['class_name']}"
                 material_id_list.append({
                     'description': e.get('desc', ''),
@@ -4205,6 +5289,53 @@ def generate_material_enum_csharp():
         json.dump(material_id_list, f, ensure_ascii=False, indent=4)
 
     generate_enum_csharp(material_json_path, "Material", ENUM_DIR)
+
+    # SubGroup用enum（Material_{Group}ID）を各グループごとに生成／同期
+    subgroup_enum_names = sync_subgroup_enum_files(
+    ENUM_DIR, "Material", data['groups'],
+    data_dir=MATERIAL_DATA, namespace="GameCore.MaterialData", class_name="MaterialCore",
+    group_enum_name="MaterialGroup", id_enum_name="MaterialID",
+    global_key_field="class_name"
+    )
+    register_enum_names(ENUM_DIR, subgroup_enum_names)
+
+    # MaterialCoreSubGroups.cs（毎回再生成）
+    generate_material_core_subgroups(data)
+
+
+def generate_material_core_subgroups(data):
+    """
+    グループごとのSubGroup専用enum（Material_{Group}ID）を引数に取る
+    LoadSubGroup / UnloadSubGroup のオーバーロードを、partial classとして
+    MaterialCoreSubGroups.cs に生成する（毎回上書き）。
+    """
+    lines = []
+    lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+    lines.append("using System;")
+    lines.append("using GameCore.Enums;")
+    lines.append("")
+    lines.append("namespace GameCore.MaterialData")
+    lines.append("{")
+    lines.append("    public partial class MaterialCore")
+    lines.append("    {")
+
+    for group_name, group_value in data['groups'].items():
+        subgroups = group_value.get('subgroups', [])
+        if not subgroups:
+            continue
+        enum_name = f"Material_{group_name}ID"
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => LoadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => UnloadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+
+    lines.append("    }")
+    lines.append("}")
+
+    with open(os.path.join(MATERIAL_DATA, "MaterialCoreSubGroups.cs"), 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
 
 def generate_material_bin():
     """
@@ -4226,7 +5357,9 @@ def generate_material_bin():
 
         for i, group in enumerate(groups):
             offsets[i] = current_offset
-            entries = data['groups'][group]
+            group_value = data['groups'][group]
+            entries = group_value['items']
+            subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(entries)))
             for e in entries:
                 material_id = id_map.get(f"{group}_{e['class_name']}", 0)
@@ -4236,6 +5369,8 @@ def generate_material_bin():
                 addressable_path = e.get('addressable_path') or ''
                 path_bytes = addressable_path.encode('utf-8') + b'\0'
                 f.write(path_bytes)
+                sub_group_id = subgroup_map.get(e.get('subgroup'), 0)
+                f.write(struct.pack('i', sub_group_id))
             current_offset = f.tell()
         f.seek(offset_pos)
         f.write(struct.pack('i' * group_count, *offsets))
@@ -4309,15 +5444,19 @@ namespace GameCore.MaterialData
             private readonly MaterialID materialID;
             private readonly string idName;
             private readonly string addressablePath;
-            public MaterialAssetData(MaterialID materialID, string idName, string addressablePath)
+            private readonly int subGroupId;
+            public MaterialAssetData(MaterialID materialID, string idName, string addressablePath, int subGroupId = 0)
             {
                 this.materialID = materialID;
                 this.idName = idName;
                 this.addressablePath = addressablePath;
+                this.subGroupId = subGroupId;
             }
             public MaterialID MaterialID => materialID;
             public string IdName => idName;
             public string AddressablePath => addressablePath;
+            // SubGroup ID（0 = SubGroupなし）。専用enum(例:Material_EnemyID)にキャストして使う
+            public int SubGroupId => subGroupId;
         }
 
         [System.Serializable]
@@ -4474,11 +5613,13 @@ namespace GameCore.MaterialData
                     int materialId = reader.ReadInt32();
                     string idName = ReadNullTerminatedString(reader);
                     string addressablePath = ReadNullTerminatedString(reader);
+                    int subGroupId = reader.ReadInt32();
 
                     materials.Add(new MaterialDatabase.MaterialAssetData(
                         materialID: (MaterialID)materialId,
                         idName: idName,
-                        addressablePath: addressablePath
+                        addressablePath: addressablePath,
+                        subGroupId: subGroupId
                     ));
                 }
 
@@ -4521,7 +5662,7 @@ using GameCore.Enums;
 
 namespace GameCore.MaterialData
 {
-    public class MaterialCore : BaseSingleton<MaterialCore>
+    public partial class MaterialCore : BaseSingleton<MaterialCore>
     {
         private MaterialDatabase database;
         private Dictionary<MaterialGroup, Dictionary<MaterialID, AddressableData<Material>>> loadedMaterials =
@@ -4607,6 +5748,128 @@ namespace GameCore.MaterialData
             await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
         }
 
+        // =============================================================
+        // 個別ID単位のロード／アンロード
+        // 既存の loadedMaterials（グループロードと同じキャッシュ）をそのまま使う。
+        // =============================================================
+        public void LoadSingle(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
+            => LoadSingleAsync(group, id, groupCategory, action).Forget();
+
+        public async UniTask LoadSingleAsync(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+                await UniTask.Yield(cancellationToken: destroyToken);
+
+            if (loadedMaterials.TryGetValue(group, out var existing) && existing.ContainsKey(id))
+            {
+                action?.Invoke();
+                return;
+            }
+
+            var groupData = database.GroupedMaterialsList.FirstOrDefault(d => d.Group == group);
+            var mat = groupData?.Materials.FirstOrDefault(m => m.MaterialID == id);
+            if (mat == null) { action?.Invoke(); return; }
+
+            if (!loadedMaterials.ContainsKey(group))
+                loadedMaterials[group] = new Dictionary<MaterialID, AddressableData<Material>>();
+
+            var addressable = new AddressableData<Material>(groupCategory, AssetCategory.Material, mat.AddressablePath);
+            await addressable.LoadAsync(obj =>
+            {
+                if (addressable.IsLoadedAndSetup)
+                {
+                    loadedMaterials[group][id] = addressable;
+                }
+            }, ex =>
+            {
+                Debug.LogError($"Failed to load single material {id} at {mat.AddressablePath}: {ex.Message}");
+            }).AttachExternalCancellation(destroyToken);
+
+            action?.Invoke();
+        }
+
+        public void UnloadSingle(MaterialGroup group, MaterialID id, Action action = null)
+            => UnloadSingleAsync(group, id, action).Forget();
+
+        public async UniTask UnloadSingleAsync(MaterialGroup group, MaterialID id, Action action = null)
+        {
+            if (loadedMaterials.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
+            {
+                addressable.ReleaseAndUntrack();
+                dict.Remove(id);
+            }
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
+        // =============================================================
+        // SubGroup単位のロード／アンロード（内部実装）
+        // 公開APIは MaterialCoreSubGroups.cs 側で、グループごとの
+        // 専用enum（例: Material_EnemyID）を受け取るオーバーロードとして生成される。
+        // どのマテリアルがどのSubGroupに属するかは MaterialAssetData.SubGroupId から都度判定する。
+        // 既存の loadedMaterials キャッシュをそのまま使い、専用の管理は持たない。
+        // =============================================================
+        internal void LoadSubGroupInternal(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+
+        internal async UniTask LoadSubGroupInternalAsync(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        {
+            while (database == null)
+                await UniTask.Yield(cancellationToken: destroyToken);
+
+            var groupData = database.GroupedMaterialsList.FirstOrDefault(d => d.Group == group);
+            if (groupData == null) { action?.Invoke(); return; }
+
+            if (!loadedMaterials.ContainsKey(group))
+                loadedMaterials[group] = new Dictionary<MaterialID, AddressableData<Material>>();
+
+            var tasks = new List<UniTask>();
+            foreach (var mat in groupData.Materials)
+            {
+                if (mat.SubGroupId != subGroupId) continue;
+                if (loadedMaterials[group].ContainsKey(mat.MaterialID)) continue;
+
+                var addressable = new AddressableData<Material>(groupCategory, AssetCategory.Material, mat.AddressablePath);
+                tasks.Add(addressable.LoadAsync(obj =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                        loadedMaterials[group][mat.MaterialID] = addressable;
+                }, ex =>
+                {
+                    Debug.LogError($"Failed to load material for {mat.MaterialID} at {mat.AddressablePath}: {ex.Message}");
+                }).AttachExternalCancellation(destroyToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            action?.Invoke();
+        }
+
+        internal void UnloadSubGroupInternal(MaterialGroup group, int subGroupId, Action action = null)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+
+        internal async UniTask UnloadSubGroupInternalAsync(MaterialGroup group, int subGroupId, Action action = null)
+        {
+            if (loadedMaterials.TryGetValue(group, out var dict) && database != null)
+            {
+                var groupData = database.GroupedMaterialsList.FirstOrDefault(d => d.Group == group);
+                if (groupData != null)
+                {
+                    foreach (var mat in groupData.Materials)
+                    {
+                        if (mat.SubGroupId != subGroupId) continue;
+                        if (dict.TryGetValue(mat.MaterialID, out var addressable))
+                        {
+                            addressable.ReleaseAndUntrack();
+                            dict.Remove(mat.MaterialID);
+                        }
+                    }
+                }
+            }
+
+            action?.Invoke();
+            await UniTask.CompletedTask.AttachExternalCancellation(destroyToken);
+        }
+
         public void UnloadAll(Action action = null)
         {
             UnloadAllAsync(action).Forget();
@@ -4662,8 +5925,9 @@ def get_texture_file_path(group_name, index):
     テクスチャの絶対パスを取得
     """
     data = load_texture_data()
-    if group_name in data['groups'] and index < len(data['groups'][group_name]):
-        return data['groups'][group_name][index]['absolute_path']
+    items = data['groups'].get(group_name, {}).get('items', [])
+    if index < len(items):
+        return items[index]['absolute_path']
     return None
 
 def get_sound_file_path(group_name, index):
@@ -4671,6 +5935,123 @@ def get_sound_file_path(group_name, index):
     サウンドの絶対パスを取得
     """
     data = load_sound_data()
-    if group_name in data['groups'] and index < len(data['groups'][group_name]):
-        return data['groups'][group_name][index]['absolute_path']
+    items = data['groups'].get(group_name, {}).get('items', [])
+    if index < len(items):
+        return items[index]['absolute_path']
     return None
+
+# =============================================================================
+# Material「CS生成のみ」モード
+# -----------------------------------------------------------------------------
+# 通常のMaterialエントリ（generate_material_entry）とは完全に独立した保管場所
+# （MATERIAL_CS_ONLY_JSON）で管理する。
+#   - MaterialGroup / MaterialID のEnumには一切登録されない
+#   - material_data.bytes（バイナリ）にも一切含まれない
+#   - 生成されるのは MaterialPropertyBlock操作用の .cs クラス本体だけ
+# 「とりあえずプロパティ操作用のクラスだけ欲しい」というケース向けの軽量モード。
+# =============================================================================
+
+def load_material_cs_only_data():
+    """
+    assets_material_cs_only.json を読み込む（存在しなければ空のentriesを返す）
+    """
+    if os.path.exists(MATERIAL_CS_ONLY_JSON):
+        with open(MATERIAL_CS_ONLY_JSON, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        data.setdefault('entries', [])
+        return data
+    return {'entries': []}
+
+def save_material_cs_only_data(data):
+    """
+    assets_material_cs_only.json を保存
+    """
+    os.makedirs(MATERIAL_CS_ONLY_DATA, exist_ok=True)
+    with open(MATERIAL_CS_ONLY_JSON, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def get_material_cs_only_data():
+    """
+    CS-onlyモードで生成済みのエントリ一覧を取得
+    """
+    return load_material_cs_only_data()
+
+def generate_material_cs_only(class_name, desc, absolute_path, selected_property_names):
+    """
+    「CS生成だけ」モードのメイン処理。
+    通常のgenerate_material_entryと違い、
+      - グループへの追加をしない
+      - MaterialGroup / MaterialID Enumへの登録をしない
+      - material_data.bytes（バイナリ）に含めない
+    Unityと通信して最新のプロパティ・Addressableパスを取得し、
+    MaterialPropertyBlock操作用の.csファイル1つだけを生成する。
+    """
+    if not class_name:
+        raise Exception("クラス名を入力してください。")
+    if not absolute_path:
+        raise Exception("Shader / Materialのパスがありません。先にファイルを選択してください。")
+    if not selected_property_names:
+        raise Exception("プロパティを1つ以上選択してください。")
+
+    _ensure_base_material_data()
+
+    # 再通信して最新のプロパティ・Addressableパスを取得
+    fetched = _request_material_properties_from_unity(absolute_path)
+    addressable_path = fetched['addressable_path']
+
+    selected_set = set(selected_property_names)
+    properties = [p for p in fetched['properties'] if p.get('name') in selected_set]
+    if not properties:
+        raise Exception("選択したプロパティがシェーダーから見つかりませんでした。ファイルが変更された可能性があります。")
+
+    data = load_material_cs_only_data()
+    data['entries'] = [e for e in data['entries'] if e['class_name'] != class_name]
+    data['entries'].append({
+        'class_name': class_name,
+        'desc': desc or '',
+        'absolute_path': absolute_path,
+        'addressable_path': addressable_path,
+        'properties': properties
+    })
+    save_material_cs_only_data(data)
+
+    code_str = _build_material_cs_code(class_name, desc or '', properties)
+
+    class_dir = os.path.join(MATERIAL_CS_ONLY_DATA, class_name)
+    os.makedirs(class_dir, exist_ok=True)
+    cs_path = os.path.join(class_dir, f"{class_name}.cs")
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(code_str)
+
+    # 注意: generate_material_enum_csharp() / generate_material_bin() は
+    #       意図的に呼び出さない（Enum・バイナリに含めないため）
+
+def regenerate_material_cs_only(class_name):
+    """
+    CS-onlyエントリの再生成。保持しているabsolute_pathと選択済みプロパティ名を使って
+    Unityへ再問い合わせしてからCSを再生成する。
+    """
+    data = load_material_cs_only_data()
+    entry = next((e for e in data['entries'] if e['class_name'] == class_name), None)
+    if entry is None:
+        raise Exception(f"{class_name} のデータが見つかりません（CS-only）。")
+
+    selected_names = [p['name'] for p in entry.get('properties', []) if p.get('name')]
+    generate_material_cs_only(
+        entry['class_name'],
+        entry.get('desc', ''),
+        entry.get('absolute_path'),
+        selected_names
+    )
+
+def delete_material_cs_only(class_name):
+    """
+    CS-onlyエントリと生成済みC#ファイルを削除する（Enum・バイナリには元々含まれていない）
+    """
+    data = load_material_cs_only_data()
+    data['entries'] = [e for e in data['entries'] if e['class_name'] != class_name]
+    save_material_cs_only_data(data)
+
+    class_dir = os.path.join(MATERIAL_CS_ONLY_DATA, class_name)
+    if os.path.isdir(class_dir):
+        shutil.rmtree(class_dir)
