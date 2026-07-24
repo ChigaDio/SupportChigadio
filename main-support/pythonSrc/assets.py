@@ -168,6 +168,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
         single_lines.append("using System;")
         single_lines.append("using GameCore.Enums;")
         single_lines.append("using Cysharp.Threading.Tasks;")
+        single_lines.append("using UnityEngine;")
         single_lines.append("")
         single_lines.append(f"namespace {namespace}")
         single_lines.append("{")
@@ -220,10 +221,10 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            => GetGameObject({group_enum_name}.{group_name}, {table_name}[(int)id]);")
                     single_lines.append("")
                 elif "SoundCore" == class_name:
-                    single_lines.append(f"       public void PlayBGM({detail_enum_name} id, float volume = 1f, float fadeTime = 0f)")
+                    single_lines.append(f"       public void PlayBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 0f)")
                     single_lines.append(f"            => PlayBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
                     single_lines.append("")
-                    single_lines.append(f"       public void CrossFadeBGM({detail_enum_name} id, float volume = 1f, float fadeTime = 1f)")
+                    single_lines.append(f"       public void CrossFadeBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 1f)")
                     single_lines.append(f"            => CrossFadeBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
                     single_lines.append("")   
                 elif "MaterialCore" == class_name:
@@ -5396,18 +5397,22 @@ def _build_material_cs_code(class_name, desc, properties):
     return f"""using UnityEngine;
 using GameCore.MaterialData;
 
-/// <summary>
-/// {desc}
-/// </summary>
-[System.Serializable]
-public class {class_name} : BaseMaterialData
+
+namespace GameCore.MaterialData
 {{
-
-{id_fields_str}
-
-
-{setters_str}
-
+    /// <summary>
+    /// {desc}
+    /// </summary>
+    [System.Serializable]
+    public class {class_name}MaterialData : BaseMaterialData
+    {{
+    
+    {id_fields_str}
+    
+    
+    {setters_str}
+    
+    }}
 }}
 """
 
