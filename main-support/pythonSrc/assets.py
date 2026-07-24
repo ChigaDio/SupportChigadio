@@ -199,10 +199,10 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item['name']}")
                 single_lines.append("        };")
                 single_lines.append("")
-                single_lines.append(f"        public void LoadSingle({detail_enum_name} id, GroupCategory groupCategory, Action onCompleted = null)")
+                single_lines.append(f"        public void LoadSingle({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
                 single_lines.append(f"            => LoadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
                 single_lines.append("")
-                single_lines.append(f"        public void UnloadSingle({detail_enum_name} id, Action onCompleted = null)")
+                single_lines.append(f"        public void UnloadSingle({detail_enum_name}ID id, Action onCompleted = null)")
                 single_lines.append(f"            => UnloadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
                 single_lines.append("")
 
@@ -2631,7 +2631,7 @@ def generate_sound_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Sound_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory category, Action onCompleted = null)")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted);")
         lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
@@ -3664,7 +3664,7 @@ def generate_texture_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Texture_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
@@ -4876,7 +4876,7 @@ def generate_gameobject_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"GameObject_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
@@ -5324,7 +5324,7 @@ def generate_material_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Material_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
@@ -5393,7 +5393,7 @@ namespace GameCore.MaterialData
     /// <summary>
     /// Material CS生成機能によって生成される各クラスの共通基底クラス
     /// </summary>
-    public abstract class BaseMaterialData : MonoBehaviour
+    public abstract class BaseMaterialData 
     {
         [SerializeField] protected Renderer targetRenderer;
         // MaterialPropertyBlock用（メモリを汚さず、マテリアルを複製しない最高効率の方式）
@@ -5402,7 +5402,7 @@ namespace GameCore.MaterialData
         // マテリアル自体のパラメータを直接変える必要がある場合にキャッシュする変数
         protected Material cachedMaterial;
 
-        protected virtual void Awake()
+        public virtual void Awake()
         {
             if (targetRenderer == null) return;
             propertyBlock = new MaterialPropertyBlock();

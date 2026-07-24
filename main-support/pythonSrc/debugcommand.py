@@ -96,7 +96,8 @@ def _generate_json_cs(base_dir):
     """Newtonsoft.Json等の外部ライブラリに依存しない、自前の最小限JSON実装。
     Dictionary<string,object> / List<object> / string / double / bool / null のみを扱う。"""
     path = os.path.join(base_dir, "DebugCommandJson.cs")
-    content = r'''using System;
+    content = r'''
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -285,8 +286,6 @@ namespace GameCore.DebugCommand
             }
             sb.Append('}');
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
         private static void WriteArray(StringBuilder sb, List<object> list)
         {
             sb.Append('[');
@@ -297,8 +296,6 @@ namespace GameCore.DebugCommand
             }
             sb.Append(']');
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
         private static void WriteString(StringBuilder sb, string s)
         {
             sb.Append('"');
@@ -406,6 +403,7 @@ namespace GameCore.DebugCommand
         }
     }
 }
+
 '''
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
@@ -414,7 +412,8 @@ namespace GameCore.DebugCommand
 
 def _generate_registry_cs(base_dir):
     path = os.path.join(base_dir, "DebugCommandBase.cs")
-    content = '''using System;
+    content = '''
+using System;
 using System.Collections.Generic;
 
 namespace GameCore.DebugCommand
@@ -434,20 +433,17 @@ namespace GameCore.DebugCommand
     {
         private static readonly Dictionary<string, DebugCommandBase> _commands = new Dictionary<string, DebugCommandBase>();
 
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
+
         public static void Register(DebugCommandBase command)
         {
             _commands[command.CommandName] = command;
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
+
         public static bool TryGet(string name, out DebugCommandBase command)
         {
             return _commands.TryGetValue(name, out command);
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
+
         // dbgServer.py から届いたJSON文字列を解析し、対応するDebugCommandを実行して
         // 応答用のJSON文字列を返す（type:"command" 以外のメッセージが来た場合はnullを返す）。
         public static string Dispatch(string receivedJson)
@@ -492,8 +488,7 @@ namespace GameCore.DebugCommand
                 return BuildError(commandId, name, e.Message);
             }
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
+
         private static string BuildError(string commandId, string name, string message)
         {
             var response = new JsonObject();
@@ -506,6 +501,7 @@ namespace GameCore.DebugCommand
         }
     }
 }
+
 '''
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
@@ -516,13 +512,15 @@ def _generate_websocket_handler_cs(base_dir):
     """dbgServer.py(ws://localhost:8765)に接続し、DebugCommandの受信・実行・応答送信を行う
     Unity側のハンドラ。シーンに配置するだけで動作する（自動生成・編集不要）。"""
     path = os.path.join(base_dir, "DebugCommandWebSocketHandler.cs")
-    content = '''using System;
+    content = '''
+using System;
 using System.IO;
 using System.Text;
 using System.Threading;
 using System.Net.WebSockets;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using System.Diagnostics;
 
 namespace GameCore.DebugCommand
 {
@@ -544,9 +542,9 @@ namespace GameCore.DebugCommand
             if (UnityEngine.Debug.isDebugBuild || Application.isEditor)
             {
                 var go = new GameObject("DebugCommand");
-                Object.DontDestroyOnLoad(go);
-                runtime = go.AddComponent<DebugCommandWebSocketHandler>();
-                DebugCommandInstaller.InstallAll();
+                UnityEngine.Object.DontDestroyOnLoad(go);
+                go.AddComponent<DebugCommandWebSocketHandler>();
+                //DebugCommandInstaller.InstallAll();
             }
         }
         [Conditional("UNITY_EDITOR")]
@@ -557,24 +555,21 @@ namespace GameCore.DebugCommand
             ConnectAsync().Forget();
         }
 
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
+
         private async UniTaskVoid ConnectAsync()
         {
             _socket = new ClientWebSocket();
             try
             {
                 await _socket.ConnectAsync(new Uri(url), _cts.Token);
-                Debug.Log($"[DebugCommand] WebSocket connected: {url}");
+                UnityEngine.Debug.Log($"[DebugCommand] WebSocket connected: {url}");
                 ReceiveLoop().Forget();
             }
             catch (Exception e)
             {
-                Debug.LogError($"[DebugCommand] WebSocket connect failed: {e.Message}");
+                UnityEngine.Debug.LogError($"[DebugCommand] WebSocket connect failed: {e.Message}");
             }
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
         private async UniTaskVoid ReceiveLoop()
         {
             var buffer = new byte[8192];
@@ -601,8 +596,6 @@ namespace GameCore.DebugCommand
                 HandleMessage(text).Forget();
             }
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
         private async UniTaskVoid HandleMessage(string text)
         {
             string response;
@@ -613,7 +606,7 @@ namespace GameCore.DebugCommand
             }
             catch (Exception e)
             {
-                Debug.LogError($"[DebugCommand] Dispatch error: {e.Message}");
+                UnityEngine.Debug.LogError($"[DebugCommand] Dispatch error: {e.Message}");
                 return;
             }
 
@@ -621,8 +614,6 @@ namespace GameCore.DebugCommand
 
             await SendAsync(response);
         }
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("UNITY_ENABLE_CHECKS")]
         private async UniTask SendAsync(string text)
         {
             if (_socket == null || _socket.State != WebSocketState.Open) return;
@@ -653,6 +644,7 @@ namespace GameCore.DebugCommand
         }
     }
 }
+
 '''
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
@@ -689,6 +681,28 @@ def generate_installer(data_dir, names):
     lines.append("        {")
     for n in names:
         lines.append(f"            DebugCommandRegistry.Register(new {n}DebugCommand());")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("}")
+
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+    return path
+
+def generate_base_installer(data_dir):
+    """登録済み全DebugCommandをレジストリに登録するインストーラ（全生成のたびに上書き）"""
+    base_dir = os.path.join(data_dir, DEBUG_COMMAND)
+    os.makedirs(base_dir, exist_ok=True)
+    path = os.path.join(base_dir, "DebugCommandInstaller.cs")
+
+    lines = []
+    lines.append("namespace GameCore.DebugCommand")
+    lines.append("{")
+    lines.append("    // 登録済みの全DebugCommandをレジストリに登録する（自動生成・編集不要）")
+    lines.append("    public static class DebugCommandInstaller")
+    lines.append("    {")
+    lines.append("        public static void InstallAll()")
+    lines.append("        {")
     lines.append("        }")
     lines.append("    }")
     lines.append("}")
@@ -820,6 +834,8 @@ def register(app, data_dir):
 
     # 共通基盤(DebugCommandBase.cs)は起動時に必ず最新化しておく
     generate_base(data_dir)
+    
+    generate_base_installer(data_dir)
 
     list_path = os.path.join(cmd_root, 'debug_command_list.json')
 
