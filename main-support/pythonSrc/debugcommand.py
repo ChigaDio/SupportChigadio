@@ -413,8 +413,10 @@ namespace GameCore.DebugCommand
 def _generate_registry_cs(base_dir):
     path = os.path.join(base_dir, "DebugCommandBase.cs")
     content = '''
+
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 
 namespace GameCore.DebugCommand
 {
@@ -501,6 +503,8 @@ namespace GameCore.DebugCommand
         }
     }
 }
+
+
 
 '''
     with open(path, 'w', encoding='utf-8') as f:
@@ -739,7 +743,7 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     for a in args:
         lines.append(f"        public {_cs_type(a['type'])} {a['name']};")
     lines.append("")
-    lines.append(f"        public static {name}Args FromJson(JObject json)")
+    lines.append(f"        public static {name}Args FromJson(JsonObject json)")
     lines.append("        {")
     lines.append(f"            return new {name}Args")
     lines.append("            {")
@@ -775,7 +779,7 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("    {")
     lines.append(f'        public override string CommandName => "{name}";')
     lines.append("")
-    lines.append("        public override JObject Invoke(JObject argsJson)")
+    lines.append("        public override JObject Invoke(JsonObject argsJson)")
     lines.append("        {")
     lines.append(f"            var args = {name}Args.FromJson(argsJson);")
     if has_return:

@@ -562,7 +562,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRow.cs
     {
         public abstract class BaseClassDataRow
         {
-            public abstract void Read(BinaryReader reader);
+            public abstract void Read(int id,BinaryReader reader);
         }
     }
     """
@@ -604,7 +604,7 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseTable.cs")):
         public abstract class BaseTable
         {
 
-            public abstract void Read(BinaryReader reader);
+            public abstract void Read(int id,BinaryReader reader);
             public abstract void Release();
 
         }
@@ -2964,6 +2964,13 @@ def generate_class_data_id_cs(name):
             # (以前はここで型変換ロジックを独自に再実装しており、dictionary型を考慮していなかった)
             custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
             read_code = ""
+            
+            #まずは自分自身のIDを入れる
+            lf.write("        [SerializeField]\n")
+            lf.write(f"        protected {name}TableID table_id;\n")
+            lf.write(f"        public {name}TableID TableID {{ get => table_id;}}\n")
+            #次はRead
+            read_code += f"            table_id = ({name}TableID)id;\n"
             for col in columns:
                 field_for_cs = dict(col)
                 if isinstance(field_for_cs.get('type'), str) and field_for_cs['type'].endswith('[]'):
@@ -2979,7 +2986,7 @@ def generate_class_data_id_cs(name):
                 read_code += field_info['read']
 
             # --- Read Method ---
-            lf.write("\n        public override void Read(BinaryReader reader)\n")
+            lf.write("\n        public override void Read(int id,BinaryReader reader)\n")
             lf.write("        {\n")
             lf.write(read_code)
             lf.write("        }\n")
@@ -3010,7 +3017,7 @@ def generate_class_data_id_cs(name):
             f.write("            for(int r=0; r<rowCount; r++) {\n")
             f.write(f"                var enumVal = ({enum_name})Enum.ToObject(typeof({enum_name}), reader.ReadInt32());\n")
             f.write(f"                var row = new {name}Row();\n")
-            f.write("                row.Read(reader);\n")  # ← Readでまとめる
+            f.write("                row.Read(r + 1,reader);\n")  # ← Readでまとめる
             f.write("                Table[enumVal] = row;\n")
             f.write("            }\n")
             f.write("        }\n")
@@ -3412,6 +3419,7 @@ def generate_binary(name):
                 f.write(name_bytes)
                 f.write(struct.pack('i', len(type_bytes)))
                 f.write(type_bytes)
+                
             
             # データ: 行ごとにEnumValue, 各カラム値
             for row in rows:
