@@ -97,6 +97,7 @@ def _generate_json_cs(base_dir):
     Dictionary<string,object> / List<object> / string / double / bool / null のみを扱う。"""
     path = os.path.join(base_dir, "DebugCommandJson.cs")
     content = r'''
+
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -266,12 +267,52 @@ namespace GameCore.DebugCommand
                 case uint ui:
                     sb.Append(ui.ToString(CultureInfo.InvariantCulture));
                     break;
+
+                                    // Dictionary<string,object> に限らず、IDictionary を実装している型なら
+                // すべてオブジェクトとしてシリアライズする（Dictionary<string,object> はこちらでカバーされる）
+                case System.Collections.IDictionary dict:
+                    WriteObject(sb, dict);
+                    break;
+                // List<object> に限らず、List<JsonObject> / 配列 / その他のコレクションもすべて
+                // 配列としてシリアライズする。ジェネリクスは不変(invariant)なため、
+                // 従来の "case List<object> list" では List<JsonObject> 等にマッチせず、
+                // default節に落ちて ToString() 表記（"System.Collections.Generic.List`1[...]"）に
+                // なってしまっていた。IEnumerable で受けることでこれを解消する。
+                case System.Collections.IEnumerable list:
+                    WriteArray(sb, list);
+                    break;
                 default:
                     WriteString(sb, obj.ToString());
                     break;
             }
         }
 
+        private static void WriteObject(StringBuilder sb, System.Collections.IDictionary dict)
+        {
+            sb.Append('{');
+            bool first = true;
+            foreach (System.Collections.DictionaryEntry entry in dict)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                WriteString(sb, entry.Key.ToString());
+                sb.Append(':');
+                WriteValue(sb, entry.Value);
+            }
+            sb.Append('}');
+        }
+        private static void WriteArray(StringBuilder sb, System.Collections.IEnumerable list)
+        {
+            sb.Append('[');
+            bool first = true;
+            foreach (var item in list)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                WriteValue(sb, item);
+            }
+            sb.Append(']');
+        }
         private static void WriteObject(StringBuilder sb, Dictionary<string, object> dict)
         {
             sb.Append('{');
@@ -404,6 +445,8 @@ namespace GameCore.DebugCommand
     }
 }
 
+
+
 '''
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
@@ -438,15 +481,6 @@ namespace GameCore.DebugCommand
         public static void Register(DebugCommandBase command)
         {
             _commands[command.CommandName] = command;
-        }
-        
-        public static void ChangeCommand(DebugCommandBase command)
-        {
-            if(_commands.ContainsKey(command.CommandName))
-            {
-                _commands[command.CommandName] = null;
-                _commands[command.CommandName] = command;
-            }
         }
 
         public static bool TryGet(string name, out DebugCommandBase command)
@@ -548,8 +582,6 @@ namespace GameCore.DebugCommand
         // 手動で使いたい場合の汎用フィールド（不要なら未使用のままでよい）
         public string TextLog;
         public object TextData;
-        
-        public JsonObject Data = new JsonObject();
 
         // 各コマンド固有のフィールドをJsonObjectに詰める処理。
         // 自動生成される {Name}Result 側でオーバーライドされる。
@@ -562,7 +594,6 @@ namespace GameCore.DebugCommand
             json["time"] = Time;
             if (TextLog != null) json["textLog"] = TextLog;
             if (TextData != null) json["textData"] = TextData;
-            json["JsonData"] = Data;
             WriteFields(json);
             return json;
         }
@@ -610,7 +641,7 @@ namespace GameCore.DebugCommand
                 var go = new GameObject("DebugCommand");
                 UnityEngine.Object.DontDestroyOnLoad(go);
                 go.AddComponent<DebugCommandWebSocketHandler>();
-                DebugCommandInstaller.InstallAll();
+                //DebugCommandInstaller.InstallAll();
             }
         }
         [Conditional("UNITY_EDITOR")]
@@ -750,12 +781,6 @@ def generate_installer(data_dir, names):
     for n in names:
         lines.append(f"            DebugCommandRegistry.Register(new {n}DebugCommand());")
     lines.append("        }")
-    
-    lines.append("        public static void ChangeCommand(DebugCommandBase command)")
-    lines.append("        {")
-    lines.append("            DebugCommandRegistry.ChangeCommand(command);")
-    lines.append("        }")
-    
     lines.append("    }")
     lines.append("}")
 
@@ -820,28 +845,28 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("        }")
     lines.append("    }")
     lines.append("")
-    
-    has_return = True
 
-    # --- 戻り値クラス（ある場合のみ） ---
+    # --- 戻り値クラス（常に生成する） ---
     # DebugCommandResultBase を継承する。CommandName / Time は
     # Base{Name}DebugCommand.Invoke() が自動的に設定するため、Execute() 側では
-    # 下記の固有フィールド（と、必要であれば継承した TextLog / TextData）だけを埋めればよい。
-    if has_return:
-        lines.append(f"    // {name} コマンドの戻り値（自動生成）。")
-        lines.append(f"    // 固有フィールドはここに追加されるが、値の設定は {name}DebugCommand.Execute() 側（手動実装ファイル）で行う。")
-        lines.append(f"    public class {name}Result : DebugCommandResultBase")
-        lines.append("    {")
-        for r in return_fields:
-            lines.append(f"        public {_cs_type(r['type'])} {r['name']};")
-        lines.append("")
-        lines.append("        protected override void WriteFields(JsonObject json)")
-        lines.append("        {")
-        for r in return_fields:
-            lines.append(f"            {_to_json_stmt(r['type'], r['name'])}")
-        lines.append("        }")
-        lines.append("    }")
-        lines.append("")
+    # 下記の固有フィールド（hasReturnで定義していなければ無し）と、
+    # 継承した TextLog / TextData だけを埋めればよい。
+    # ※ 戻り値の有無に関わらず必ず生成する。Execute() には常にこの型の参照を渡すため、
+    #   JsonObjectへの生の["key"]=value代入や、呼び出し側でのnull分岐が不要になる。
+    lines.append(f"    // {name} コマンドの戻り値（自動生成）。")
+    lines.append(f"    // 固有フィールドはここに追加されるが、値の設定は {name}DebugCommand.Execute() 側（手動実装ファイル）で行う。")
+    lines.append(f"    public class {name}Result : DebugCommandResultBase")
+    lines.append("    {")
+    for r in return_fields:
+        lines.append(f"        public {_cs_type(r['type'])} {r['name']};")
+    lines.append("")
+    lines.append("        protected override void WriteFields(JsonObject json)")
+    lines.append("        {")
+    for r in return_fields:
+        lines.append(f"            {_to_json_stmt(r['type'], r['name'])}")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("")
 
     # --- 基底クラス（ロジックは書かない。継承先で実装） ---
     lines.append(f"    // 自動生成される基底クラス。このファイルは毎回上書きされます。")
@@ -853,22 +878,15 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
     lines.append("        public override JsonObject Invoke(JsonObject argsJson)")
     lines.append("        {")
     lines.append(f"            var args = {name}Args.FromJson(argsJson);")
-    if has_return:
-        lines.append(f"            var result = new {name}Result();")
-        lines.append("            // 時間・コマンド名は自動設定。Execute()側では手動で返したいデータのみ埋めればよい")
-        lines.append("            result.CommandName = CommandName;")
-        lines.append('            result.Time = DateTime.Now.ToString("HH:mm:ss.fff");')
-        lines.append("            Execute(args, result);")
-        lines.append("            return result.ToJson();")
-    else:
-        lines.append("            Execute(args);")
-        lines.append("            return null;")
+    lines.append(f"            var result = new {name}Result();")
+    lines.append("            // 時間・コマンド名は自動設定。Execute()側では手動で返したいデータのみ埋めればよい")
+    lines.append("            result.CommandName = CommandName;")
+    lines.append('            result.Time = DateTime.Now.ToString("HH:mm:ss.fff");')
+    lines.append("            Execute(args, result);")
+    lines.append("            return result.ToJson();")
     lines.append("        }")
     lines.append("")
-    if has_return:
-        lines.append(f"        protected abstract void Execute({name}Args args, {name}Result result);")
-    else:
-        lines.append(f"        protected abstract void Execute({name}Args args);")
+    lines.append(f"        protected abstract void Execute({name}Args args, {name}Result result);")
     lines.append("    }")
     lines.append("}")
 
@@ -889,17 +907,12 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
         stub_lines.append(f"    // このファイルは初回生成時にのみ作られ、以後の生成では上書きされません。")
         stub_lines.append(f"    public class {name}DebugCommand : Base{name}DebugCommand")
         stub_lines.append("    {")
-        if has_return:
-            stub_lines.append(f"        protected override void Execute({name}Args args, {name}Result result)")
-            stub_lines.append("        {")
-            stub_lines.append("            // TODO: ここに実装。time/commandNameは自動設定済みなので触らないこと。")
-            stub_lines.append("            // 固有フィールドがあれば代入: result.someField = ...;")
-            stub_lines.append("            // List/Dictionary等をそのまま返したい場合は TextData を使う:")
-            stub_lines.append("            // result.TextData = new List<object> { ... };")
-        else:
-            stub_lines.append(f"        protected override void Execute({name}Args args)")
-            stub_lines.append("        {")
-            stub_lines.append("            // TODO: ここに実装")
+        stub_lines.append(f"        protected override void Execute({name}Args args, {name}Result result)")
+        stub_lines.append("        {")
+        stub_lines.append("            // TODO: ここに実装。time/commandNameは自動設定済みなので触らないこと。")
+        stub_lines.append("            // 固有フィールドがあれば代入: result.someField = ...;")
+        stub_lines.append("            // List/Dictionary等をそのまま返したい場合は TextData を使う:")
+        stub_lines.append("            // result.TextData = new List<object> { ... };")
         stub_lines.append("        }")
         stub_lines.append("    }")
         stub_lines.append("}")
