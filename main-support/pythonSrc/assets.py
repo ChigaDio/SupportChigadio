@@ -57,7 +57,7 @@ def generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, s
     cs_content += f"    public enum {enum_name}ID\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, id in enumerate(items, start=1):
-        cs_content += f"        {id['name']} = {i},\n"
+        cs_content += f"        {id.get("name", id.get("class_name",""))} = {i},\n"
     cs_content += f"        Max = {len(items) + 1}\n"
     cs_content += "    }\n}"
     
@@ -75,7 +75,7 @@ def generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, s
             json_dict.append({
                 "description": f"{item["desc"]}",
                 "id": i,
-                "property": f"{item['name']}",
+                "property": f"{item.get("name", item.get("class_name",""))}",
                 "value": i
             })
         json.dump(json_dict, f, ensure_ascii=False, indent=4)
@@ -166,6 +166,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
         single_lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
         single_lines.append("using System;")
         single_lines.append("using GameCore.Enums;")
+        single_lines.append("using Cysharp.Threading.Tasks;")
         single_lines.append("")
         single_lines.append(f"namespace {namespace}")
         single_lines.append("{")
@@ -194,17 +195,42 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("        {")
                 single_lines.append(f"            {id_enum_name}.None, // {detail_enum_name}.None")
                 for item in value:
-                    global_key = item.get(global_key_field) or item.get('name')
+                    global_key = item.get(global_key_field) or item.get("name", item.get("class_name",""))
                     global_name = f"{group_name}_{global_key}"
-                    single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item['name']}")
+                    single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item.get("name",item.get("class_name",""))}")
                 single_lines.append("        };")
                 single_lines.append("")
                 single_lines.append(f"        public void LoadSingle({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
                 single_lines.append(f"            => LoadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
                 single_lines.append("")
+                single_lines.append(f"        public async UniTask LoadSingleAsync({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+                single_lines.append(f"            => await LoadSingleAsync({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
+                single_lines.append("")
                 single_lines.append(f"        public void UnloadSingle({detail_enum_name}ID id, Action onCompleted = null)")
                 single_lines.append(f"            => UnloadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
                 single_lines.append("")
+                single_lines.append(f"       public async UniTask UnloadSingleAsync({detail_enum_name}ID id, Action onCompleted = null)")
+                single_lines.append(f"            => await UnloadSingleAsync({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
+                single_lines.append("")
+                
+                #各自のGetの修正
+                if "GameObjectCore" == class_name:
+                    single_lines.append(f"       public UnityEngine.GameObject GetGameObject({detail_enum_name}ID id)")
+                    single_lines.append(f"            => GetGameObject({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                    single_lines.append("")
+                elif "SoundCore" == class_name:
+                    single_lines.append(f"       public void PlayBGM({detail_enum_name} id, float volume = 1f, float fadeTime = 0f)")
+                    single_lines.append(f"            => PlayBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
+                    single_lines.append("")
+                    single_lines.append(f"       public void CrossFadeBGM({detail_enum_name} id, float volume = 1f, float fadeTime = 1f)")
+                    single_lines.append(f"            => CrossFadeBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
+                    single_lines.append("")   
+                elif "MaterialCore" == class_name:
+                    single_lines.append(f"       public Material GetMaterial({detail_enum_name}ID id)")
+                    single_lines.append(f"            => GetMaterial({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                    single_lines.append("")
+                                     
+                    
 
     # 削除されたグループ／SubGroupが無くなった分の残骸ファイルを掃除
     if os.path.isdir(target_dir):
@@ -1449,10 +1475,10 @@ namespace GameCore.Sound
         // 個別ID単位のロード／アンロード
         // グループロードと同じ soundAddressables / clipCache 等をそのまま使う。
         // =============================================================
-        public void LoadSingle(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
+        internal void LoadSingle(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
             => LoadSingleAsync(group, id, category, onCompleted).Forget();
 
-        public async UniTask LoadSingleAsync(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
+        internal async UniTask LoadSingleAsync(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
         {
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
@@ -3022,10 +3048,10 @@ namespace GameCore.Texture
         // 個別ID単位のロード／アンロード
         // 既存の loadedAssets（グループロードと同じキャッシュ）をそのまま使う。
         // =============================================================
-        public void LoadSingle(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
+        internal void LoadSingle(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
             => LoadSingleAsync(group, id, groupCategory, action).Forget();
 
-        public async UniTask LoadSingleAsync(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
         {
             while (database == null)
                 await UniTask.Yield(cancellationToken: destroyToken);
@@ -3178,7 +3204,7 @@ namespace GameCore.Texture
                 groupAssets.TryGetValue(textureId, out var addressable))
             {
                 // TEnum を数値（インデックス）として変換
-                int index = Convert.ToInt32(spriteIndex) - 1;
+                int index = (int)spriteIndex - 1;
 
                 // fallbackIndex が指定されている場合はそちらを優先
                 int targetIndex = fallbackIndex >= 0 ? fallbackIndex : index;
@@ -4039,10 +4065,10 @@ namespace GameCore.Gameobject
         // 既存の loadedGameObjects（グループロードと同じキャッシュ）をそのまま使う。
         // 個別専用の管理は持たない。
         // =============================================================
-        public void LoadSingle(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
+        internal void LoadSingle(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
             => LoadSingleAsync(group, id, groupCategory, action).Forget();
 
-        public async UniTask LoadSingleAsync(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
         {
             while (database == null)
             {
@@ -5757,10 +5783,10 @@ namespace GameCore.MaterialData
         // 個別ID単位のロード／アンロード
         // 既存の loadedMaterials（グループロードと同じキャッシュ）をそのまま使う。
         // =============================================================
-        public void LoadSingle(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
+        internal void LoadSingle(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
             => LoadSingleAsync(group, id, groupCategory, action).Forget();
 
-        public async UniTask LoadSingleAsync(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
         {
             while (database == null)
                 await UniTask.Yield(cancellationToken: destroyToken);
