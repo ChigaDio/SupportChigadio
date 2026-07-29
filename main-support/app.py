@@ -557,16 +557,91 @@ for path, content in files_content.items():
 if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRow.cs")):
     code_str = """
     using System.IO;
+    using System.Collections.Generic;
+    using GameCore.Enums;
 
     namespace GameCore.Tables
     {
         public abstract class BaseClassDataRow
         {
             public abstract void Read(int id,BinaryReader reader);
+
+            /// <summary>
+            /// この行が参照している他のclass_data_idの(TableID, 参照先id)一覧。
+            /// 参照フィールドを持つテーブルでは自動生成コード側でoverrideされる。デフォルトは空。
+            /// </summary>
+            public virtual List<(TableID TableId, int RefId)> GetReferencedIds()
+            {
+                return new List<(TableID, int)>();
+            }
         }
     }
     """
     with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRow.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+
+# BaseClassDataRowIndex.cs を生成（テーブル内の各id=各行のシーク位置を保持する基礎クラス）
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRowIndex.cs")):
+    code_str = """
+    using System.IO;
+    using System;
+    using System.Collections.Generic;
+
+    namespace GameCore.Tables
+    {
+        // テーブル内の各行(id)ごとの[Offset(テーブル先頭からの相対位置), Size]を保持する。
+        // 各テーブルの{Name}RowIndexはこのクラスを継承して生成される。
+        public abstract class BaseClassDataRowIndex<T> where T : Enum
+        {
+            public Dictionary<T, (long Offset, int Size)> Entries = new Dictionary<T, (long, int)>();
+            public bool IsRead { get; private set; }
+
+            // reader は「行インデックスブロックの先頭」に位置している前提。
+            // forceReload=true でデバッグ用に読み直しできる。
+            public void Read(BinaryReader reader, bool forceReload = false)
+            {
+                if (IsRead && !forceReload) return;
+                Entries.Clear();
+                int count = reader.ReadInt32();
+                for (int i = 0; i < count; i++)
+                {
+                    int idVal = reader.ReadInt32();
+                    T id = (T)Enum.ToObject(typeof(T), idVal);
+                    long offset = reader.ReadInt64();
+                    int size = reader.ReadInt32();
+                    Entries[id] = (offset, size);
+                }
+                IsRead = true;
+            }
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataRowIndex.cs"), 'w', encoding='utf-8') as f:
+        f.write(code_str.strip() + "\n")
+
+# ClassDataReferenceLoader.cs を生成
+# 依存先(参照先)プリロード用の自己登録レジストリ。
+# 各{Name}Tableの静的コンストラクタが自分自身のTableIdに対するローダーをここへ登録する。
+# ID側もMatrix側も、行(またはセル)が持つ「参照先id」を実際にロードする際にこのレジストリを経由する。
+if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataReferenceLoader.cs")):
+    code_str = """
+    using System.IO;
+    using System;
+    using System.Collections.Generic;
+    using GameCore.Enums;
+
+    namespace GameCore.Tables
+    {
+        public static class ClassDataReferenceLoader
+        {
+            // (参照先id, header, reader, preloadReferences, forceReloadIndex, 循環参照防止用visited)
+            public delegate void LoadOneDelegate(int refId, ClassDataHeader header, BinaryReader reader, bool preloadReferences, bool forceReloadIndex, HashSet<(TableID, int)> visited);
+
+            public static readonly Dictionary<TableID, LoadOneDelegate> Loaders = new Dictionary<TableID, LoadOneDelegate>();
+        }
+    }
+    """
+    with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataReferenceLoader.cs"), 'w', encoding='utf-8') as f:
         f.write(code_str.strip() + "\n")
 
 # BaseClassDataID.cs を生成
@@ -575,16 +650,159 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, "BaseClassDataID.cs"
     using System.IO;
     using System;
     using System.Collections.Generic;
+    using GameCore.Enums;
 
     namespace GameCore.Tables
     {
-        public abstract class BaseClassDataID<T,E> : BaseTable where T : Enum where E : BaseClassDataRow
+        public abstract class BaseClassDataID<T,E> : BaseTable where T : Enum where E : BaseClassDataRow, new()
         {
             public static Dictionary<T,E> Table = new Dictionary<T,E>();
+
+            // 各テーブルの静的コンストラクタで {Name}RowIndex と TableId がセットされる
+            protected static BaseClassDataRowIndex<T> RowIndex;
+            protected static TableID TableId;
+
             public override abstract void Read(BinaryReader reader);
             public override void Release()
             {
                 Table.Clear();
+            }
+
+            /// <summary>
+            /// 依存先プリロードのレジストリに自分自身を登録する。各テーブルの静的コンストラクタから呼ぶこと。
+            /// </summary>
+            protected static void RegisterReferenceLoader()
+            {
+                ClassDataReferenceLoader.Loaders[TableId] = (refId, header, reader, preloadReferences, forceReloadIndex, visited) =>
+                {
+                    T typedId = (T)Enum.ToObject(typeof(T), refId);
+                    ReadOneInternal(typedId, header, reader, preloadReferences, forceReloadIndex, visited);
+                };
+            }
+
+            /// <summary>
+            /// 行インデックス（idごとのシーク位置）だけを読み込む。既に読み込み済みならスキップ（forceReload=trueで再読み込み）。
+            /// </summary>
+            protected static void EnsureRowIndexLoaded(BinaryReader reader, long tableBaseOffset, bool forceReload = false)
+            {
+                if (RowIndex.IsRead && !forceReload) return;
+
+                reader.BaseStream.Seek(tableBaseOffset, SeekOrigin.Begin);
+                int rowCount = reader.ReadInt32();
+                int colCount = reader.ReadInt32();
+                for (int i = 0; i < colCount; i++)
+                {
+                    int nameLen = reader.ReadInt32();
+                    reader.ReadBytes(nameLen);
+                    int typeLen = reader.ReadInt32();
+                    reader.ReadBytes(typeLen);
+                }
+                // ここでreaderは行インデックスブロックの先頭に位置している
+                RowIndex.Read(reader, forceReload);
+            }
+
+            /// <summary>
+            /// 実際に1行読み込む内部処理。preloadReferences=trueの場合、この行が参照している他テーブルのidも
+            /// (ネストして)連鎖的にロードする。visitedで循環参照を防ぐ。
+            /// </summary>
+            private static void ReadOneInternal(T id, ClassDataHeader header, BinaryReader reader, bool preloadReferences, bool forceReloadIndex, HashSet<(TableID, int)> visited)
+            {
+                var visitKey = (TableId, Convert.ToInt32(id));
+                if (visited.Contains(visitKey)) return; // 循環参照ガード
+                visited.Add(visitKey);
+
+                if (!header.Entries.TryGetValue(TableId, out var tableEntry)) return;
+                long tableBaseOffset = tableEntry.Offset;
+
+                EnsureRowIndexLoaded(reader, tableBaseOffset, forceReloadIndex);
+                if (!RowIndex.Entries.TryGetValue(id, out var entry)) return;
+
+                reader.BaseStream.Seek(tableBaseOffset + entry.Offset, SeekOrigin.Begin);
+                reader.ReadInt32(); // 行データ先頭のid(int)を読み飛ばす（idは引数側で分かっているため）
+                E row = new E();
+                row.Read(Convert.ToInt32(id), reader);
+                Table[id] = row;
+
+                if (preloadReferences)
+                {
+                    foreach (var reference in row.GetReferencedIds())
+                    {
+                        if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
+                        {
+                            loader(reference.RefId, header, reader, true, forceReloadIndex, visited);
+                        }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// 指定した1つのid(行)だけをロードする。テーブル全体はロードしない。
+            /// TableId(マスターのTableID)は各テーブルの静的コンストラクタで既に設定済みのため、呼び出し側は意識しなくてよい。
+            /// preloadReferences=trueで、この行が参照している他テーブルのidも(ネストして)連鎖的にロードする。
+            /// </summary>
+            public static void ReadOne(T id, ClassDataHeader header, BinaryReader reader, bool preloadReferences = false, bool forceReloadIndex = false)
+            {
+                ReadOneInternal(id, header, reader, preloadReferences, forceReloadIndex, new HashSet<(TableID, int)>());
+            }
+
+            /// <summary>
+            /// 指定した複数のid(行)だけをロードする。テーブル全体はロードしない。
+            /// preloadReferences=trueの場合、バッチ全体で1つのvisitedセットを共有するため、同じ参照先の二重ロードを避けられる。
+            /// </summary>
+            public static void ReadMany(IEnumerable<T> ids, ClassDataHeader header, BinaryReader reader, bool preloadReferences = false, bool forceReloadIndex = false)
+            {
+                var visited = new HashSet<(TableID, int)>();
+                foreach (var id in ids)
+                {
+                    ReadOneInternal(id, header, reader, preloadReferences, forceReloadIndex, visited);
+                }
+            }
+
+            /// <summary>
+            /// テーブル全体をロードする（既存のRead(reader)を利用、高速な連続読みはそのまま）。
+            /// preloadReferences=trueで、全行が参照している他テーブルのidも(ネストして)連鎖的にロードする。
+            /// </summary>
+            public virtual void ReadAll(ClassDataHeader header, BinaryReader reader, bool preloadReferences = false)
+            {
+                Read(reader);
+                if (!preloadReferences) return;
+
+                var visited = new HashSet<(TableID, int)>();
+                foreach (var id in Table.Keys) visited.Add((TableId, Convert.ToInt32(id)));
+
+                foreach (var row in Table.Values)
+                {
+                    foreach (var reference in row.GetReferencedIds())
+                    {
+                        if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
+                        {
+                            loader(reference.RefId, header, reader, true, false, visited);
+                        }
+                    }
+                }
+            }
+
+            /// <summary>指定した1つのidだけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadOne(T id)
+            {
+                Table.Remove(id);
+            }
+
+            /// <summary>指定した複数のidだけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadMany(IEnumerable<T> ids)
+            {
+                foreach (var id in ids) Table.Remove(id);
+            }
+
+            /// <summary>条件(predicate)に合致するidを一括アンロードする</summary>
+            public static void UnloadWhere(Func<T, E, bool> predicate)
+            {
+                var keysToRemove = new List<T>();
+                foreach (var kv in Table)
+                {
+                    if (predicate(kv.Key, kv.Value)) keysToRemove.Add(kv.Key);
+                }
+                foreach (var key in keysToRemove) Table.Remove(key);
             }
         }
     }
@@ -678,16 +896,275 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
     using System.IO;
     using System;
     using System.Collections.Generic;
+    using GameCore.Enums;
 
     namespace GameCore.Tables
     {
-        public abstract class BaseClassDataMatrixID<TRow, TCol, E> : BaseTableMatrix where TRow : Enum where TCol : Enum where E : BaseClassDataMatrixRow
+        public abstract class BaseClassDataMatrixID<TRow, TCol, E> : BaseTableMatrix where TRow : Enum where TCol : Enum where E : BaseClassDataMatrixRow, new()
         {
             public static Dictionary<TRow, Dictionary<TCol, E>> Table = new Dictionary<TRow, Dictionary<TCol, E>>();
+
+            // 各テーブルの静的コンストラクタで {Name}MatrixRowIndex と TableId がセットされる（rowKeyごとのシーク位置）
+            protected static BaseClassDataRowIndex<TRow> RowIndex;
+            protected static MatrixTableID TableId;
+            // 列キー一覧（行インデックス読み込み時にキャッシュされる）
+            protected static List<TCol> s_colKeys;
+            // rowKeyごとの「セル単位のシーク位置」キャッシュ（row_blockの先頭からの相対offset）
+            protected static Dictionary<TRow, Dictionary<TCol, (long Offset, int Size)>> s_cellIndexCache = new Dictionary<TRow, Dictionary<TCol, (long, int)>>();
+
             public override abstract void Read(BinaryReader reader);
             public override void Release()
             {
                 Table.Clear();
+                s_cellIndexCache.Clear();
+            }
+
+            /// <summary>
+            /// 行インデックス（rowKeyごとのシーク位置）と列キー一覧だけを読み込む。
+            /// 既に読み込み済みならスキップ（forceReload=trueで再読み込み）。
+            /// </summary>
+            protected static void EnsureRowIndexLoaded(BinaryReader reader, long tableBaseOffset, bool forceReload = false)
+            {
+                if (RowIndex.IsRead && !forceReload) return;
+
+                reader.BaseStream.Seek(tableBaseOffset, SeekOrigin.Begin);
+                int rowCount = reader.ReadInt32();
+                for (int i = 0; i < rowCount; i++) reader.ReadInt32(); // rowKeyのid列（行インデックスに再度現れるのでここでは読み捨て）
+                int colCount = reader.ReadInt32();
+                s_colKeys = new List<TCol>(colCount);
+                for (int i = 0; i < colCount; i++)
+                {
+                    s_colKeys.Add((TCol)Enum.ToObject(typeof(TCol), reader.ReadInt32()));
+                }
+                // ここでreaderは行インデックスブロックの先頭に位置している
+                RowIndex.Read(reader, forceReload);
+
+                if (forceReload) s_cellIndexCache.Clear();
+            }
+
+            /// <summary>
+            /// 指定したrowKeyの「セル単位のシーク位置(row_block先頭からの相対offset)」を読み込む。
+            /// 既に読み込み済みならキャッシュを返す（forceReload=trueで再読み込み）。
+            /// </summary>
+            protected static Dictionary<TCol, (long Offset, int Size)> EnsureCellIndexLoaded(TRow rowId, BinaryReader reader, long tableBaseOffset, bool forceReload = false)
+            {
+                if (!forceReload && s_cellIndexCache.TryGetValue(rowId, out var cached)) return cached;
+                if (!RowIndex.Entries.TryGetValue(rowId, out var rowEntry)) return null;
+
+                reader.BaseStream.Seek(tableBaseOffset + rowEntry.Offset, SeekOrigin.Begin);
+                int cellIndexCount = reader.ReadInt32();
+                var cellIndex = new Dictionary<TCol, (long, int)>();
+                for (int i = 0; i < cellIndexCount; i++)
+                {
+                    int colIdVal = reader.ReadInt32();
+                    TCol colId = (TCol)Enum.ToObject(typeof(TCol), colIdVal);
+                    long offset = reader.ReadInt64();
+                    int size = reader.ReadInt32();
+                    cellIndex[colId] = (offset, size);
+                }
+                s_cellIndexCache[rowId] = cellIndex;
+                return cellIndex;
+            }
+
+            /// <summary>
+            /// セルが参照している他のclass_data_idを(ネストして)連鎖的にプリロードする。
+            /// idHeader/idReaderはID側(all_class_data.bytes)のヘッダーとreader。呼び出し側で別途開いたものを渡す。
+            /// </summary>
+            private static void PreloadCellReferences(E cell, ClassDataHeader idHeader, BinaryReader idReader, HashSet<(TableID, int)> visited)
+            {
+                if (cell == null || idHeader == null || idReader == null) return;
+                foreach (var reference in cell.GetReferencedIds())
+                {
+                    if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
+                    {
+                        loader(reference.RefId, idHeader, idReader, true, false, visited);
+                    }
+                }
+            }
+
+            private static void ReadCellInternal(TRow rowId, TCol colId, Dictionary<TCol, (long Offset, int Size)> cellIndex, BinaryReader reader, long tableBaseOffset, long rowOffset,
+                bool preloadReferences, ClassDataHeader idHeader, BinaryReader idReader, HashSet<(TableID, int)> visited)
+            {
+                if (cellIndex == null || !cellIndex.TryGetValue(colId, out var cellEntry)) return;
+                reader.BaseStream.Seek(tableBaseOffset + rowOffset + cellEntry.Offset, SeekOrigin.Begin);
+                var cell = new E();
+                cell.Read(reader);
+                if (!Table.TryGetValue(rowId, out var rowDict))
+                {
+                    rowDict = new Dictionary<TCol, E>();
+                    Table[rowId] = rowDict;
+                }
+                rowDict[colId] = cell;
+
+                if (preloadReferences) PreloadCellReferences(cell, idHeader, idReader, visited);
+            }
+
+            // ========================= 行単位 =========================
+
+            /// <summary>
+            /// 指定した1つのrowKey(行、全列)だけをロードする。テーブル全体はロードしない。
+            /// preloadReferences=trueの場合、idHeader/idReader(ID側の別途開いたヘッダーとreader)経由で参照先も(ネストして)連鎖的にロードする。
+            /// </summary>
+            public static void ReadOneRow(TRow rowId, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                if (!header.Entries.TryGetValue(TableId, out var tableEntry)) return;
+                long tableBaseOffset = tableEntry.Offset;
+
+                EnsureRowIndexLoaded(reader, tableBaseOffset, forceReloadIndex);
+                if (!RowIndex.Entries.TryGetValue(rowId, out var rowEntry)) return;
+                var cellIndex = EnsureCellIndexLoaded(rowId, reader, tableBaseOffset, forceReloadIndex);
+
+                var visited = new HashSet<(TableID, int)>();
+                foreach (var ck in s_colKeys)
+                {
+                    ReadCellInternal(rowId, ck, cellIndex, reader, tableBaseOffset, rowEntry.Offset, preloadReferences, idHeader, idReader, visited);
+                }
+            }
+
+            /// <summary>指定した複数のrowKey(行)だけをロードする。テーブル全体はロードしない。</summary>
+            public static void ReadManyRows(IEnumerable<TRow> rowIds, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                foreach (var rowId in rowIds) ReadOneRow(rowId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+            }
+
+            /// <summary>指定した1つのrowKey(行全体)だけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadOneRow(TRow rowId)
+            {
+                Table.Remove(rowId);
+                s_cellIndexCache.Remove(rowId);
+            }
+
+            /// <summary>指定した複数のrowKeyだけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadManyRows(IEnumerable<TRow> rowIds)
+            {
+                foreach (var rowId in rowIds) UnloadOneRow(rowId);
+            }
+
+            /// <summary>条件(predicate)に合致するrowKey(行)を一括アンロードする</summary>
+            public static void UnloadRowsWhere(Func<TRow, Dictionary<TCol, E>, bool> predicate)
+            {
+                var keysToRemove = new List<TRow>();
+                foreach (var kv in Table)
+                {
+                    if (predicate(kv.Key, kv.Value)) keysToRemove.Add(kv.Key);
+                }
+                foreach (var key in keysToRemove) UnloadOneRow(key);
+            }
+
+            // ========================= 列単位 =========================
+
+            /// <summary>
+            /// 指定した1つのcolKey(列、全行)だけをロードする。テーブル全体はロードしない。
+            /// </summary>
+            public static void ReadOneColumn(TCol colId, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                if (!header.Entries.TryGetValue(TableId, out var tableEntry)) return;
+                long tableBaseOffset = tableEntry.Offset;
+
+                EnsureRowIndexLoaded(reader, tableBaseOffset, forceReloadIndex);
+                var visited = new HashSet<(TableID, int)>();
+                foreach (var rowId in RowIndex.Entries.Keys)
+                {
+                    if (!RowIndex.Entries.TryGetValue(rowId, out var rowEntry)) continue;
+                    var cellIndex = EnsureCellIndexLoaded(rowId, reader, tableBaseOffset, forceReloadIndex);
+                    ReadCellInternal(rowId, colId, cellIndex, reader, tableBaseOffset, rowEntry.Offset, preloadReferences, idHeader, idReader, visited);
+                }
+            }
+
+            /// <summary>指定した複数のcolKey(列)だけをロードする。テーブル全体はロードしない。</summary>
+            public static void ReadManyColumns(IEnumerable<TCol> colIds, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                foreach (var colId in colIds) ReadOneColumn(colId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+            }
+
+            /// <summary>指定した1つのcolKey(列全体)だけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadOneColumn(TCol colId)
+            {
+                foreach (var rowDict in Table.Values) rowDict.Remove(colId);
+            }
+
+            /// <summary>指定した複数のcolKeyだけをアンロードする（テーブル全体は消さない）</summary>
+            public static void UnloadManyColumns(IEnumerable<TCol> colIds)
+            {
+                foreach (var colId in colIds) UnloadOneColumn(colId);
+            }
+
+            /// <summary>条件(predicate)に合致するcolKey(列)を一括アンロードする</summary>
+            public static void UnloadColumnsWhere(Func<TCol, bool> predicate)
+            {
+                if (s_colKeys == null) return;
+                var colsToRemove = new List<TCol>();
+                foreach (var ck in s_colKeys)
+                {
+                    if (predicate(ck)) colsToRemove.Add(ck);
+                }
+                foreach (var ck in colsToRemove) UnloadOneColumn(ck);
+            }
+
+            // ========================= セル単位 =========================
+
+            /// <summary>指定した1つのセル(rowKey×colKey)だけをロードする。</summary>
+            public static void ReadOneCell(TRow rowId, TCol colId, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                if (!header.Entries.TryGetValue(TableId, out var tableEntry)) return;
+                long tableBaseOffset = tableEntry.Offset;
+
+                EnsureRowIndexLoaded(reader, tableBaseOffset, forceReloadIndex);
+                if (!RowIndex.Entries.TryGetValue(rowId, out var rowEntry)) return;
+                var cellIndex = EnsureCellIndexLoaded(rowId, reader, tableBaseOffset, forceReloadIndex);
+                var visited = new HashSet<(TableID, int)>();
+                ReadCellInternal(rowId, colId, cellIndex, reader, tableBaseOffset, rowEntry.Offset, preloadReferences, idHeader, idReader, visited);
+            }
+
+            /// <summary>指定した複数のセル(rowKey×colKeyの組)だけをロードする。</summary>
+            public static void ReadManyCells(IEnumerable<(TRow Row, TCol Col)> cells, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
+            {
+                foreach (var cell in cells) ReadOneCell(cell.Row, cell.Col, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+            }
+
+            /// <summary>指定した1つのセルだけをアンロードする</summary>
+            public static void UnloadOneCell(TRow rowId, TCol colId)
+            {
+                if (Table.TryGetValue(rowId, out var rowDict)) rowDict.Remove(colId);
+            }
+
+            /// <summary>指定した複数のセルだけをアンロードする</summary>
+            public static void UnloadManyCells(IEnumerable<(TRow Row, TCol Col)> cells)
+            {
+                foreach (var cell in cells) UnloadOneCell(cell.Row, cell.Col);
+            }
+
+            /// <summary>条件(predicate)に合致するセルを一括アンロードする</summary>
+            public static void UnloadCellsWhere(Func<TRow, TCol, E, bool> predicate)
+            {
+                var toRemove = new List<(TRow, TCol)>();
+                foreach (var rowKv in Table)
+                {
+                    foreach (var colKv in rowKv.Value)
+                    {
+                        if (predicate(rowKv.Key, colKv.Key, colKv.Value)) toRemove.Add((rowKv.Key, colKv.Key));
+                    }
+                }
+                foreach (var pair in toRemove) UnloadOneCell(pair.Item1, pair.Item2);
+            }
+
+            /// <summary>
+            /// テーブル全体をロードする（既存のRead(reader)を利用、高速な連続読みはそのまま）。
+            /// preloadReferences=trueの場合、idHeader/idReader経由で全セルの参照先も(ネストして)連鎖的にロードする。
+            /// </summary>
+            public virtual void ReadAll(ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null)
+            {
+                Read(reader);
+                if (!preloadReferences || idHeader == null || idReader == null) return;
+
+                var visited = new HashSet<(TableID, int)>();
+                foreach (var rowDict in Table.Values)
+                {
+                    foreach (var cell in rowDict.Values)
+                    {
+                        PreloadCellReferences(cell, idHeader, idReader, visited);
+                    }
+                }
             }
         }
     }
@@ -699,6 +1176,8 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
 if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixRow.cs")):
     code_str = """
     using System.IO;
+    using System.Collections.Generic;
+    using GameCore.Enums;
 
     namespace GameCore.Tables
     {
@@ -706,6 +1185,15 @@ if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, "BaseClassDat
         public abstract class BaseClassDataMatrixRow
         {
             public abstract void Read(BinaryReader reader);
+
+            /// <summary>
+            /// このセルが参照している他のclass_data_idの(TableID, 参照先id)一覧。
+            /// 参照フィールドを持つセルでは自動生成コード側でoverrideされる。デフォルトは空。
+            /// </summary>
+            public virtual List<(TableID TableId, int RefId)> GetReferencedIds()
+            {
+                return new List<(TableID, int)>();
+            }
         }
     }
     """
@@ -2466,43 +2954,64 @@ def generate_class_cs(name):
     
 def generate_binary_data(name, json_data):
     import io
-    f = io.BytesIO()
 
     rows = json_data.get('rows', [])
     columns = json_data.get('columns', [])
     basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data = get_type_lists()
     custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
 
-    f.write(struct.pack('i', len(rows)))
-    f.write(struct.pack('i', len(columns)))
-
+    # --- ① ヘッダー部（rowCount / colCount / 列定義）：フォーマットは従来通り ---
+    header_buf = io.BytesIO()
+    header_buf.write(struct.pack('i', len(rows)))
+    header_buf.write(struct.pack('i', len(columns)))
 
     for col in columns:
         name_encoded = col['name'].encode('utf-8')
         type_encoded = col['type'].encode('utf-8')
-        f.write(struct.pack('i', len(name_encoded)))
-        f.write(name_encoded)
-        f.write(struct.pack('i', len(type_encoded)))
-        f.write(type_encoded)
+        header_buf.write(struct.pack('i', len(name_encoded)))
+        header_buf.write(name_encoded)
+        header_buf.write(struct.pack('i', len(type_encoded)))
+        header_buf.write(type_encoded)
+    header_bytes = header_buf.getvalue()
 
+    # --- ② 各行を個別にシリアライズ（行ごとのバイト長を先に確定させるため） ---
+    row_bytes_list = []
     for row in rows:
-        f.write(struct.pack('i', row.get('id', 0)))
+        rf = io.BytesIO()
+        rf.write(struct.pack('i', row.get('id', 0)))
         for col in columns:
             cell = row['data'].get(col['name'], {})
             value = cell.get('value') if isinstance(cell, dict) else cell
 
             if isinstance(value, (int, float)) and (isnan(value) or not isfinite(value)):
-                f.write(struct.pack('i', 0))
+                rf.write(struct.pack('i', 0))
                 continue
 
             write_binary_field(
-                f, value, col['type'],
+                rf, value, col['type'],
                 basic_types, unity_types, enum_list, class_list,
                 class_data_id_list, enum_data, class_data_id, class_data,
                 options=col.get('options'), custom_type_info=custom_type_info
             )
+        row_bytes_list.append(rf.getvalue())
 
-    return f.getvalue()
+    # --- ③ 行インデックス（id / テーブル先頭からの相対offset / size）を追加 ---
+    #     構造: [rowIndexCount:4] + (id:4 / offset:8(相対) / size:4) * rowCount
+    row_index_header_size = 4
+    row_index_entry_size = 4 + 8 + 4
+    row_index_size = row_index_header_size + row_index_entry_size * len(rows)
+    row_data_base_offset = len(header_bytes) + row_index_size  # 行データ本体の開始位置（テーブル先頭からの相対）
+
+    row_index_buf = io.BytesIO()
+    row_index_buf.write(struct.pack('i', len(rows)))
+    current_offset = row_data_base_offset
+    for row, row_bytes in zip(rows, row_bytes_list):
+        row_index_buf.write(struct.pack('i', row.get('id', 0)))
+        row_index_buf.write(struct.pack('q', current_offset))
+        row_index_buf.write(struct.pack('i', len(row_bytes)))
+        current_offset += len(row_bytes)
+
+    return header_bytes + row_index_buf.getvalue() + b''.join(row_bytes_list)
 
 @app.route('/api/generate-all-binary', methods=['POST'])
 def generate_all_binary():
@@ -2956,7 +3465,7 @@ def generate_class_data_id_cs(name):
         #-- Row ---
         with open(os.path.join(table_dir, f"{name}Row.cs"), 'w', encoding='utf-8') as lf:
             # --- Row Class ---
-            lf.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\n\n")
+            lf.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\n\n")
             lf.write("namespace GameCore.Tables\n{\n")
             lf.write(f"    public class {name}Row : BaseClassDataRow\n    {{\n")
             # dictionary型を含め、generate_csharp_field に処理を委譲して
@@ -2964,7 +3473,9 @@ def generate_class_data_id_cs(name):
             # (以前はここで型変換ロジックを独自に再実装しており、dictionary型を考慮していなかった)
             custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
             read_code = ""
-            
+            # 他のclass_data_idを参照しているフィールド（依存先プリロード用）
+            ref_lines = []
+
             #まずは自分自身のIDを入れる
             lf.write("        [SerializeField]\n")
             lf.write(f"        protected {name}TableID table_id;\n")
@@ -2973,8 +3484,10 @@ def generate_class_data_id_cs(name):
             read_code += f"            table_id = ({name}TableID)id;\n"
             for col in columns:
                 field_for_cs = dict(col)
-                if isinstance(field_for_cs.get('type'), str) and field_for_cs['type'].endswith('[]'):
-                    field_for_cs['type'] = field_for_cs['type'][:-2]
+                is_arr_type = isinstance(col.get('type'), str) and col['type'].endswith('[]')
+                base_type = col['type'][:-2] if is_arr_type else col['type']
+                if is_arr_type:
+                    field_for_cs['type'] = base_type
                     field_for_cs['arraySize'] = -1  # 動的配列(List)として扱う
                 else:
                     field_for_cs.setdefault('arraySize', 0)
@@ -2985,23 +3498,60 @@ def generate_class_data_id_cs(name):
                 lf.write(field_info['field'])
                 read_code += field_info['read']
 
+                # --- 依存先プリロード用: 他のclass_data_idを参照しているフィールドを記録 ---
+                if base_type in class_data_id_list:
+                    var_name = col['name']
+                    if is_arr_type:
+                        ref_lines.append(
+                            f"            foreach (var v in {var_name}) {{ if (v != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int)v)); }}"
+                        )
+                    else:
+                        ref_lines.append(
+                            f"            if ({var_name} != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int){var_name}));"
+                        )
+
             # --- Read Method ---
             lf.write("\n        public override void Read(int id,BinaryReader reader)\n")
             lf.write("        {\n")
             lf.write(read_code)
             lf.write("        }\n")
+
+            # --- GetReferencedIds Method（依存先プリロード用。参照フィールドがある場合のみoverride） ---
+            if ref_lines:
+                lf.write("\n        public override List<(TableID TableId, int RefId)> GetReferencedIds()\n")
+                lf.write("        {\n")
+                lf.write("            var refs = new List<(TableID, int)>();\n")
+                for line in ref_lines:
+                    lf.write(line + "\n")
+                lf.write("            return refs;\n")
+                lf.write("        }\n")
+
             lf.write("    }\n\n")
             lf.write("}\n")
+
+        # --- {name}RowIndex.cs（基礎クラスBaseClassDataRowIndex<T>を継承。各idのシーク位置を保持） ---
+        with open(os.path.join(table_dir, f"{name}RowIndex.cs"), 'w', encoding='utf-8') as rif:
+            rif.write("using GameCore.Tables.ID;\n\n")
+            rif.write("namespace GameCore.Tables\n{\n")
+            rif.write(f"    public class {name}RowIndex : BaseClassDataRowIndex<{enum_name}>\n    {{\n")
+            rif.write("    }\n}\n")
 
         # --- Main Table File ---
         cs_path = os.path.join(table_dir, f"{name}Table.cs")
         with open(cs_path, 'w', encoding='utf-8') as f:
-            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\n\n")
+            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\n\n")
             f.write("namespace GameCore.Tables\n{\n")
             f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
             #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
 
-            # --- Table Constructor ---
+            # --- RowIndex / TableIdの静的初期化 ---
+            f.write(f"        static {name}Table()\n        {{\n")
+            f.write(f"            RowIndex = new {name}RowIndex();\n")
+            f.write(f"            TableId = TableID.{name};\n")
+            f.write("            RegisterReferenceLoader(); // 依存先プリロード用に自分自身を登録\n")
+            f.write("        }\n\n")
+
+            # --- Table Constructor（全件ロード。行インデックスも同時にキャッシュされるため、部分ロードAPIと併用しても再読み込みは走らない） ---
             f.write(f"        public override void Read(BinaryReader reader)\n        {{\n")
             f.write(f"            {name}Table.Table.Clear();\n")
             f.write("            int rowCount = reader.ReadInt32();\n")
@@ -3014,6 +3564,7 @@ def generate_class_data_id_cs(name):
             f.write("                len = reader.ReadInt32();\n")
             f.write("                colTypes[i] = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(len));\n")
             f.write("            }\n")
+            f.write("            RowIndex.Read(reader, true); // 行インデックスブロックを読み進めつつキャッシュしておく（高速な連続読みはそのまま維持）\n")
             f.write("            for(int r=0; r<rowCount; r++) {\n")
             f.write(f"                var enumVal = ({enum_name})Enum.ToObject(typeof({enum_name}), reader.ReadInt32());\n")
             f.write(f"                var row = new {name}Row();\n")
@@ -4568,36 +5119,85 @@ def generate_cs_matrix(name):
             col_id += "Table"    
 
         # {name}MatrixRow.cs
-        row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\n\n"
+        row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\nusing GameCore.Enums;\n\n"
         row_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixRow : BaseClassDataMatrixRow {{\n"
         read_code = "        public override void Read(BinaryReader reader) {\n"
+        ref_lines = []  # 依存先プリロード用: 他のclass_data_idを参照しているフィールド
         for field in fields:
             # ★ Matrixのフィールドは "int[]" のような配列サフィックス表記を使うため、
             #   generate_csharp_field が期待する arraySize 方式に変換してから渡す
             field_for_cs = dict(field)
-            if isinstance(field_for_cs.get('type'), str) and field_for_cs['type'].endswith('[]'):
-                field_for_cs['type'] = field_for_cs['type'][:-2]
+            is_arr_type = isinstance(field.get('type'), str) and field['type'].endswith('[]')
+            base_type = field['type'][:-2] if is_arr_type else field['type']
+            if is_arr_type:
+                field_for_cs['type'] = base_type
                 field_for_cs['arraySize'] = -1  # 動的配列(List)として扱う
             else:
                 field_for_cs.setdefault('arraySize', 0)
             field_info = generate_csharp_field(field_for_cs, enum_list, class_list, unity_types, basic_types,class_data_id_list)
             row_cs += field_info['field']
             read_code += field_info['read']
-        row_cs += read_code + "        }\n    }\n}\n"
+
+            if base_type in class_data_id_list:
+                var_name = field['name']
+                if is_arr_type:
+                    ref_lines.append(
+                        f"            foreach (var v in {var_name}) {{ if (v != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int)v)); }}"
+                    )
+                else:
+                    ref_lines.append(
+                        f"            if ({var_name} != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int){var_name}));"
+                    )
+        row_cs += read_code + "        }\n"
+
+        if ref_lines:
+            row_cs += "\n        public override List<(TableID TableId, int RefId)> GetReferencedIds() {\n"
+            row_cs += "            var refs = new List<(TableID, int)>();\n"
+            for line in ref_lines:
+                row_cs += line + "\n"
+            row_cs += "            return refs;\n"
+            row_cs += "        }\n"
+
+        row_cs += "    }\n}\n"
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixRow.cs"), 'w', encoding='utf-8') as f:
             f.write(row_cs)
+
+        # {name}MatrixRowIndex.cs（基礎クラスBaseClassDataRowIndex<TRow>を継承。rowKeyごとのシーク位置を保持）
+        row_index_cs = "using GameCore.Tables.ID;\n\n"
+        row_index_cs += "namespace GameCore.Tables {\n"
+        row_index_cs += f"    public class {name}MatrixRowIndex : BaseClassDataRowIndex<{row_id}ID> {{\n"
+        row_index_cs += "    }\n}\n"
+        with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, f"{name}", f"{name}MatrixRowIndex.cs"), 'w', encoding='utf-8') as f:
+            f.write(row_index_cs)
 
         # {name}MatrixID.cs
         matrix_cs = f"using System.IO;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing System;\nusing System.Collections.Generic;\n\n"
         matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixTable : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
+        matrix_cs += f"        static {name}MatrixTable()\n        {{\n"
+        matrix_cs += f"            RowIndex = new {name}MatrixRowIndex();\n"
+        matrix_cs += f"            TableId = MatrixTableID.{name};\n"
+        matrix_cs += "        }\n\n"
         matrix_cs += "        public override void Read(BinaryReader reader) {\n"
         matrix_cs += f"            {name}MatrixTable.Table.Clear();\n"
         matrix_cs += f"            int rowCount = reader.ReadInt32();\n"
         matrix_cs += f"            List<{row_id}ID> rowKeys = new List<{row_id}ID>(); for(int i=0; i<rowCount; i++) rowKeys.Add(({row_id}ID)reader.ReadInt32());\n"
         matrix_cs += f"            int colCount = reader.ReadInt32();\n"
         matrix_cs += f"            List<{col_id}ID> colKeys = new List<{col_id}ID>(); for(int i=0; i<colCount; i++) colKeys.Add(({col_id}ID)reader.ReadInt32());\n"
+        matrix_cs += f"            s_colKeys = colKeys;\n"
+        matrix_cs += f"            RowIndex.Read(reader, true); // 行インデックスブロックを読み進めつつキャッシュしておく（高速な連続読みはそのまま維持）\n"
         matrix_cs += f"            foreach(var rk in rowKeys) {{ Table[rk] = new Dictionary<{col_id}ID, {name}MatrixRow>(); }}\n"
-        matrix_cs += f"            foreach(var rk in rowKeys) {{ foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(reader); Table[rk][ck] = row; }} }}\n"
+        matrix_cs += "            foreach(var rk in rowKeys) {\n"
+        matrix_cs += "                int cellIndexCount = reader.ReadInt32();\n"
+        matrix_cs += f"                var cellIndex = new Dictionary<{col_id}ID, (long, int)>();\n"
+        matrix_cs += "                for (int i = 0; i < cellIndexCount; i++) {\n"
+        matrix_cs += f"                    var cid = ({col_id}ID)Enum.ToObject(typeof({col_id}ID), reader.ReadInt32());\n"
+        matrix_cs += "                    long off = reader.ReadInt64();\n"
+        matrix_cs += "                    int sz = reader.ReadInt32();\n"
+        matrix_cs += "                    cellIndex[cid] = (off, sz);\n"
+        matrix_cs += "                }\n"
+        matrix_cs += "                s_cellIndexCache[rk] = cellIndex; // 行インデックスブロックはここでキャッシュしておく（列/セル単位の後読みに使う）\n"
+        matrix_cs += f"                foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(reader); Table[rk][ck] = row; }}\n"
+        matrix_cs += "            }\n"
         matrix_cs += "        }\n    }\n}\n"
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixTable.cs"), 'w', encoding='utf-8') as f:
             f.write(matrix_cs)
@@ -4659,7 +5259,8 @@ def generate_binary_matrix(name):
 
 #バイナリデータ生成
 def generate_binary_matrix_data(name, json_data):
-    binary_data = bytearray()
+    import io
+
     row_keys = list(json_data['data'].keys())
     col_keys = list(json_data['data'][row_keys[0]].keys()) if row_keys else []
     rowId = json_data['rowId'] + "ID"
@@ -4678,25 +5279,78 @@ def generate_binary_matrix_data(name, json_data):
             return next((row['id'] for row in custom_class_data_id[type_id]['rows'] if row['enum_property'] == key), 0)
         return 0
 
-    binary_data.extend(struct.pack('i', len(row_keys)))
+    # --- ① ヘッダー部（rowKeys / colKeys）：フォーマットは従来通り ---
+    header_buf = io.BytesIO()
+    header_buf.write(struct.pack('i', len(row_keys)))
+    row_ids = []
     for rk in row_keys:
-        binary_data.extend(struct.pack('i', resolve_key_id(rowId, rk)))
-    binary_data.extend(struct.pack('i', len(col_keys)))
+        rid = resolve_key_id(rowId, rk)
+        row_ids.append(rid)
+        header_buf.write(struct.pack('i', rid))
+    header_buf.write(struct.pack('i', len(col_keys)))
+    col_ids = []
     for ck in col_keys:
-        binary_data.extend(struct.pack('i', resolve_key_id(colId, ck)))
+        cid = resolve_key_id(colId, ck)
+        col_ids.append(cid)
+        header_buf.write(struct.pack('i', cid))
+    header_bytes = header_buf.getvalue()
+
+    # --- ② rowKey(行)ごとに「行ブロック」を作る。行ブロックの中に、さらにcolKeyごとの
+    #      セル単位シークインデックス(cellIndex)を埋め込むことで、行単位・列単位・セル単位
+    #      いずれの部分ロードにも対応できるようにする。
+    #      row_block = [cellIndexCount:4] + (colKeyId:4/offset:8(行ブロック先頭からの相対)/size:4)*colCount
+    #                  + セルデータ本体(colKeys順に連結)
+    cell_index_header_size = 4
+    cell_index_entry_size = 4 + 8 + 4
+
+    row_block_list = []
     for rk in row_keys:
+        # まず各セルを個別にシリアライズしてサイズを確定させる
+        cell_bytes_list = []
         for ck in col_keys:
             cell = json_data['data'][rk][ck]
+            cf = io.BytesIO()
             for field in fields:
                 value = cell.get(field['name'])
-                write_binary_field_extend(
-                    binary_data, value, field['type'],
+                write_binary_field(
+                    cf, value, field['type'],
                     basic_types, unity_types, enum_list, class_list,
                     class_data_id_list, enum_data, class_data_id, class_data,
                     options=field.get('options'), custom_type_info=custom_type_info
                 )
+            cell_bytes_list.append(cf.getvalue())
 
-    return binary_data
+        cell_index_size = cell_index_header_size + cell_index_entry_size * len(col_keys)
+        cell_data_base_offset = cell_index_size  # 行ブロック内でのセルデータ開始位置
+
+        cell_index_buf = io.BytesIO()
+        cell_index_buf.write(struct.pack('i', len(col_keys)))
+        current_cell_offset = cell_data_base_offset
+        for cid, cell_bytes in zip(col_ids, cell_bytes_list):
+            cell_index_buf.write(struct.pack('i', cid))
+            cell_index_buf.write(struct.pack('q', current_cell_offset))
+            cell_index_buf.write(struct.pack('i', len(cell_bytes)))
+            current_cell_offset += len(cell_bytes)
+
+        row_block_list.append(cell_index_buf.getvalue() + b''.join(cell_bytes_list))
+
+    # --- ③ 行インデックス（rowKeyのid / テーブル先頭からの相対offset / size(行ブロック全体のサイズ)）を追加 ---
+    #     構造: [rowIndexCount:4] + (id:4 / offset:8(相対) / size:4) * rowKeyCount
+    row_index_header_size = 4
+    row_index_entry_size = 4 + 8 + 4
+    row_index_size = row_index_header_size + row_index_entry_size * len(row_keys)
+    row_data_base_offset = len(header_bytes) + row_index_size
+
+    row_index_buf = io.BytesIO()
+    row_index_buf.write(struct.pack('i', len(row_keys)))
+    current_offset = row_data_base_offset
+    for rid, row_block in zip(row_ids, row_block_list):
+        row_index_buf.write(struct.pack('i', rid))
+        row_index_buf.write(struct.pack('q', current_offset))
+        row_index_buf.write(struct.pack('i', len(row_block)))
+        current_offset += len(row_block)
+
+    return bytearray(header_bytes + row_index_buf.getvalue() + b''.join(row_block_list))
 #Matrixを一つのバイナリファイルにまとめる
 @app.route('/api/generate-all-binary-matrix', methods=['POST'])
 def generate_all_binary_matrix():
@@ -4884,6 +5538,303 @@ def generate_matrix_table_id():
         return jsonify({"message": "MatrixTableID generated"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/generate-class-data-memory-viewer', methods=['POST'])
+def generate_class_data_memory_viewer():
+    """
+    ロード状況の可視化エディタウィンドウ(ClassDataMemoryViewerWindow.cs)を生成する。
+    リフレクションで BaseClassDataID<,> / BaseClassDataMatrixID<,,> を継承する全テーブルを走査し、
+    各テーブルの「ロード済み件数/全件数」「概算メモリサイズ(バイナリ上のバイト数の合計)」を一覧表示する。
+    """
+    try:
+        editor_dir = os.path.join(DATA_DIR, "Editor")
+        os.makedirs(editor_dir, exist_ok=True)
+
+        code_str = """
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using UnityEditor;
+using UnityEngine;
+
+namespace GameCore.Tables.Editor
+{
+    /// <summary>
+    /// class_data_id / class_data_matrix_id の各テーブルについて、
+    /// ロード済みid数と概算メモリサイズ(バイナリ上のバイト数の合計)を一覧表示するエディタウィンドウ。
+    /// </summary>
+    public class ClassDataMemoryViewerWindow : EditorWindow
+    {
+        private class TableInfo
+        {
+            public string Name;
+            public int LoadedCount;
+            public int TotalCount;
+            public long MemoryBytes;
+        }
+
+        private static readonly Color HeaderColor = new Color(0.14f, 0.16f, 0.21f);
+        private static readonly Color AccentColor = new Color(0.30f, 0.62f, 0.98f);
+        private static readonly Color EmptyBarColor = new Color(0f, 0f, 0f, 0.25f);
+        private static readonly Color RowColorA = new Color(1f, 1f, 1f, 0.02f);
+        private static readonly Color RowColorB = new Color(1f, 1f, 1f, 0.06f);
+
+        private Vector2 scroll;
+        private string search = "";
+        private bool showId = true;
+        private bool showMatrix = true;
+        private bool autoRefresh = true;
+        private double lastRefreshTime;
+
+        private List<TableInfo> idTables = new List<TableInfo>();
+        private List<TableInfo> matrixTables = new List<TableInfo>();
+
+        [MenuItem("GameCore/Class Data Memory Viewer")]
+        public static void Open()
+        {
+            var window = GetWindow<ClassDataMemoryViewerWindow>("Class Data Memory");
+            window.minSize = new Vector2(440, 340);
+            window.Refresh();
+        }
+
+        private void OnEnable() => Refresh();
+
+        private void OnGUI()
+        {
+            DrawToolbar();
+            EditorGUILayout.Space(4);
+            DrawSummary();
+            EditorGUILayout.Space(4);
+
+            scroll = EditorGUILayout.BeginScrollView(scroll);
+            showId = DrawSection("ID テーブル", showId, idTables);
+            EditorGUILayout.Space(8);
+            showMatrix = DrawSection("Matrix テーブル", showMatrix, matrixTables);
+            EditorGUILayout.EndScrollView();
+
+            if (autoRefresh && EditorApplication.timeSinceStartup - lastRefreshTime > 1.0)
+            {
+                Refresh();
+            }
+        }
+
+        private void DrawToolbar()
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            search = EditorGUILayout.TextField(search, EditorStyles.toolbarSearchField, GUILayout.MinWidth(140));
+            if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(64))) Refresh();
+            autoRefresh = GUILayout.Toggle(autoRefresh, "Auto", EditorStyles.toolbarButton, GUILayout.Width(50));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawSummary()
+        {
+            long idBytes = idTables.Sum(t => t.MemoryBytes);
+            long matrixBytes = matrixTables.Sum(t => t.MemoryBytes);
+
+            var rect = EditorGUILayout.BeginVertical();
+            EditorGUI.DrawRect(rect, HeaderColor);
+            EditorGUILayout.Space(4);
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Space(8);
+            var boldStyle = new GUIStyle(EditorStyles.boldLabel) { normal = { textColor = Color.white } };
+            GUILayout.Label("ID: " + FormatBytes(idBytes), boldStyle);
+            GUILayout.Space(12);
+            GUILayout.Label("Matrix: " + FormatBytes(matrixBytes), boldStyle);
+            GUILayout.FlexibleSpace();
+            var totalStyle = new GUIStyle(boldStyle) { normal = { textColor = AccentColor } };
+            GUILayout.Label("Total: " + FormatBytes(idBytes + matrixBytes), totalStyle);
+            GUILayout.Space(8);
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.Space(4);
+            EditorGUILayout.EndVertical();
+        }
+
+        private bool DrawSection(string title, bool expanded, List<TableInfo> tables)
+        {
+            expanded = EditorGUILayout.Foldout(expanded, title + " (" + tables.Count + ")", true);
+            if (!expanded) return expanded;
+
+            int i = 0;
+            foreach (var info in tables)
+            {
+                if (!string.IsNullOrEmpty(search) && info.Name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                var rowRect = EditorGUILayout.BeginHorizontal(GUILayout.Height(20));
+                EditorGUI.DrawRect(rowRect, (i % 2 == 0) ? RowColorA : RowColorB);
+
+                GUILayout.Label(info.Name, GUILayout.Width(180));
+
+                float ratio = info.TotalCount > 0 ? (float)info.LoadedCount / info.TotalCount : 0f;
+                var barRect = GUILayoutUtility.GetRect(80, 16, GUILayout.ExpandWidth(true));
+                DrawProgressBar(barRect, ratio, info.LoadedCount + " / " + info.TotalCount);
+
+                GUILayout.Label(FormatBytes(info.MemoryBytes), GUILayout.Width(80));
+
+                EditorGUILayout.EndHorizontal();
+                i++;
+            }
+
+            if (tables.Count == 0)
+            {
+                EditorGUILayout.HelpBox("テーブルが見つかりませんでした。", MessageType.Info);
+            }
+
+            return expanded;
+        }
+
+        private void DrawProgressBar(Rect rect, float value, string label)
+        {
+            EditorGUI.DrawRect(rect, EmptyBarColor);
+            var fillRect = new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(value), rect.height);
+            Color fillColor = value <= 0f ? new Color(0.4f, 0.4f, 0.4f) : Color.Lerp(new Color(0.85f, 0.35f, 0.35f), AccentColor, value);
+            EditorGUI.DrawRect(fillRect, fillColor);
+
+            var style = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter };
+            style.normal.textColor = Color.white;
+            GUI.Label(rect, label, style);
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return bytes + " B";
+            double kb = bytes / 1024.0;
+            if (kb < 1024) return kb.ToString("0.0") + " KB";
+            double mb = kb / 1024.0;
+            return mb.ToString("0.00") + " MB";
+        }
+
+        private void Refresh()
+        {
+            lastRefreshTime = EditorApplication.timeSinceStartup;
+            idTables.Clear();
+            matrixTables.Clear();
+
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch { continue; }
+
+                foreach (var type in types)
+                {
+                    if (type.IsAbstract || type.BaseType == null || !type.BaseType.IsGenericType) continue;
+
+                    string baseName = type.BaseType.GetGenericTypeDefinition().Name;
+                    if (baseName.StartsWith("BaseClassDataID"))
+                    {
+                        var info = BuildIdTableInfo(type);
+                        if (info != null) idTables.Add(info);
+                    }
+                    else if (baseName.StartsWith("BaseClassDataMatrixID"))
+                    {
+                        var info = BuildMatrixTableInfo(type);
+                        if (info != null) matrixTables.Add(info);
+                    }
+                }
+            }
+
+            idTables = idTables.OrderByDescending(t => t.MemoryBytes).ToList();
+            matrixTables = matrixTables.OrderByDescending(t => t.MemoryBytes).ToList();
+            Repaint();
+        }
+
+        private static long GetTupleItem2(object tuple)
+        {
+            if (tuple == null) return 0;
+            var field = tuple.GetType().GetField("Item2");
+            return field != null ? Convert.ToInt64(field.GetValue(tuple)) : 0;
+        }
+
+        private TableInfo BuildIdTableInfo(Type type)
+        {
+            var tableField = type.BaseType.GetField("Table", BindingFlags.Public | BindingFlags.Static);
+            var rowIndexField = type.BaseType.GetField("RowIndex", BindingFlags.NonPublic | BindingFlags.Static);
+            if (tableField == null) return null;
+
+            var table = tableField.GetValue(null) as System.Collections.IDictionary;
+            if (table == null) return null;
+
+            int totalCount = 0;
+            long memory = 0;
+            var rowIndexObj = rowIndexField?.GetValue(null);
+            var entries = GetEntriesDictionary(rowIndexObj);
+            if (entries != null)
+            {
+                totalCount = entries.Count;
+                foreach (var key in table.Keys)
+                {
+                    if (entries.Contains(key)) memory += GetTupleItem2(entries[key]);
+                }
+            }
+
+            return new TableInfo { Name = type.Name, LoadedCount = table.Count, TotalCount = totalCount, MemoryBytes = memory };
+        }
+
+        private TableInfo BuildMatrixTableInfo(Type type)
+        {
+            var tableField = type.BaseType.GetField("Table", BindingFlags.Public | BindingFlags.Static);
+            var rowIndexField = type.BaseType.GetField("RowIndex", BindingFlags.NonPublic | BindingFlags.Static);
+            var cellIndexCacheField = type.BaseType.GetField("s_cellIndexCache", BindingFlags.NonPublic | BindingFlags.Static);
+            if (tableField == null) return null;
+
+            var table = tableField.GetValue(null) as System.Collections.IDictionary;
+            if (table == null) return null;
+
+            var cellIndexCache = cellIndexCacheField?.GetValue(null) as System.Collections.IDictionary;
+            long memory = 0;
+
+            foreach (var rowKey in table.Keys)
+            {
+                var rowDict = table[rowKey] as System.Collections.IDictionary;
+                if (rowDict == null) continue;
+
+                System.Collections.IDictionary cellIndex = null;
+                if (cellIndexCache != null && cellIndexCache.Contains(rowKey))
+                {
+                    cellIndex = cellIndexCache[rowKey] as System.Collections.IDictionary;
+                }
+
+                foreach (var colKey in rowDict.Keys)
+                {
+                    if (cellIndex != null && cellIndex.Contains(colKey))
+                    {
+                        memory += GetTupleItem2(cellIndex[colKey]);
+                    }
+                }
+            }
+
+            int totalRowCount = 0;
+            var rowIndexObj = rowIndexField?.GetValue(null);
+            var entries = GetEntriesDictionary(rowIndexObj);
+            if (entries != null) totalRowCount = entries.Count;
+
+            return new TableInfo { Name = type.Name, LoadedCount = table.Count, TotalCount = totalRowCount, MemoryBytes = memory };
+        }
+
+        private static System.Collections.IDictionary GetEntriesDictionary(object rowIndexObj)
+        {
+            if (rowIndexObj == null) return null;
+            var entriesField = rowIndexObj.GetType().GetField("Entries", BindingFlags.Public | BindingFlags.Instance);
+            return entriesField?.GetValue(rowIndexObj) as System.Collections.IDictionary;
+        }
+    }
+}
+"""
+        with open(os.path.join(editor_dir, "ClassDataMemoryViewerWindow.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str.strip() + "\n")
+
+        return jsonify({"message": "ClassDataMemoryViewerWindow generated"})
+    except Exception as e:
+        logger.error(f"Error generating class data memory viewer: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
     
     
 ##--------------------------------------------------
