@@ -6,6 +6,10 @@ from tkinter import filedialog
 import socket
 import struct
 
+import pythonSrc.class_data as class_data
+from pythonSrc.constants import ENUM
+
+
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -17,6 +21,11 @@ DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 SCENE_DATA_DIR = os.path.join(DATA_DIR, "scene_data")
 SCENE_JSON = os.path.join(SCENE_DATA_DIR, "scenes.json")
 EDITOR_DIR = os.path.join(SCENE_DATA_DIR, "Editor")
+
+# シーンのenumは、ClassData/Enum側で管理される共有enumシステムの
+# "GameScene" という名前のenumとして扱う（C#での型名は GameSceneID になる）。
+SCENE_ENUM_NAME = "GameScene"
+
 
 def generate_base():
     if not os.path.exists(DATA_DIR):
@@ -79,6 +88,101 @@ def send_to_unity(command, data=None):
 def get_unity_project_path():
     return send_to_unity('get_project_path')
 
+
+# ============================================================
+# Scene用enumを ClassData/Enum 側の管理下(json)に同期する
+# ============================================================
+def _load_scene_enum_values():
+    """
+    ENUM/GameScene/GameScene.json を読み込む（無ければ空リスト）。
+    フォーマットは他のenumと同じ: [{"property":..,"value":..,"description":..}, ...]
+    """
+    enum_dir = os.path.join(DATA_DIR, ENUM, SCENE_ENUM_NAME)
+    enum_json_path = os.path.join(enum_dir, f"{SCENE_ENUM_NAME}.json")
+    if os.path.exists(enum_json_path):
+        with open(enum_json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def _save_scene_enum_values(values):
+    enum_dir = os.path.join(DATA_DIR, ENUM, SCENE_ENUM_NAME)
+    os.makedirs(enum_dir, exist_ok=True)
+    enum_json_path = os.path.join(enum_dir, f"{SCENE_ENUM_NAME}.json")
+    with open(enum_json_path, 'w', encoding='utf-8') as f:
+        json.dump(values, f, ensure_ascii=False, indent=2)
+
+
+def _ensure_scene_enum_registered():
+    """
+    ENUM/enum_list.json に "GameScene" エントリが無ければ追加する。
+    （/api/enum-id が管理しているenum一覧に、シーン用enumも登録しておく）
+    """
+    enum_list_path = os.path.join(DATA_DIR, ENUM, 'enum_list.json')
+    try:
+        with open(enum_list_path, 'r', encoding='utf-8') as f:
+            enum_list = json.load(f)
+    except FileNotFoundError:
+        enum_list = []
+
+    if not any(item.get('name') == SCENE_ENUM_NAME for item in enum_list):
+        max_id = max([item['id'] for item in enum_list], default=0) + 1
+        enum_list.append({"id": max_id, "name": SCENE_ENUM_NAME})
+        os.makedirs(os.path.join(DATA_DIR, ENUM), exist_ok=True)
+        with open(enum_list_path, 'w', encoding='utf-8') as f:
+            json.dump(enum_list, f, ensure_ascii=False, indent=2)
+
+        # 個別enumの値ファイルが無ければ空リストで初期化
+        enum_dir = os.path.join(DATA_DIR, ENUM, SCENE_ENUM_NAME)
+        os.makedirs(enum_dir, exist_ok=True)
+        value_path = os.path.join(enum_dir, f"{SCENE_ENUM_NAME}.json")
+        if not os.path.exists(value_path):
+            with open(value_path, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+
+
+def sync_scene_enum():
+    """
+    scenes.json の内容を ENUM/GameScene/GameScene.json に反映し、
+    class_data.generate_enum_files() を使って GameSceneID.cs / .py / .js を
+    （他の全enumと同じパイプラインで）再生成する。
+
+    - 追加: 既存の値を保持しつつ、新しいシーンには次の連番valueを割り当てる
+    - 削除: scenes.json に無くなったシーンの値エントリも取り除く
+    - 呼び出しタイミング: シーンの追加/削除の度（add_scene / delete_scene から呼ばれる）
+    """
+    _ensure_scene_enum_registered()
+
+    scenes = load_scene_data().get('scenes', [])
+    existing_values = _load_scene_enum_values()
+    existing_by_name = {item['property']: item for item in existing_values}
+
+    next_value = max([item['value'] for item in existing_values], default=0) + 1
+
+    new_values = []
+    for s in scenes:
+        enum_name = s['enum']
+        if enum_name in existing_by_name:
+            # 既存のvalueを維持（C#側の値が変わらないように）
+            item = existing_by_name[enum_name]
+            item['description'] = s.get('sceneName', item.get('description', ''))
+            new_values.append(item)
+        else:
+            new_values.append({
+                "property": enum_name,
+                "value": next_value,
+                "description": s.get('sceneName', ''),
+            })
+            next_value += 1
+
+    _save_scene_enum_values(new_values)
+
+    # class_data.py の /api/generate-enum/<name> と全く同じ生成ロジックを共有で使う。
+    # これにより GameSceneID.cs / GameSceneIDExtensions.cs / .py / .js が
+    # ENUM/GameScene/ 配下に、他のenumと同じ形式で出力される。
+    class_data.generate_enum_files(SCENE_ENUM_NAME, new_values)
+
+
 def add_scene(enum_name, scene_type):
     """
     シーンを追加（ファイル選択ダイアログを表示）
@@ -111,6 +215,7 @@ def add_scene(enum_name, scene_type):
         "type": scene_type # Client or Server
     })
     save_scene_data(data)
+    sync_scene_enum()
     return {"success": True, "message": "Scene added successfully"}
 
 def delete_scene(enum_name):
@@ -123,46 +228,30 @@ def delete_scene(enum_name):
     
     if len(data['scenes']) < initial_count:
         save_scene_data(data)
+        sync_scene_enum()
         return {"success": True, "message": "Scene deleted successfully"}
     else:
         return {"success": False, "message": "Scene not found"}
 
-def generate_game_scene_cs(scenes):
-    """
-    GameScene.cs (Enum) を生成
-    """
-    enum_lines = []
-    for s in scenes:
-        enum_lines.append(f"    {s['enum']}")
-    enum_content = ",\n".join(enum_lines)
-
-    code = f"""using System;
-
-public enum GameScene
-{{
-{enum_content}
-}}
-"""
-    output_path = os.path.join(SCENE_DATA_DIR, "GameScene.cs")
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(code)
 
 def generate_scene_list_cs(scenes):
     """
     SceneList.cs (Dictionary) を生成
+    GameSceneID は ClassData/Enum システム側で生成されるため、ここでは参照するのみ。
     """
     dict_lines = []
     for s in scenes:
-        dict_lines.append(f"{{ GameScene.{s['enum']}, \"{s['sceneName']}\" }}")
+        dict_lines.append(f"{{ GameSceneID.{s['enum']}, \"{s['sceneName']}\" }}")
     dict_content = ",\n        ".join(dict_lines)
 
     code = f"""using System;
 using System.Collections.Generic;
+using GameCore.Enums;
 
 public class SceneList
 {{
     // シーン名管理
-    public static readonly Dictionary<GameScene, string> sceneNames = new Dictionary<GameScene, string>
+    public static readonly Dictionary<GameSceneID, string> sceneNames = new Dictionary<GameSceneID, string>
     {{
         {dict_content}
     }};
@@ -179,24 +268,6 @@ def generate_scene_build_cs(scenes):
     if not os.path.exists(EDITOR_DIR):
         os.makedirs(EDITOR_DIR)
 
-    # Client用とServer用のシーンリストを作成
-    # ここでは、Typeが一致するものだけをビルドに含めるか、
-    # あるいは全てのシーンを含めるが、特定のシーン（Titleなど）は必須にするなどのロジックが必要かもしれない。
-    # ユーザー要望は「Clientはwindows標準のビルド、ServerはLinuxのビルド」
-    # 単純に、TypeがClientのものはClientビルドに、ServerのものはServerビルドに含める形にする。
-    # ただし、共通のシーン（例えばTitle）があるかもしれないが、現状のデータ構造ではTypeは1つ。
-    # 必要ならTypeをリストにするか、Bothを追加するが、今回はシンプルに実装する。
-    
-    # パスは絶対パスで保存されているが、Unityのビルド設定には "Assets/..." から始まる相対パスが必要。
-    # get_addressable_path のロジックなどを参考にパスを変換する必要があるが、
-    # ここでは簡易的に、保存されているパスが絶対パスなら、Unityプロジェクトルートからの相対パスに変換を試みる。
-    # ただし、Python側で正確なUnityプロジェクトルートを知るのは難しい場合がある（get_unity_project_pathは使える）。
-    
-    # ここでは、C#側でパス解決をするロジックを埋め込むのが安全だが、
-    # BuildPlayerOptions.scenes にはパスの文字列配列を渡す必要がある。
-    # EditorBuildSettings.scenes から有効なシーンを取得してフィルタリングするのが一般的だが、
-    # ここでは scenes.json にあるパス（絶対パス）を "Assets/..." に変換して埋め込む。
-    
     project_path = get_unity_project_path()
     if not project_path:
         project_path = "" # 失敗時は空文字、変換できない可能性あり
@@ -294,22 +365,27 @@ public class SceneBuild : EditorWindow
 def generate_scene_loader_cs():
     """
     SceneLoader.cs (Logic) を生成
+
+    GameSceneID は ClassData/Enum システム側 (GameCore.Enums) で生成される。
+    追加で、シーン内のオブジェクトから GetComponent 相当を行う汎用関数
+    (単数取得 / 複数取得のジェネリック版) を用意している。
     """
     code = """using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Cysharp.Threading.Tasks;
-using GameCore;
+using GameCore.Enums;
 
 public class SceneLoader
 {
-    private static readonly HashSet<GameScene> loadedScenes = new HashSet<GameScene>();
-    private static readonly Dictionary<GameScene, UniTask> loadingTasks = new Dictionary<GameScene, UniTask>();
+    private static readonly HashSet<GameSceneID> loadedScenes = new HashSet<GameSceneID>();
+    private static readonly Dictionary<GameSceneID, UniTask> loadingTasks = new Dictionary<GameSceneID, UniTask>();
 
     #region Load / Unload
 
-    public static async UniTask LoadSceneAsync(GameScene scene, bool additive = false, Action action = null)
+    public static async UniTask LoadSceneAsync(GameSceneID scene, bool additive = false, Action action = null)
     {
         if (loadedScenes.Contains(scene))
         {
@@ -337,7 +413,7 @@ public class SceneLoader
         }
     }
 
-    private static async UniTask InternalLoadSceneAsync(GameScene scene, bool additive, Action action = null)
+    private static async UniTask InternalLoadSceneAsync(GameSceneID scene, bool additive, Action action = null)
     {
         if (!SceneList.sceneNames.TryGetValue(scene, out string sceneName))
         {
@@ -362,7 +438,7 @@ public class SceneLoader
         DebugLog($"Scene '{scene}' loaded successfully.");
     }
 
-    public static async UniTask UnloadSceneAsync(GameScene scene, Action action = null)
+    public static async UniTask UnloadSceneAsync(GameSceneID scene, Action action = null)
     {
         if (!loadedScenes.Contains(scene))
         {
@@ -397,10 +473,10 @@ public class SceneLoader
     /// 現在ロード済みのシーンをすべてアンロード
     /// </summary>
     /// <param name="keepScenes">残したいシーン</param>
-    public static async UniTask UnloadAllScenesAsync(GameScene[] keepScenes, Action action = null)
+    public static async UniTask UnloadAllScenesAsync(GameSceneID[] keepScenes, Action action = null)
     {
-        var toKeep = new HashSet<GameScene>(keepScenes);
-        var toUnload = new List<GameScene>();
+        var toKeep = new HashSet<GameSceneID>(keepScenes);
+        var toUnload = new List<GameSceneID>();
 
         foreach (var scene in loadedScenes)
             if (!toKeep.Contains(scene))
@@ -419,21 +495,10 @@ public class SceneLoader
     /// <summary>
     /// 指定シーンに GameObject を生成
     /// </summary>
-    public static GameObject InstantiateInScene(GameObject prefab, GameScene scene)
+    public static GameObject InstantiateInScene(GameObject prefab, GameSceneID scene)
     {
-        if (!SceneList.sceneNames.TryGetValue(scene, out string sceneName))
-        {
-            Debug.LogError($"Scene enum '{scene}' is not mapped to a scene name.");
+        if (!TryGetLoadedScene(scene, out Scene targetScene))
             return null;
-        }
-
-        Scene targetScene = SceneManager.GetSceneByName(sceneName);
-
-        if (!targetScene.isLoaded)
-        {
-            Debug.LogError($"Scene '{sceneName}' is not loaded.");
-            return null;
-        }
 
         GameObject obj = GameObject.Instantiate(prefab);
         SceneManager.MoveGameObjectToScene(obj, targetScene); // 安全に所属させる
@@ -442,9 +507,65 @@ public class SceneLoader
 
     #endregion
 
+    #region GetComponent In Scene
+
+    /// <summary>
+    /// 指定シーンのルートオブジェクト（およびその子）から、型Tのコンポーネントを1つ取得する。
+    /// 見つからない場合は null を返す。
+    /// </summary>
+    public static T GetComponentInScene<T>(GameSceneID scene, bool includeInactive = true) where T : Component
+    {
+        if (!TryGetLoadedScene(scene, out Scene targetScene))
+            return null;
+
+        foreach (GameObject root in targetScene.GetRootGameObjects())
+        {
+            T found = root.GetComponentInChildren<T>(includeInactive);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 指定シーンのルートオブジェクト（およびその子）から、型Tのコンポーネントを全て取得する。
+    /// </summary>
+    public static List<T> GetComponentsInScene<T>(GameSceneID scene, bool includeInactive = true) where T : Component
+    {
+        var results = new List<T>();
+        if (!TryGetLoadedScene(scene, out Scene targetScene))
+            return results;
+
+        foreach (GameObject root in targetScene.GetRootGameObjects())
+        {
+            results.AddRange(root.GetComponentsInChildren<T>(includeInactive));
+        }
+        return results;
+    }
+
+    private static bool TryGetLoadedScene(GameSceneID scene, out Scene targetScene)
+    {
+        if (!SceneList.sceneNames.TryGetValue(scene, out string sceneName))
+        {
+            Debug.LogError($"Scene enum '{scene}' is not mapped to a scene name.");
+            targetScene = default;
+            return false;
+        }
+
+        targetScene = SceneManager.GetSceneByName(sceneName);
+        if (!targetScene.isLoaded)
+        {
+            Debug.LogError($"Scene '{sceneName}' is not loaded.");
+            return false;
+        }
+        return true;
+    }
+
+    #endregion
+
     #region Utility
 
-    public static IReadOnlyCollection<GameScene> GetLoadedScenes() => loadedScenes;
+    public static IReadOnlyCollection<GameSceneID> GetLoadedScenes() => loadedScenes;
 
     [System.Diagnostics.Conditional("UNITY_EDITOR")]
     private static void DebugLog(string message) => Debug.Log("[SceneLoader] " + message);
@@ -475,11 +596,13 @@ public class SceneLoader
 def generate_cs_files():
     """
     全てのC#ファイルを生成
+    GameSceneID (enum) は ClassData/Enum システム側で生成されるため、
+    ここでは SceneList / SceneBuild / SceneLoader のみを生成する。
     """
     data = load_scene_data()
     scenes = data.get('scenes', [])
 
-    generate_game_scene_cs(scenes)
+    sync_scene_enum()
     generate_scene_list_cs(scenes)
     generate_scene_build_cs(scenes)
     generate_scene_loader_cs()
