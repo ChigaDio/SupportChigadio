@@ -1,21 +1,54 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Grid, Card, CardContent, IconButton, Autocomplete, List, ListItem, ListItemText } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Grid, Card, CardContent, IconButton, Autocomplete, Checkbox, FormControlLabel, Tooltip, Chip, Divider } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
 import SaveIcon from '@mui/icons-material/Save';
+import CodeIcon from '@mui/icons-material/Code';
+import TuneIcon from '@mui/icons-material/Tune';
+import BoltIcon from '@mui/icons-material/Bolt';
+import SyncIcon from '@mui/icons-material/Sync';
 import { styled } from '@mui/material/styles';
 import { ReactFlow, Background, Controls, MiniMap, useReactFlow, addEdge, Handle, Position, applyNodeChanges } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+// Enter/Update/Exit それぞれの 同期/非同期 使用設定のデフォルト（同期のみ）。
+// StateControlのCombined API（同期・非同期を両方動かすモード）が、
+// このノードに対応するStateクラスで実際にどちらを呼ぶかを決めるのに使われる。
+const DEFAULT_LIFECYCLE = {
+  enter: { sync: true, async: false },
+  update: { sync: true, async: false },
+  exit: { sync: true, async: false },
+};
+
+const LIFECYCLE_STAGES = [
+  { key: 'enter', label: 'Enter' },
+  { key: 'update', label: 'Update' },
+  { key: 'exit', label: 'Exit' },
+];
+
+const normalizeLifecycle = (lifecycle) => {
+  const result = {};
+  LIFECYCLE_STAGES.forEach(({ key }) => {
+    const stage = (lifecycle && lifecycle[key]) || {};
+    let sync = stage.sync !== undefined ? !!stage.sync : DEFAULT_LIFECYCLE[key].sync;
+    let async_ = stage.async !== undefined ? !!stage.async : DEFAULT_LIFECYCLE[key].async;
+    if (!sync && !async_) sync = true; // 最低1つは必須
+    result[key] = { sync, async: async_ };
+  });
+  return result;
+};
+
 const CustomNode = ({ data, id }) => {
-  const handleDelete = () => {
+  const handleDelete = (e) => {
+    e.stopPropagation();
     window.dispatchEvent(new CustomEvent('deleteNode', { detail: id }));
   };
 
-  const handleShowCode = () => {
+  const handleShowCode = (e) => {
+    e.stopPropagation();
     fetch(`/api/open-code/${data.stateName}/${data.label}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -34,47 +67,136 @@ const CustomNode = ({ data, id }) => {
       });
   };
 
-  const handleAddSubNode = () => {
+  const handleAddSubNode = (e) => {
+    e.stopPropagation();
     window.dispatchEvent(new CustomEvent('addSubNode', { detail: id }));
   };
 
-  const handleDeleteSubNode = (subId) => {
+  const handleDeleteSubNode = (e, subId) => {
+    e.stopPropagation();
     window.dispatchEvent(new CustomEvent('deleteSubNode', { detail: { parentId: id, subId } }));
   };
 
+  const handleOpenLifecycle = (e) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('openLifecycle', { detail: id }));
+  };
+
+  const lifecycle = normalizeLifecycle(data.lifecycle);
+
   return (
-    <div className="bg-gray-900 rounded-lg text-white w-72" style={{ minHeight: '80px', position: 'relative' }}>
-      <IconButton size="small" onClick={handleDelete} style={{ position: 'absolute', top: 4, right: 4, color: 'red' }}>
-        <CloseIcon fontSize="small" />
-      </IconButton>
-      <Button variant="outlined" size="small" onClick={handleShowCode} style={{ position: 'absolute', top: 32, right: 4, color: 'white', borderColor: 'white' }}>
-        Show Code
-      </Button>
-      <IconButton size="small" onClick={handleAddSubNode} style={{ position: 'absolute', top: 60, right: 4, color: 'green' }}>
-        <AddIcon fontSize="small" />
-      </IconButton>
-      <div className="bg-gradient-to-r from-blue-800 to-blue-600 p-2 flex items-center justify-center">
-        <Typography variant="subtitle1" className="font-semibold text-center text-white">
+    <div
+      className="rounded-xl text-white"
+      style={{
+        width: 288,
+        minHeight: 96,
+        position: 'relative',
+        background: 'linear-gradient(160deg, #1f2937 0%, #111827 100%)',
+        borderRadius: 14,
+        boxShadow: '0 6px 18px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)',
+        overflow: 'hidden',
+        cursor: 'pointer',
+      }}
+      onClick={handleOpenLifecycle}
+    >
+      <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 2, zIndex: 2 }}>
+        <Tooltip title="ライフサイクル設定 (同期/非同期)">
+          <IconButton size="small" onClick={handleOpenLifecycle} style={{ color: '#93c5fd' }}>
+            <TuneIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="コードを開く">
+          <IconButton size="small" onClick={handleShowCode} style={{ color: '#e5e7eb' }}>
+            <CodeIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="サブノードを追加">
+          <IconButton size="small" onClick={handleAddSubNode} style={{ color: '#86efac' }}>
+            <AddIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="削除">
+          <IconButton size="small" onClick={handleDelete} style={{ color: '#fca5a5' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </div>
+
+      <div
+        style={{
+          background: 'linear-gradient(90deg, #1d4ed8 0%, #2563eb 60%, #3b82f6 100%)',
+          padding: '10px 12px',
+          paddingRight: 132,
+        }}
+      >
+        <Typography variant="subtitle1" style={{ fontWeight: 700, color: 'white', lineHeight: 1.2 }}>
           {data.label}
         </Typography>
       </div>
-      <div className="p-3 bg-gray-800 flex items-center justify-center">
-        <Typography variant="caption" className="text-gray-400">
-          ID: {id} | Description: {data.description || 'N/A'}
+
+      <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.03)' }}>
+        <Typography variant="caption" style={{ color: '#9ca3af' }}>
+          ID: {id}{data.description ? ` ・ ${data.description}` : ''}
         </Typography>
       </div>
+
+      <div style={{ display: 'flex', gap: 6, padding: '4px 12px 10px 12px', flexWrap: 'wrap' }}>
+        {LIFECYCLE_STAGES.map(({ key, label }) => {
+          const cfg = lifecycle[key];
+          return (
+            <div
+              key={key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                background: 'rgba(255,255,255,0.06)',
+                borderRadius: 8,
+                padding: '2px 6px',
+              }}
+            >
+              <Typography variant="caption" style={{ color: '#d1d5db', fontSize: 10 }}>{label}</Typography>
+              {cfg.sync && <SyncIcon style={{ fontSize: 12, color: '#60a5fa' }} titleAccess="同期" />}
+              {cfg.async && <BoltIcon style={{ fontSize: 12, color: '#facc15' }} titleAccess="非同期" />}
+            </div>
+          );
+        })}
+      </div>
+
       {data.subNodes && data.subNodes.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 8px 8px 8px' }}>
+          <Typography variant="caption" style={{ color: '#9ca3af', fontSize: 10, marginBottom: 2 }}>
+            スタック実行（LIFO）— クリックで各Stateの同期/非同期設定
+          </Typography>
           {data.subNodes.map((sub) => (
-            <div key={sub.id} className="bg-gradient-to-r from-green-800 to-green-600 p-2 mt-1 rounded text-white flex items-center justify-between" style={{ width: '100%' }}>
-              <Typography variant="subtitle2">{sub.label}</Typography>
-              <IconButton size="small" onClick={() => handleDeleteSubNode(sub.id)} color="error">
-                <CloseIcon fontSize="small" />
-              </IconButton>
+            <div
+              key={sub.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('openLifecycleTransition', { detail: sub.label }));
+              }}
+              style={{
+                background: 'linear-gradient(90deg, #065f46 0%, #059669 100%)',
+                padding: '4px 8px',
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+              }}
+            >
+              <Typography variant="caption" style={{ fontWeight: 600 }}>{sub.label}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <TuneIcon style={{ fontSize: 13, color: '#d1fae5' }} />
+                <IconButton size="small" onClick={(e) => handleDeleteSubNode(e, sub.id)} style={{ color: '#fecaca', padding: 2 }}>
+                  <CloseIcon style={{ fontSize: 14 }} />
+                </IconButton>
+              </Box>
             </div>
           ))}
         </div>
       )}
+
       <Handle
         type="target"
         position={Position.Left}
@@ -116,6 +238,10 @@ function StateDetailGrid() {
   const { fitView, screenToFlowPosition } = useReactFlow();
   const reactFlowWrapper = useRef(null);
   const [openSubNodeDialog, setOpenSubNodeDialog] = useState(false);
+  const [openLifecycleDialog, setOpenLifecycleDialog] = useState(false);
+  const [lifecycleTarget, setLifecycleTarget] = useState(null); // { kind: 'node', id } | { kind: 'transition', label }
+  const [lifecycleDraft, setLifecycleDraft] = useState(DEFAULT_LIFECYCLE);
+  const [lifecycleOriginal, setLifecycleOriginal] = useState(DEFAULT_LIFECYCLE);
   const [selectedParentId, setSelectedParentId] = useState(null);
   const [newSubLabel, setNewSubLabel] = useState('');
 
@@ -195,13 +321,43 @@ function StateDetailGrid() {
       }));
     };
 
+    const handleOpenLifecycle = (e) => {
+      const nodeId = e.detail;
+      setLifecycleTarget({ kind: 'node', id: nodeId });
+      setFlowElements((els) => {
+        const node = els.nodes.find((n) => n.id === nodeId);
+        const normalized = normalizeLifecycle(node?.data?.lifecycle);
+        setLifecycleDraft(normalized);
+        setLifecycleOriginal(normalized);
+        return els;
+      });
+      setOpenLifecycleDialog(true);
+    };
+
+    const handleOpenLifecycleTransition = (e) => {
+      const label = e.detail;
+      setLifecycleTarget({ kind: 'transition', label });
+      setTransitions((prev) => {
+        const t = prev.find((item) => item.fromState === label);
+        const normalized = normalizeLifecycle(t?.lifecycle);
+        setLifecycleDraft(normalized);
+        setLifecycleOriginal(normalized);
+        return prev;
+      });
+      setOpenLifecycleDialog(true);
+    };
+
     window.addEventListener('deleteNode', handleDeleteNode);
     window.addEventListener('addSubNode', handleAddSubNode);
     window.addEventListener('deleteSubNode', handleDeleteSubNode);
+    window.addEventListener('openLifecycle', handleOpenLifecycle);
+    window.addEventListener('openLifecycleTransition', handleOpenLifecycleTransition);
     return () => {
       window.removeEventListener('deleteNode', handleDeleteNode);
       window.removeEventListener('addSubNode', handleAddSubNode);
       window.removeEventListener('deleteSubNode', handleDeleteSubNode);
+      window.removeEventListener('openLifecycle', handleOpenLifecycle);
+      window.removeEventListener('openLifecycleTransition', handleOpenLifecycleTransition);
     };
   }, []);
 
@@ -225,6 +381,7 @@ function StateDetailGrid() {
               fromState: item.fromState || '',
               description: item.description || '',
               variables: Array.isArray(item.variables) ? item.variables : [],
+              lifecycle: normalizeLifecycle(item.lifecycle),
             }))
           : [];
         const validManagerData = Array.isArray(validData.manager)
@@ -263,7 +420,8 @@ function StateDetailGrid() {
                 targets: node.data.targets || [], 
                 subNodes: node.data.subNodes || [],
                 description: validTransitions.find(t => t.fromState === node.data.label)?.description || '',
-                stateName: name
+                stateName: name,
+                lifecycle: normalizeLifecycle(node.data.lifecycle)
               }
             }))
           : [];
@@ -362,6 +520,7 @@ function StateDetailGrid() {
       fromState: newFromState,
       description: newDescription,
       variables: [],
+      lifecycle: DEFAULT_LIFECYCLE,
     };
     setTransitions([...transitions, newTransition]);
     setOpenTransitionDialog(false);
@@ -568,6 +727,68 @@ function StateDetailGrid() {
     setSelectedParentId(null);
   };
 
+  // Enter/Update/Exit × 同期/非同期 のチェックボックスをトグルする。
+  // 各行（ステージ）で最低1つはチェックされていなければならないため、
+  // 最後の1つを外そうとした場合は無視する。
+  const handleToggleLifecycle = (stage, kind) => {
+    setLifecycleDraft((prev) => {
+      const current = prev[stage];
+      const nextValue = !current[kind];
+      const otherKind = kind === 'sync' ? 'async' : 'sync';
+      if (!nextValue && !current[otherKind]) {
+        // 両方外れてしまうので無視（最低1つは必須）
+        return prev;
+      }
+      return {
+        ...prev,
+        [stage]: { ...current, [kind]: nextValue },
+      };
+    });
+  };
+
+  const isLifecycleDirty = () => JSON.stringify(lifecycleDraft) !== JSON.stringify(lifecycleOriginal);
+
+  const handleCloseLifecycleDialog = () => {
+    if (isLifecycleDirty()) {
+      if (!window.confirm('変更が保存されていません。破棄して閉じますか？')) {
+        return;
+      }
+    }
+    setOpenLifecycleDialog(false);
+    setLifecycleTarget(null);
+  };
+
+  const handleSaveLifecycle = () => {
+    if (!lifecycleTarget) return;
+    if (lifecycleTarget.kind === 'node') {
+      setFlowElements((els) => ({
+        ...els,
+        nodes: els.nodes.map((node) =>
+          node.id === lifecycleTarget.id
+            ? { ...node, data: { ...node.data, lifecycle: lifecycleDraft } }
+            : node
+        ),
+      }));
+    } else if (lifecycleTarget.kind === 'transition') {
+      setTransitions((prev) =>
+        prev.map((t) =>
+          t.fromState === lifecycleTarget.label ? { ...t, lifecycle: lifecycleDraft } : t
+        )
+      );
+    }
+    setOpenLifecycleDialog(false);
+    setLifecycleTarget(null);
+  };
+
+  const lifecycleNodeLabel = (() => {
+    if (!lifecycleTarget) return '';
+    if (lifecycleTarget.kind === 'node') {
+      const node = flowElements.nodes.find((n) => n.id === lifecycleTarget.id);
+      return node ? `${node.data.label} (ID: ${node.id})` : '';
+    }
+    return `${lifecycleTarget.label} (スタック/サブノード共通)`;
+  })();
+
   const onConnect = useCallback((connection) => {
     setFlowElements((els) => {
       const newEdge = { ...connection, id: `e${els.edges.length + 1}`, type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } };
@@ -660,7 +881,7 @@ function StateDetailGrid() {
       id: newNodeId,
       type: 'default',
       position,
-      data: { label, targets: [], subNodes: [], description: transitions.find(t => t.fromState === label)?.description || '', stateName: name },
+      data: { label, targets: [], subNodes: [], description: transitions.find(t => t.fromState === label)?.description || '', stateName: name, lifecycle: DEFAULT_LIFECYCLE },
       draggable: true,
     };
 
@@ -949,13 +1170,28 @@ function StateDetailGrid() {
           </Grid>
 
           <Dialog open={openFlow} onClose={() => setOpenFlow(false)} maxWidth="xl" fullWidth>
-            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white', fontWeight: 'medium' }}>
+            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white', fontWeight: 'medium', display: 'flex', alignItems: 'center', gap: 1 }}>
               遷移図: {name || '不明'}
+              <Chip
+                size="small"
+                icon={<SyncIcon style={{ color: '#60a5fa' }} />}
+                label="同期"
+                sx={{ ml: 2, bgcolor: 'rgba(255,255,255,0.15)', color: 'white' }}
+              />
+              <Chip
+                size="small"
+                icon={<BoltIcon style={{ color: '#facc15' }} />}
+                label="非同期"
+                sx={{ bgcolor: 'rgba(255,255,255,0.15)', color: 'white' }}
+              />
+              <Typography variant="caption" sx={{ ml: 1, opacity: 0.85 }}>
+                （ノード右上の <TuneIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> またはノード自体をクリックしてEnter/Update/Exitの同期・非同期を設定）
+              </Typography>
             </DialogTitle>
             <DialogContent sx={{ p: 0, height: '80vh', display: 'flex' }}>
               <div
                 ref={reactFlowWrapper}
-                style={{ flex: 1, height: '100%' }}
+                style={{ flex: 1, height: '100%', background: '#0b1220' }}
                 onDrop={onDrop}
                 onDragOver={onDragOver}
               >
@@ -972,16 +1208,27 @@ function StateDetailGrid() {
                   snapGrid={[15, 15]}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
-                  defaultEdgeOptions={{ type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } }}
+                  defaultEdgeOptions={{ type: 'custom', animated: true, style: { stroke: '#38bdf8', strokeWidth: 2.5 } }}
+                  proOptions={{ hideAttribution: true }}
                 >
-                  <Background variant="dots" gap={15} size={1} />
-                  <Controls />
-                  <MiniMap nodeStrokeColor="#1E40AF" nodeColor="#90CAF9" nodeBorderRadius={2} />
+                  <Background variant="dots" gap={16} size={1} color="#1f2a3d" />
+                  <Controls
+                    style={{ borderRadius: 10, overflow: 'hidden', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}
+                  />
+                  <MiniMap
+                    nodeStrokeColor="#3b82f6"
+                    nodeColor="#1d4ed8"
+                    maskColor="rgba(11,18,32,0.75)"
+                    style={{ background: '#0f172a', borderRadius: 10, border: '1px solid #1f2a3d' }}
+                  />
                 </ReactFlow>
               </div>
               <Box sx={{ width: 300, bgcolor: 'background.paper', p: 2, borderLeft: 1, borderColor: 'divider', overflowY: 'auto' }}>
-                <Typography variant="h6" gutterBottom>
-                  遷移リスト (ドラッグして追加)
+                <Typography variant="h6" gutterBottom sx={{ fontWeight: 700 }}>
+                  遷移リスト
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  カードをキャンバスへドラッグしてノードを追加
                 </Typography>
                 <TextField
                   label="遷移を検索"
@@ -991,24 +1238,39 @@ function StateDetailGrid() {
                   margin="dense"
                   variant="outlined"
                   placeholder="状態名でフィルタリング"
+                  size="small"
+                  sx={{ mt: 1, mb: 1 }}
                 />
-                <List>
-                  {filteredTransitions.length > 0 ? (
-                    filteredTransitions.map((transition) => (
-                      <ListItem
+                {filteredTransitions.length > 0 ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {filteredTransitions.map((transition) => (
+                      <Box
                         key={transition.id}
                         draggable
                         onDragStart={(e) => onDragStart(e, transition.id, transition.fromState)}
+                        sx={{
+                          p: 1,
+                          borderRadius: 2,
+                          cursor: 'grab',
+                          bgcolor: 'action.hover',
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          transition: 'all 0.15s',
+                          '&:hover': { bgcolor: 'primary.light', borderColor: 'primary.main' },
+                        }}
                       >
-                        <ListItemText primary={transition.fromState} />
-                      </ListItem>
-                    ))
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      該当する遷移がありません
-                    </Typography>
-                  )}
-                </List>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{transition.fromState}</Typography>
+                        {transition.description && (
+                          <Typography variant="caption" color="text.secondary">{transition.description}</Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    該当する遷移がありません
+                  </Typography>
+                )}
               </Box>
             </DialogContent>
             <DialogActions>
@@ -1176,6 +1438,72 @@ function StateDetailGrid() {
               </Button>
               <Button onClick={handleAddSubNodeConfirm} color="primary" variant="contained" sx={{ textTransform: 'none' }}>
                 追加
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Dialog open={openLifecycleDialog} onClose={handleCloseLifecycleDialog} maxWidth="sm" fullWidth>
+            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white', fontWeight: 'medium' }}>
+              ライフサイクル設定{lifecycleNodeLabel ? `: ${lifecycleNodeLabel}` : ''}
+            </DialogTitle>
+            <DialogContent sx={{ pt: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Combinedモード（同期・非同期を同時に動かすAPI）で、このStateのEnter/Update/Exitそれぞれについて
+                同期・非同期のどちらを呼び出すかを設定します。各行、最低ひとつはチェックが必要です。
+              </Typography>
+              {LIFECYCLE_STAGES.map(({ key, label }) => (
+                <Box
+                  key={key}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    py: 1,
+                    px: 1.5,
+                    mb: 1,
+                    borderRadius: 2,
+                    bgcolor: 'action.hover',
+                  }}
+                >
+                  <Typography variant="subtitle2" sx={{ minWidth: 90 }}>{label}</Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          icon={<SyncIcon fontSize="small" />}
+                          checkedIcon={<SyncIcon fontSize="small" color="primary" />}
+                          checked={lifecycleDraft[key].sync}
+                          onChange={() => handleToggleLifecycle(key, 'sync')}
+                        />
+                      }
+                      label="同期"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          icon={<BoltIcon fontSize="small" />}
+                          checkedIcon={<BoltIcon fontSize="small" sx={{ color: '#f59e0b' }} />}
+                          checked={lifecycleDraft[key].async}
+                          onChange={() => handleToggleLifecycle(key, 'async')}
+                        />
+                      }
+                      label="非同期"
+                    />
+                  </Box>
+                </Box>
+              ))}
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="caption" color="text.secondary">
+                例: Updateで「非同期」のみチェックすると、Combinedモードでは UpdateAsync だけが呼ばれ、
+                同期側は自動的に完了扱いになります（IsActive/IsActiveAsyncの管理は生成コードが自動で行います）。
+              </Typography>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseLifecycleDialog} color="secondary" sx={{ textTransform: 'none' }}>
+                キャンセル
+              </Button>
+              <Button onClick={handleSaveLifecycle} color="primary" variant="contained" sx={{ textTransform: 'none' }}>
+                適用
               </Button>
             </DialogActions>
           </Dialog>
