@@ -52,6 +52,89 @@ import pythonSrc.matrix
 import pythonSrc.state
 import pythonSrc.behavior_routes
 
+# サーバーモード関連（認証/権限/バージョン管理/お知らせ/ワークスペース/ダウンロード）
+import pythonSrc.activity_log as activity_log
+import pythonSrc.auth as auth
+import pythonSrc.versioning as versioning
+import pythonSrc.announcements as announcements
+import pythonSrc.workspace_routes as workspace_routes
+import pythonSrc.download as download_module
+
+# `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
+# 引数なしの通常起動では、これまで通り誰でも編集可能。
+def _prompt_launch_mode_dialog():
+    """コマンドライン引数で起動モードが指定されなかった場合、
+    起動時にダイアログでサーバーモード／通常モードを選択させる。"""
+    import tkinter as tk
+
+    result = {"server_mode": False}
+    root = tk.Tk()
+    root.title("起動モード選択")
+    root.configure(bg="#0a0e17")
+    root.geometry("440x260")
+    root.resizable(False, False)
+    root.attributes("-topmost", True)
+
+    tk.Label(
+        root, text="起動モードを選択してください", fg="#00eaff", bg="#0a0e17",
+        font=("Meiryo", 14, "bold")
+    ).pack(pady=(28, 8))
+    tk.Label(
+        root,
+        text="サーバーモード：ログイン必須。役職(管理人/編集者/閲覧者)ごとの\n"
+             "編集権限・バージョン管理・ワークスペースが有効になります。\n"
+             "通常モード：これまで通り、誰でも自由に編集できます。",
+        fg="#8fa3b8", bg="#0a0e17", font=("Meiryo", 9), justify="center"
+    ).pack(pady=(0, 20))
+
+    def choose_server():
+        result["server_mode"] = True
+        root.destroy()
+
+    def choose_normal():
+        result["server_mode"] = False
+        root.destroy()
+
+    btn_frame = tk.Frame(root, bg="#0a0e17")
+    btn_frame.pack()
+    tk.Button(
+        btn_frame, text="🖧  サーバーモードで起動", command=choose_server,
+        bg="#00eaff", fg="#0a0e17", activebackground="#33f0ff",
+        font=("Meiryo", 10, "bold"), width=26, height=2, relief="flat", bd=0,
+        cursor="hand2"
+    ).pack(pady=6)
+    tk.Button(
+        btn_frame, text="通常モードで起動", command=choose_normal,
+        bg="#1c2536", fg="#e6f7ff", activebackground="#2a3650",
+        font=("Meiryo", 10), width=26, height=2, relief="flat", bd=0,
+        cursor="hand2"
+    ).pack(pady=6)
+
+    root.protocol("WM_DELETE_WINDOW", choose_normal)  # ×で閉じたら通常モード扱い
+    root.mainloop()
+    return result["server_mode"]
+
+
+def _determine_server_mode():
+    args = [a.lower() for a in sys.argv[1:]]
+    if "server" in args:
+        return True
+    if "normal" in args:
+        return False
+    # 明示的な引数が無ければ、起動時にUIで選択させる
+    # （PyInstaller等でダブルクリック起動された場合を想定）
+    try:
+        return _prompt_launch_mode_dialog()
+    except Exception as e:
+        # tkinterが使えない環境（純粋なCLIサーバー等）ではデフォルトで通常モード起動
+        print(f"起動モード選択ダイアログを表示できませんでした（通常モードで起動します）: {e}")
+        return False
+
+
+# `python app.py Server` / `python app.py Normal` で明示指定できるほか、
+# 引数無しで起動した場合は上記ダイアログでの選択になる。
+SERVER_MODE = _determine_server_mode()
+
 from pythonSrc.constants import (
     ENUM,
     CLASS_DATA,
@@ -104,6 +187,15 @@ app = Flask(__name__, static_folder=STATIC_FOLDER)
 
 SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
 SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+activity_log.init(DATA_DIR)
+# 認証(ログイン必須化・役職/権限チェック)をFlaskアプリへ組み込む。
+# SERVER_MODE=False（通常起動）の場合はチェックを行わないため、既存の挙動は変わらない。
+auth.register(app, DATA_DIR, SERVER_MODE)
+if SERVER_MODE:
+    print(f"[Server Mode] ログインが必要です。デフォルト管理者: "
+          f"{auth.DEFAULT_ADMIN_USERNAME} / {auth.DEFAULT_ADMIN_PASSWORD}（マイページで変更してください）")
 
 
 def find_highest_assets_folder(base_folder=BASE_DIR):
@@ -2788,6 +2880,23 @@ if __name__ == '__main__':
     pythonSrc.matrix.register(app, DATA_DIR)
     pythonSrc.state.register(app, DATA_DIR)
     pythonSrc.behavior_routes.register(app, DATA_DIR)
+
+    # お知らせ / ワークスペース / ダウンロード
+    # ※ announcements 等のフォルダ作成は、versioning の初回スナップショットより
+    #   必ず先に行うこと（後だと "data/" の初回バージョンにフォルダが含まれず、
+    #   バージョン切替時に消えてしまうため）。
+    announcements.register(app, DATA_DIR)
+    workspace_routes.register(app, DATA_DIR, SERVER_MODE)
+    download_module.register(app, DATA_DIR)
+
+    # バージョン管理（他の全ディレクトリ初期化が終わった最後に登録する）
+    versioning.register(app, DATA_DIR, BASE_DIR, SERVER_MODE)
+
+    if SERVER_MODE:
+        # サーバー起動中は、編集ログ＆自動バージョンスナップショットを
+        # 直近7日分だけ保持するようにローテーションする。
+        activity_log.start_rotation_thread(interval_seconds=3600, retention_days=7)
+        versioning.start_rotation_thread(interval_seconds=6 * 3600, retention_days=7)
 
     # Keep the main thread alive
     try:
