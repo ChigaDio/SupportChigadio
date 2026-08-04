@@ -368,6 +368,11 @@ namespace AddressableSystem
     {
         private readonly Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>> groupDataMap =
             new Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>>();
+            
+        public Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>> GetAllEntries()
+        {
+            return groupDataMap;
+        }
 
         public int Count
         {
@@ -674,6 +679,7 @@ namespace AddressableSystem
             }
             return new List<AssetCategory>();
         }
+        
     }
 }
     """
@@ -695,7 +701,7 @@ namespace AddressableSystem
     public class AddressableDataCore : MonoBehaviour
     {
         private static AddressableDataCore instance;
-        [SerializeField] private IAddressableDataContainer dataContainer = new AddressableDataContainer();
+        [SerializeField] private AddressableDataContainer dataContainer = new AddressableDataContainer();
         private readonly Dictionary<int, Dictionary<GroupCategory, List<BaseAddressableData>>> sceneDataMap =
             new Dictionary<int, Dictionary<GroupCategory, List<BaseAddressableData>>>();
         private CancellationTokenSource cts = new CancellationTokenSource();
@@ -715,7 +721,7 @@ namespace AddressableSystem
             }
         }
 
-        public IAddressableDataContainer DataContainer => dataContainer;
+        public AddressableDataContainer DataContainer => dataContainer;
 
         public static AddressableObject<T> CreateAddressable<T>(string path) where T : UnityEngine.Object
         {
@@ -938,6 +944,11 @@ namespace AddressableSystem
         {
             return dataContainer?.GetGroupStats() ?? string.Empty;
         }
+        
+        public Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>>  GetAllEntries()
+        {
+            return dataContainer?.GetAllEntries();
+        }
     }
 }
 
@@ -1061,6 +1072,7 @@ namespace AddressableSystem
     public abstract class BaseAddressableData
     {
         protected bool isArray;
+        public bool IsArray => isArray;
         protected bool isSetup;
         protected bool isLoaded;
         protected bool isAutoRelease;
@@ -1132,6 +1144,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
 
@@ -1285,34 +1298,33 @@ namespace AddressableSystem.EditorTools
             {
                 EditorGUILayout.Space(20);
                 EditorGUILayout.HelpBox(
-                    "Playモード中に AddressableDataCore が管理しているロード状況をここに表示します。\\n" +
+                    "Playモード中に AddressableDataCore が管理しているロード状況をここに表示します。\n" +
                     "Playを開始すると自動的に更新されます。",
                     MessageType.Info);
                 return;
             }
 
             AddressableDataCore core = AddressableDataCore.Instance;
-            List<BaseAddressableData> entries = core.GetAllEntries();
+            Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>> entries = core.GetAllEntries();
 
             if (!string.IsNullOrEmpty(searchText))
             {
-                entries = entries
-                    .Where(e => e != null && e.path != null &&
-                                e.path.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0)
-                    .ToList();
+                entries = entries.ToDictionary(
+                    g => g.Key,
+                    g => g.Value.ToDictionary(
+                        c => c.Key,
+                        c => c.Value.Where(e => e.path != null && e.path.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0).ToList()
+                    )
+                );
             }
 
             int total = entries.Count;
-            int loaded = entries.Count(e => e.IsLoadedAndSetup);
+            int loaded = entries.Sum(g => g.Value.Sum(c => c.Value.Count(e => e.IsLoadedAndSetup)));
             DrawSummaryCard(total, loaded);
 
             EditorGUILayout.Space(6);
 
-            List<GroupCategory> groups = entries
-                .Select(e => e.groupCategory)
-                .Distinct()
-                .OrderBy(g => g.ToString())
-                .ToList();
+            List<GroupCategory> groups = entries.Keys.OrderBy(g => g.ToString()).ToList();
 
             if (groups.Count == 0)
             {
@@ -1322,7 +1334,7 @@ namespace AddressableSystem.EditorTools
 
             foreach (GroupCategory group in groups)
             {
-                List<BaseAddressableData> groupEntries = entries.Where(e => e.groupCategory == group).ToList();
+                List<BaseAddressableData> groupEntries = entries[group].SelectMany(c => c.Value).ToList();
                 DrawGroupCard(group, groupEntries, core);
             }
         }
@@ -1444,7 +1456,7 @@ namespace AddressableSystem.EditorTools
             if (settings == null)
             {
                 EditorGUILayout.HelpBox(
-                    "Addressable Asset Settings が見つかりません。\\n" +
+                    "Addressable Asset Settings が見つかりません。\n" +
                     "Window > Asset Management > Addressables > Groups からセットアップしてください。",
                     MessageType.Warning);
                 return;
@@ -1527,8 +1539,7 @@ namespace AddressableSystem.EditorTools
         }
     }
 }
-#endif
-    """
+#endif"""
     generate_file(os.path.join(ADDRESSABLE_EDITOR_DIR,"AddressableManagerWindow.cs"),code_str.strip() + "\\n")
 
     code_str = """

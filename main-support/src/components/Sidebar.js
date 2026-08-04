@@ -53,6 +53,12 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
     },
   ];
 
+  // ワークスペース／お知らせはサブメニューを持たない単独リンク
+  const singleItems = [
+    { name: 'Workspace' },
+    { name: 'Announcements' },
+  ];
+
   return (
     <Drawer
       variant="permanent"
@@ -66,6 +72,16 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
       }}
     >
       <List>
+        {singleItems.map((item) => (
+          <ListItem
+            button
+            key={item.name}
+            onClick={() => handleMenuClick(item.name, null)}
+            selected={selectedMenu === item.name}
+          >
+            <ListItemText primary={item.name === 'Workspace' ? 'ワークスペース' : 'お知らせ'} />
+          </ListItem>
+        ))}
         {menuItems.map((item) => (
           <React.Fragment key={item.name}>
             <ListItem

@@ -542,24 +542,25 @@ def generate_state_classes(file_path, name, json_data):
         targets = node.get("data", {}).get("targets", [])
         # Base{name}{label}State.cs
         base_label_state_path = os.path.join(state_dir, f'Base{name}{label}State.cs')
+        lifecycle = _get_node_lifecycle(node)
         with open(base_label_state_path, 'w', encoding='utf-8') as f:
             f.write('using UnityEngine;\n')
             f.write('using GameCore.States.Branch;\n\n')
             f.write('namespace GameCore.States\n{\n')
             f.write(f'    public abstract class Base{name}{label}State : GameCore.States.Base{name}State\n')
             f.write('    {\n')
-
+            f.write(_build_lifecycle_block(lifecycle))
 
             f.write('    }\n')
             f.write('}\n')
+            
 
         # {name}{label}{id:02d}State.cs
         state_class_path = os.path.join(state_dir, f'{name}{label}State.cs')
-        lifecycle = _get_node_lifecycle(node)
+        ensure_lifecycle_in_state_class(base_label_state_path, lifecycle)
         if os.path.exists(state_class_path):
             # 既存なら追記・削除の調整を実施
             ensure_branchnext_in_state_class(state_class_path, name, label, targets)
-            ensure_lifecycle_in_state_class(state_class_path, lifecycle)
         else:
             # 新規生成
             with open(state_class_path, 'w', encoding='utf-8') as f:
@@ -594,7 +595,7 @@ def generate_state_classes(file_path, name, json_data):
 
         if os.path.exists(base_label_state_path):
             # 既存ならライフサイクル設定だけ同期する
-            ensure_lifecycle_in_state_class(state_class_path, transition_lifecycle)
+            ensure_lifecycle_in_state_class(base_label_state_path, transition_lifecycle)
             continue
 
         with open(base_label_state_path, 'w', encoding='utf-8') as f:
@@ -1231,20 +1232,20 @@ def generate_base(data_dir):
         /// ct は StateControl 側で管理される CancellationToken で、
         /// 状態遷移が起きた時点で自動的にキャンセルされる。
         /// </summary>
-        public virtual UniTask EnterAsync(T state_manager_data, CancellationToken ct)
+        public virtual async UniTask EnterAsync(T state_manager_data, CancellationToken ct)
         {
             Enter(state_manager_data);
-            return UniTask.CompletedTask;
+            await UniTask.CompletedTask;
         }
-        public virtual UniTask UpdateAsync(T state_manager_data, CancellationToken ct)
+        public virtual async UniTask UpdateAsync(T state_manager_data, CancellationToken ct)
         {
             Update(state_manager_data);
-            return UniTask.CompletedTask;
+            await UniTask.CompletedTask;
         }
-        public virtual UniTask ExitAsync(T state_manager_data, CancellationToken ct)
+        public virtual async UniTask ExitAsync(T state_manager_data, CancellationToken ct)
         {
             Exit(state_manager_data);
-            return UniTask.CompletedTask;
+            await UniTask.CompletedTask;
         }
 
         public virtual E BranchNextState(T state_manager_data)

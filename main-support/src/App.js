@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { Box } from '@mui/material';
+import { Box, AppBar, Toolbar, Typography, Button, CircularProgress } from '@mui/material';
+import { ThemeProvider, CssBaseline } from '@mui/material';
+import cyberTheme from './theme/cyberTheme';
 import Sidebar from './components/Sidebar';
 import Content from './components/Content';
 import EnumIdGrid from './components/EnumIdGrid';
@@ -44,8 +46,42 @@ import DbgLog from './components/DebugLog'
 
 import DbgCommand from './components/DebugCommandConsole'
 
+// --- サーバーモード関連の追加ページ ---
+import { AuthProvider, useAuth } from './context/AuthContext';
+import Login from './components/Login';
+import MyPage from './components/MyPage';
+import Workspace from './components/Workspace';
+import AnnouncementList from './components/AnnouncementList';
+import AnnouncementDetail from './components/AnnouncementDetail';
+import AnnouncementEditor from './components/AnnouncementEditor';
+import VersionBadge from './components/VersionBadge';
+
+function TopBar() {
+  const { user, serverMode, logout } = useAuth();
+  const navigate = useNavigate();
+
+  return (
+    <AppBar position="static" color="default" elevation={1}>
+      <Toolbar sx={{ gap: 2 }}>
+        <Typography variant="h6" sx={{ flexGrow: 1 }}>Unity Data Tool</Typography>
+        <VersionBadge />
+        {serverMode && user && (
+          <>
+            <Typography variant="body2">
+              {user.username}（{{ admin: '管理人', editor: '編集者', viewer: '閲覧者' }[user.role] || user.role}）
+            </Typography>
+            <Button size="small" onClick={() => navigate('/mypage')}>マイページ</Button>
+            <Button size="small" onClick={logout}>ログアウト</Button>
+          </>
+        )}
+      </Toolbar>
+    </AppBar>
+  );
+}
+
 function AppContent() {
   const navigate = useNavigate();
+  const { serverMode, user, loading } = useAuth();
   const [selectedMenu, setSelectedMenu] = useState('GenerateTool');
 
   // Menu click handler
@@ -135,56 +171,84 @@ function AppContent() {
             break;
           
       }
+    } else if (menu === 'Workspace') {
+      navigate('/workspace');
+    } else if (menu === 'Announcements') {
+      navigate('/announcements');
     }
     else {
       navigate('/');
     }
   };
 
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  // サーバーモードで未ログインの場合はログイン画面のみ表示する
+  if (serverMode && !user) {
+    return <Login />;
+  }
+
   return (
-    <Box sx={{ display: 'flex' }}>
-      <Sidebar selectedMenu={selectedMenu} handleMenuClick={handleMenuClick} />
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
-        <Routes>
-          <Route path="/" element={<Content />} />
-          <Route path="/enum-id" element={<EnumIdGrid />} />
-          <Route path="/enum/:name" element={<EnumDetailGrid />} />
-          <Route path="/const-class-data" element={<ConstClassDataGrid />} />
-          <Route path="/const-class-data/:name" element={<ConstClassDataDetailGrid />} />
-          <Route path="/class-data" element={<ClassDataGrid />} />
-          <Route path="/class/:name" element={<ClassDataDetailGrid />} />
-          <Route path="/class-data-id" element={<ClassDataIdGrid />} />
-          <Route path="/class-data-id/:name" element={<ClassDataIdDetailGrid />} />
-          <Route path="/class-data-matrix-id" element={<ClassDataMatrinxIdGrid />} />
-          <Route path="/class-data-matrix-id/:name" element={<ClassDataMatrinxIdDetailGrid />} />
-          <Route path="/state" element={<StateGrid />} />
-          <Route path="/state/:name" element={<StateDetailGridGrid />} />
-          <Route path="/behavior" element={<BehaviorGrid />} />
-          <Route path="/behavior/:name" element={<BehaviorDetailGrid />} />
-          <Route path="/scenario-role" element={<ScenarioRoleGrid />} />
-          <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
-          <Route path="/scenario-event" element={<ScenarioEventGrid />} />
-          <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      <TopBar />
+      <Box sx={{ display: 'flex', flexGrow: 1 }}>
+        <Sidebar selectedMenu={selectedMenu} handleMenuClick={handleMenuClick} />
+        <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+          <Routes>
+            <Route path="/" element={<Content />} />
+            <Route path="/enum-id" element={<EnumIdGrid />} />
+            <Route path="/enum/:name" element={<EnumDetailGrid />} />
+            <Route path="/const-class-data" element={<ConstClassDataGrid />} />
+            <Route path="/const-class-data/:name" element={<ConstClassDataDetailGrid />} />
+            <Route path="/class-data" element={<ClassDataGrid />} />
+            <Route path="/class/:name" element={<ClassDataDetailGrid />} />
+            <Route path="/class-data-id" element={<ClassDataIdGrid />} />
+            <Route path="/class-data-id/:name" element={<ClassDataIdDetailGrid />} />
+            <Route path="/class-data-matrix-id" element={<ClassDataMatrinxIdGrid />} />
+            <Route path="/class-data-matrix-id/:name" element={<ClassDataMatrinxIdDetailGrid />} />
+            <Route path="/state" element={<StateGrid />} />
+            <Route path="/state/:name" element={<StateDetailGridGrid />} />
+            <Route path="/behavior" element={<BehaviorGrid />} />
+            <Route path="/behavior/:name" element={<BehaviorDetailGrid />} />
+            <Route path="/scenario-role" element={<ScenarioRoleGrid />} />
+            <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
+            <Route path="/scenario-event" element={<ScenarioEventGrid />} />
+            <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
 
-          <Route path="/custom-class-data" element={<CustomClassDataGrid />} />
-          <Route path="/custom-class-data/:name" element={<CustomClassDataDetailGrid />} />
-          <Route path="/custom-class-data-id" element={<CustomClassDataIdGrid />} />
-          <Route path="/custom-class-data-id/:name" element={<CustomClassDataIdDetailGrid />} />
+            <Route path="/custom-class-data" element={<CustomClassDataGrid />} />
+            <Route path="/custom-class-data/:name" element={<CustomClassDataDetailGrid />} />
+            <Route path="/custom-class-data-id" element={<CustomClassDataIdGrid />} />
+            <Route path="/custom-class-data-id/:name" element={<CustomClassDataIdDetailGrid />} />
 
 
-          <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
-          <Route path="/sound" element={<Sound />} />
-          <Route path="/texture" element={<Texture />} />
-          <Route path="/gameobject" element={<GameObject />} />
-          <Route path='/material' element={<Material />}/>
-          <Route path="/animator" element={<AnimatorGrid />} />
-          <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
-          <Route path="/scene" element={<Scene />} />
-          <Route path="/save-data" element={<SaveDataGrid />} />
-          <Route path="/log" element={<DbgLog />} />
-          <Route path="/command" element={<DbgCommand />} />
+            <Route path="/scenario-conditions" element={<ScenarioConditionsGrid />} />
+            <Route path="/sound" element={<Sound />} />
+            <Route path="/texture" element={<Texture />} />
+            <Route path="/gameobject" element={<GameObject />} />
+            <Route path='/material' element={<Material />}/>
+            <Route path="/animator" element={<AnimatorGrid />} />
+            <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
+            <Route path="/scene" element={<Scene />} />
+            <Route path="/save-data" element={<SaveDataGrid />} />
+            <Route path="/log" element={<DbgLog />} />
+            <Route path="/command" element={<DbgCommand />} />
 
-        </Routes>
+            {/* --- 追加ページ --- */}
+            <Route path="/mypage" element={<MyPage />} />
+            <Route path="/workspace" element={<Workspace />} />
+            <Route path="/announcements" element={<AnnouncementList />} />
+            <Route path="/announcements/new" element={<AnnouncementEditor />} />
+            <Route path="/announcements/:id" element={<AnnouncementDetail />} />
+            <Route path="/announcements/:id/edit" element={<AnnouncementEditor />} />
+
+          </Routes>
+        </Box>
       </Box>
     </Box>
   );
@@ -192,9 +256,14 @@ function AppContent() {
 
 function App() {
   return (
-    <Router>
-      <AppContent />
-    </Router>
+    <ThemeProvider theme={cyberTheme}>
+      <CssBaseline />
+      <Router>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </Router>
+    </ThemeProvider>
   );
 }
 
