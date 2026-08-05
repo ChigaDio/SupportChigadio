@@ -46,6 +46,11 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+
 
 @bp.route('/api/class-data-id', methods=['GET', 'POST', 'PATCH'])
 def manage_class_data_id():

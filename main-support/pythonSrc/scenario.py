@@ -35,6 +35,11 @@ SCENARIO_ROLE =  os.path.join(SCENARIO_DATA, 'scenario_role')
 SCENARIO_CONDITIONS_DATA = os.path.join(SCENARIO_DATA, 'scenario_conditions_data')
 SCENARIO_EVENT = os.path.join(SCENARIO_DATA, 'scenario_event_data')
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+
 def generate_scenario_folder(parent_path : str):
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA)):
         os.makedirs(os.path.join(parent_path, SCENARIO_DATA))

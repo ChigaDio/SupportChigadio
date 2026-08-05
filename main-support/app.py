@@ -189,10 +189,19 @@ SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
 SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
 os.makedirs(DATA_DIR, exist_ok=True)
-activity_log.init(DATA_DIR)
+
+# --- META_DIR: バージョン管理(data/のバージョン切替)の影響を受けない固定フォルダ ---
+# ユーザーアカウント・編集ログ・お知らせは「今どのバージョンがアクティブか」に
+# 関わらず常に同じ場所に保存したいため、versionsの対象外である
+# DATA_DIR(=project/data、バージョン切替時にリンク先が変わる)ではなく、
+# ここ(project/app_meta)に保存する。
+META_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "app_meta"))
+os.makedirs(META_DIR, exist_ok=True)
+
+activity_log.init(META_DIR)
 # 認証(ログイン必須化・役職/権限チェック)をFlaskアプリへ組み込む。
 # SERVER_MODE=False（通常起動）の場合はチェックを行わないため、既存の挙動は変わらない。
-auth.register(app, DATA_DIR, SERVER_MODE)
+auth.register(app, META_DIR, SERVER_MODE)
 if SERVER_MODE:
     print(f"[Server Mode] ログインが必要です。デフォルト管理者: "
           f"{auth.DEFAULT_ADMIN_USERNAME} / {auth.DEFAULT_ADMIN_PASSWORD}（マイページで変更してください）")
@@ -2882,14 +2891,13 @@ if __name__ == '__main__':
     pythonSrc.behavior_routes.register(app, DATA_DIR)
 
     # お知らせ / ワークスペース / ダウンロード
-    # ※ announcements 等のフォルダ作成は、versioning の初回スナップショットより
-    #   必ず先に行うこと（後だと "data/" の初回バージョンにフォルダが含まれず、
-    #   バージョン切替時に消えてしまうため）。
-    announcements.register(app, DATA_DIR)
+    # announcements(お知らせ)はバージョン管理の対象外(META_DIR)に保存する。
+    # download_module はプロジェクトデータ(DATA_DIR)を対象にする。
+    announcements.register(app, META_DIR)
     workspace_routes.register(app, DATA_DIR, SERVER_MODE)
     download_module.register(app, DATA_DIR)
 
-    # バージョン管理（他の全ディレクトリ初期化が終わった最後に登録する）
+    # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）
     versioning.register(app, DATA_DIR, BASE_DIR, SERVER_MODE)
 
     if SERVER_MODE:

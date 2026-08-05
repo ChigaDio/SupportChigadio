@@ -9,13 +9,19 @@ pythonSrc/download.py
 - .json / .bytes / .txt などのデータファイルは常に含める。
 - 自動生成コードのうち "Base〜" (例: BaseFoo.cs / BaseFoo.py / BaseFoo.js) は
   再ダウンロードに含めてよい（基礎クラスは常に自動生成されるため）。
-- 一方、対応する Base〜 ファイルが存在する「本実装クラス」(例: Foo.cs) は
-  ユーザーがUnity側で手を加えている可能性があるため、以下のルールでチェックリスト化する:
+- 一方、Base/本実装の分割生成を実際に行っているカテゴリ配下にある
+  "Base〜" で始まらないコードファイル（本実装クラス。例: Foo.cs、
+  {name}RoleAction.cs、{name}{label}State.cs、{name}StateManagerData.cs、
+  {name}{label}StateBranch.cs、SystemData.cs 等）は、ユーザーがUnity側で
+  手を加えている可能性があるため、以下のルールでチェックリスト化する:
     - 保存先に **まだ存在しない** 場合 → 初期状態でチェック（含める）
     - 保存先に **既に存在する** 場合   → 初期状態でチェックを外す（上書きしない）
   実際に含めるかどうかは、フロントエンドでユーザーが確認・変更したチェック結果
   (`selectedFiles`) に従う。
-- Enum関連の生成物には Base/本実装の区別が無いため、除外対象にしない。
+- Enum・ClassDataID・ClassDataMatrixID・CustomClassDataID・
+  Assets(Sound/Texture/GameObject/Material/Scene)・ScenarioEvent・
+  ScenarioConditions・Animator・ConstClassData 等、分割生成を行わない
+  カテゴリは対象にしない（常にそのまま全て含める）。
 - users.json / .flask_secret など機微ファイルは常に除外する。
 """
 import os
@@ -28,35 +34,70 @@ _DATA_DIR = None
 # 除外判定の対象拡張子（自動生成コードのみ。json/bytes等は対象外＝常に含める）
 _CLASS_CODE_EXTENSIONS = {".cs", ".py", ".js"}
 
-# このフォルダ名を含むパスは enum 系生成物とみなし、Base/本実装の区別をしない
-_ENUM_DIR_MARKERS = {"enum"}
+# 「Base〜 / 本実装クラス」の分割生成が実際に行われているカテゴリの
+# フォルダパス（DATA_DIRからの相対パス、POSIX区切り）のみを除外判定の対象にする。
+# 各generatorの実装を確認した結果:
+#   - class_data                  : class_data.py       Base{name}.cs / {name}.cs
+#   - custom_class_data           : customclassdata.py   Base{name}.cs / {name}.cs
+#   - behavior_data               : behavior.py          Base{name}〜.cs / {name}〜.cs
+#   - scenario_data/scenario_role : app.py                {name}RoleData.cs(常に自動再生成) /
+#                                                          {name}RoleAction.cs(初回のみ生成・本実装)
+#   - state_data                  : state.py             ManagerData/Base{name}StateManagerData.cs
+#                                                          / {name}StateManagerData.cs、
+#                                                          States/{name}{label}State.cs、
+#                                                          Branch/{name}{label}StateBranch.cs、
+#                                                          Branch/{name}{label}{id}DetailStateBranch.cs
+#   - save_data                   : savedata.py / app.py Base{name}.cs / {name}.cs
+#                                                          (name = SystemData / PlayerData)
+# これら配下では、"Base"で始まらないコードファイルは全て本実装候補として扱う
+# （個別のsibling一致チェックはせず、フォルダ単位でホワイトリスト化する方式。
+#  カテゴリごとに命名規則がまちまちなため、これが最も取りこぼしが少ない）。
+_CLASS_SPLIT_FOLDERS = [
+    "class_data",
+    "custom_class_data",
+    "behavior_data",
+    "scenario_data/scenario_role",
+    "state_data",
+    "save_data",
+]
 
-# ダウンロードに含めない機微ファイル（ユーザー情報/セッション鍵など）
+# ダウンロードに含めない機微ファイル（万一データフォルダ配下に紛れ込んだ場合の保険。
+# 通常はユーザー情報等はバージョン管理外のapp_metaフォルダに保存されるため、
+# ここには存在しない想定）
 _SENSITIVE_FILENAMES = {"users.json", ".flask_secret", "local_settings.json"}
 
 # ダウンロード対象から除外するトップレベルフォルダ
 _EXCLUDE_TOP_DIRS = {"logs"}
 
 
-def _is_enum_path(root):
-    parts = {p.lower() for p in root.replace("\\", "/").split("/")}
-    return bool(parts & _ENUM_DIR_MARKERS)
+def _rel_folder_posix(root, data_dir):
+    rel = os.path.relpath(root, data_dir).replace("\\", "/")
+    return "" if rel == "." else rel
 
 
 def _rel_posix(data_dir_rel, fname):
     return (fname if data_dir_rel == "." else f"{data_dir_rel}/{fname}").replace("\\", "/")
 
 
-def _is_concrete_class_file(root, fname, siblings):
-    """Base〜と対になっている「本実装クラス」ファイルかどうか。"""
+def _in_class_split_folder(rel_folder):
+    return any(rel_folder == p or rel_folder.startswith(p + "/") for p in _CLASS_SPLIT_FOLDERS)
+
+
+def _is_concrete_class_file(root, fname, siblings, data_dir):
+    """Base/本実装の分割生成が実在するカテゴリ配下にある「本実装クラス」ファイルかどうか。
+    対象カテゴリ配下（_CLASS_SPLIT_FOLDERS）でなければ、常に False（＝除外対象にしない）。"""
+    rel_folder = _rel_folder_posix(root, data_dir)
+    if not _in_class_split_folder(rel_folder):
+        return False
     name, ext = os.path.splitext(fname)
     if ext.lower() not in _CLASS_CODE_EXTENSIONS:
         return False
     if name.startswith("Base"):
         return False
-    if _is_enum_path(root):
-        return False
-    return f"Base{name}{ext}" in siblings
+    # フォルダがホワイトリスト対象であれば、Base〜で始まらないコードファイルは
+    # 命名規則が多様（{name}RoleAction.cs, {name}{label}State.cs 等）なため、
+    # siblingの厳密一致は求めずそのまま本実装候補として扱う。
+    return True
 
 
 def _dest_root(data_dir, dest_dir):
@@ -80,7 +121,7 @@ def scan_concrete_candidates(data_dir, dest_dir):
         for fname in files:
             if fname in _SENSITIVE_FILENAMES:
                 continue
-            if not _is_concrete_class_file(root, fname, siblings):
+            if not _is_concrete_class_file(root, fname, siblings, data_dir):
                 continue
             rel_path = _rel_posix(rel, fname)
             dest_file = os.path.join(dest_root, *rel_path.split("/"))
@@ -120,7 +161,7 @@ def copy_data_for_download(data_dir, dest_dir, selected_concrete_files=None):
             if fname in _SENSITIVE_FILENAMES:
                 skipped += 1
                 continue
-            if _is_concrete_class_file(root, fname, siblings):
+            if _is_concrete_class_file(root, fname, siblings, data_dir):
                 rel_path = _rel_posix(rel, fname)
                 if rel_path not in selected:
                     skipped += 1

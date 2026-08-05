@@ -44,6 +44,13 @@ PLUGIN = "Plugin"
 SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
 SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR, SAVE_DATA_DIR, SAVE_DATA_CUSTOM_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+    SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
+    SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
+
 # ========================
 # 1. 更新した TYPE_MAP（Pythonはそのまま、JSはDataView用に廃止 → 直接実装）
 # ========================

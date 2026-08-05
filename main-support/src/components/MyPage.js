@@ -1,58 +1,140 @@
 import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, TextField, Button, Divider, Grid, Select, MenuItem,
-  FormControl, InputLabel, Checkbox, FormControlLabel, Table, TableHead, TableRow,
-  TableCell, TableBody, IconButton, Alert, Chip
+  FormControl, InputLabel, Table, TableHead, TableRow,
+  TableCell, TableBody, IconButton, Alert, Chip, CircularProgress
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useAuth } from '../context/AuthContext';
 import VersionBadge from './VersionBadge';
+import CheckboxTree from './CheckboxTree';
 
 const ROLE_LABEL = { admin: '管理人', editor: '編集者', viewer: '閲覧者' };
 
+// 各カテゴリの「個別に許可するデータ」を、実際のJSON/APIから取得するための設定。
+// スペルミスを防ぐため、手入力ではなく実データから選ばせる。
+const CATEGORY_ITEM_SOURCES = {
+  enum: { endpoint: '/api/enum-id', extract: (d) => d.map((x) => x.name) },
+  const_class_data: { endpoint: '/api/const-class-data', extract: (d) => d.map((x) => x.name) },
+  class_data: { endpoint: '/api/class-data', extract: (d) => d.map((x) => x.name) },
+  class_data_id: { endpoint: '/api/class-data-id', extract: (d) => d.map((x) => x.name) },
+  class_data_matrix_id: { endpoint: '/api/class-data-matrix-id', extract: (d) => d.map((x) => x.name) },
+  custom_class_data: { endpoint: '/api/custom-class-data', extract: (d) => d.map((x) => x.name) },
+  custom_class_data_id: { endpoint: '/api/custom-class-data-id', extract: (d) => d.map((x) => x.name) },
+  state: { endpoint: '/api/state-data', extract: (d) => d.map((x) => x.name) },
+  behavior: { endpoint: '/api/behavior-data', extract: (d) => d.map((x) => x.name) },
+  scenario_role: { endpoint: '/api/scenario-role', extract: (d) => d.map((x) => x.name) },
+  assets_sound: { endpoint: '/api/sound', extract: (d) => Object.keys(d.groups || {}) },
+  assets_texture: { endpoint: '/api/texture', extract: (d) => Object.keys(d.groups || {}) },
+  assets_gameobject: { endpoint: '/api/gameobject', extract: (d) => Object.keys(d.groups || {}) },
+  assets_material: { endpoint: '/api/material', extract: (d) => Object.keys(d.groups || {}) },
+  assets_scene: { endpoint: '/api/scene/get', extract: (d) => (d.scenes || []).map((s) => s.enum) },
+  animator: { endpoint: '/api/animator-data', extract: (d) => d.map((x) => x.name) },
+  save_data: { staticItems: ['SystemData', 'PlayerData'] },
+};
+
+function useCategoryItems(categories) {
+  const [itemsByCategory, setItemsByCategory] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.all(
+      categories.map(async (cat) => {
+        const src = CATEGORY_ITEM_SOURCES[cat];
+        if (!src) return [cat, null]; // このカテゴリは個別データ選択に非対応
+        if (src.staticItems) return [cat, src.staticItems];
+        try {
+          const res = await fetch(src.endpoint);
+          if (!res.ok) return [cat, []];
+          const data = await res.json();
+          return [cat, src.extract(data) || []];
+        } catch (e) {
+          return [cat, []];
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      const map = {};
+      results.forEach(([cat, items]) => { map[cat] = items; });
+      setItemsByCategory(map);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [categories]);
+
+  return { itemsByCategory, loading };
+}
+
 function PermissionEditor({ categories, permissions, onChange }) {
   const perms = permissions || {};
+  const { itemsByCategory, loading } = useCategoryItems(categories);
+
   const update = (cat, patch) => {
     onChange({ ...perms, [cat]: { ...(perms[cat] || { all: false, items: [] }), ...patch } });
   };
+
+  const toggleItem = (cat, itemName, checked) => {
+    const current = perms[cat]?.items || [];
+    const next = checked ? [...new Set([...current, itemName])] : current.filter((n) => n !== itemName);
+    update(cat, { items: next });
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
+        <CircularProgress size={18} /><Typography variant="body2">データ一覧を読み込み中...</Typography>
+      </Box>
+    );
+  }
+
+  // カテゴリを親ノード、データ名を子ノードとするツリーを構築する。
+  const nodes = categories.map((cat) => {
+    const p = perms[cat] || { all: false, items: [] };
+    const items = itemsByCategory[cat]; // null = 個別選択非対応, [] = データ無し
+    const selectedCount = (p.items || []).length;
+    const catChecked = p.all ? true : (selectedCount > 0 ? 'indeterminate' : false);
+
+    let children;
+    let badge;
+    if (items === null) {
+      badge = <Chip size="small" label="全体のみ" variant="outlined" sx={{ ml: 1 }} />;
+      children = undefined;
+    } else if (items.length === 0) {
+      badge = <Chip size="small" label="データ無し" variant="outlined" sx={{ ml: 1 }} />;
+      children = undefined;
+    } else {
+      badge = (
+        <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+          {p.all ? 'すべて許可' : `${selectedCount}/${items.length}件`}
+        </Typography>
+      );
+      children = items.map((name) => ({
+        id: `${cat}/${name}`,
+        label: name,
+        checked: p.all || (p.items || []).includes(name),
+        disabled: p.all,
+        onToggle: (checked) => toggleItem(cat, name, checked),
+      }));
+    }
+
+    return {
+      id: cat,
+      label: cat,
+      checked: catChecked,
+      badge,
+      onToggle: (checked) => update(cat, { all: checked }),
+      children,
+    };
+  });
+
   return (
-    <Table size="small">
-      <TableHead>
-        <TableRow>
-          <TableCell>カテゴリ</TableCell>
-          <TableCell>すべて編集可</TableCell>
-          <TableCell>個別に許可するデータ名（カンマ区切り）</TableCell>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {categories.map((cat) => {
-          const p = perms[cat] || { all: false, items: [] };
-          return (
-            <TableRow key={cat}>
-              <TableCell>{cat}</TableCell>
-              <TableCell>
-                <Checkbox
-                  checked={!!p.all}
-                  onChange={(e) => update(cat, { all: e.target.checked })}
-                />
-              </TableCell>
-              <TableCell>
-                <TextField
-                  size="small"
-                  fullWidth
-                  disabled={p.all}
-                  value={(p.items || []).join(', ')}
-                  onChange={(e) => update(cat, {
-                    items: e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
-                  })}
-                  placeholder="例: PlayerParam, EnemyParam"
-                />
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+    <CheckboxTree
+      nodes={nodes}
+      searchPlaceholder="カテゴリ・データ名で検索..."
+      maxHeight={480}
+    />
   );
 }
 

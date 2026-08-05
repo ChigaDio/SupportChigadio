@@ -16,6 +16,13 @@ DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
 SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR, SAVE_DATA_DIR, SAVE_DATA_CUSTOM_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+    SAVE_DATA_DIR = os.path.join(DATA_DIR, "save_data")
+    SAVE_DATA_CUSTOM_DIR = os.path.join(SAVE_DATA_DIR, "custom_data")
+
 def generate_base():
     if not os.path.exists(SAVE_DATA_DIR):
         os.makedirs(SAVE_DATA_DIR)

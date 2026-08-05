@@ -23,6 +23,11 @@ else:
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 BEHAVIOR_DATA = os.path.join(DATA_DIR, "behavior_data")
 
+def init(data_dir):
+    global DATA_DIR, BEHAVIOR_DATA
+    DATA_DIR = os.path.abspath(data_dir)
+    BEHAVIOR_DATA = os.path.join(DATA_DIR, "behavior_data")
+
 def generate_csharp(path,code_str):
     if not os.path.exists(path):
         with open(path,"w",encoding="utf-8") as f:

@@ -75,6 +75,12 @@ PACK_MAP = {
 
 _state = {}  # register() で DATA_DIR 等を格納する
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global _state
+    _state['DATA_DIR'] = os.path.abspath(data_dir)
+    _ensure_dirs()
+
 
 def _data_dir():
     return _state['DATA_DIR']

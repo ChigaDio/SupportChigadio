@@ -34,6 +34,15 @@ CS_TYPE_MAP = {
     'vector3': 'Vector3',
 }
 
+DATA_DIR = None
+COMMAND_DIR = None
+
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR, COMMAND_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+    COMMAND_DIR = os.path.join(DATA_DIR, DEBUG_COMMAND)
+    os.makedirs(COMMAND_DIR, exist_ok=True)
 
 # ============================================================
 # C#コード生成用の小さなヘルパー
@@ -929,21 +938,21 @@ def generate_debug_command_cs(data_dir, name, args, has_return, return_fields):
 def register(app, data_dir):
     """app.py側からは import pythonSrc.dbgcommand as dbgcommand; dbgcommand.register(app, DATA_DIR)
     を呼ぶだけでOK。"""
-
-    cmd_root = os.path.join(data_dir, DEBUG_COMMAND)
-    os.makedirs(cmd_root, exist_ok=True)
+    DATA_DIR = data_dir
+    COMMAND_DIR = os.path.join(DATA_DIR, DEBUG_COMMAND)
+    os.makedirs(COMMAND_DIR, exist_ok=True)
 
     # 共通基盤(DebugCommandBase.cs)は起動時に必ず最新化しておく
-    generate_base(data_dir)
+    generate_base(DATA_DIR)
 
-    list_path = os.path.join(cmd_root, 'debug_command_list.json')
+    list_path = os.path.join(COMMAND_DIR, 'debug_command_list.json')
 
     # Installerは初回のみ空の状態で作成する。既に存在する場合は、
     # 常に上書きしていた従来の挙動（＝再起動のたびに登録済みコマンドが消える）をやめ、
     # 現在の登録一覧から再生成して同期させる。
-    installer_path = os.path.join(cmd_root, "DebugCommandInstaller.cs")
+    installer_path = os.path.join(COMMAND_DIR, "DebugCommandInstaller.cs")
     if not os.path.exists(installer_path):
-        generate_base_installer(data_dir)
+        generate_base_installer(DATA_DIR)
     else:
         try:
             if os.path.exists(list_path):
@@ -951,7 +960,7 @@ def register(app, data_dir):
                     _names = [item['name'] for item in json.load(f)]
             else:
                 _names = []
-            generate_installer(data_dir, _names)
+            generate_installer(DATA_DIR, _names)
         except Exception as e:
             logger.error(f"DebugCommandInstaller再同期エラー: {str(e)}")
 
@@ -966,7 +975,7 @@ def register(app, data_dir):
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     def _detail_path(name):
-        return os.path.join(cmd_root, name, f"{name}.json")
+        return os.path.join(COMMAND_DIR, name, f"{name}.json")
 
     def _load_detail(name):
         path = _detail_path(name)
@@ -1036,7 +1045,7 @@ def register(app, data_dir):
                 data = [item for item in data if item['name'] != delete_name]
                 _save_list(data)
 
-                cmd_dir = os.path.join(cmd_root, delete_name)
+                cmd_dir = os.path.join(COMMAND_DIR, delete_name)
                 if os.path.exists(cmd_dir):
                     shutil.rmtree(cmd_dir)
 

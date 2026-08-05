@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { Box, AppBar, Toolbar, Typography, Button, CircularProgress } from '@mui/material';
-import { ThemeProvider, CssBaseline } from '@mui/material';
-import cyberTheme from './theme/cyberTheme';
+import { ThemeModeProvider } from './theme/ThemeModeContext';
 import Sidebar from './components/Sidebar';
 import Content from './components/Content';
 import EnumIdGrid from './components/EnumIdGrid';
@@ -55,6 +54,7 @@ import AnnouncementList from './components/AnnouncementList';
 import AnnouncementDetail from './components/AnnouncementDetail';
 import AnnouncementEditor from './components/AnnouncementEditor';
 import VersionBadge from './components/VersionBadge';
+import ThemeSwitcher from './components/ThemeSwitcher';
 
 function TopBar() {
   const { user, serverMode, logout } = useAuth();
@@ -65,6 +65,7 @@ function TopBar() {
       <Toolbar sx={{ gap: 2 }}>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>Unity Data Tool</Typography>
         <VersionBadge />
+        <ThemeSwitcher />
         {serverMode && user && (
           <>
             <Typography variant="body2">
@@ -256,14 +257,13 @@ function AppContent() {
 
 function App() {
   return (
-    <ThemeProvider theme={cyberTheme}>
-      <CssBaseline />
+    <ThemeModeProvider>
       <Router>
         <AuthProvider>
           <AppContent />
         </AuthProvider>
       </Router>
-    </ThemeProvider>
+    </ThemeModeProvider>
   );
 }
 

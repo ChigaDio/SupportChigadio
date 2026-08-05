@@ -26,6 +26,14 @@ EDITOR_DIR = os.path.join(SCENE_DATA_DIR, "Editor")
 # "GameScene" という名前のenumとして扱う（C#での型名は GameSceneID になる）。
 SCENE_ENUM_NAME = "GameScene"
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR, SCENE_DATA_DIR, SCENE_JSON, EDITOR_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+    SCENE_DATA_DIR = os.path.join(DATA_DIR, "scene_data")
+    SCENE_JSON = os.path.join(SCENE_DATA_DIR, "scenes.json")
+    EDITOR_DIR = os.path.join(SCENE_DATA_DIR, "Editor")
+
 
 def generate_base():
     if not os.path.exists(DATA_DIR):

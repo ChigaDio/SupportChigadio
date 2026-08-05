@@ -20,6 +20,11 @@ bp = Blueprint('behavior_routes', __name__)
 # app.py 側の register(app, DATA_DIR) で設定される（pythonSrc.behavior 側は独自にDATA_DIRを解決する）
 DATA_DIR = None
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR
+    DATA_DIR = data_dir
+
 
 # Behavior Tree API (追加部分)
 

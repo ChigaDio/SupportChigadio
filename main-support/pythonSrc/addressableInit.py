@@ -18,6 +18,12 @@ DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 ADDRESSABLE_LIB_DIR = os.path.join(DATA_DIR,"AdressableSupportLib")
 ADDRESSABLE_EDITOR_DIR = os.path.join(ADDRESSABLE_LIB_DIR, "Editor")
 
+def init(dta_dir):
+    global DATA_DIR, ADDRESSABLE_LIB_DIR, ADDRESSABLE_EDITOR_DIR
+    DATA_DIR = os.path.abspath(dta_dir)
+    ADDRESSABLE_LIB_DIR = os.path.join(DATA_DIR,"AdressableSupportLib")
+    ADDRESSABLE_EDITOR_DIR = os.path.join(ADDRESSABLE_LIB_DIR, "Editor")
+
 
     
 

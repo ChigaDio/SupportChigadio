@@ -43,6 +43,11 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR
+    DATA_DIR = os.path.abspath(data_dir)
+
 
 # Enum-ID管理
 @bp.route('/api/enum-id', methods=['GET', 'POST', 'PATCH'])
@@ -699,53 +704,6 @@ namespace GameCore.Tables
         logger.error(f"Error generating C# header: {str(e)}")
         return jsonify({"error": str(e)}), 500
     
-    
-cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'ClassDataHeader.cs')
-list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
-        
-cs_content = """
-using System;
-using System.IO;
-using System.Collections.Generic;
-using GameCore.Enums;
-
-namespace GameCore.Tables
-{
-    public class ClassDataHeader
-    {
-        public Dictionary<TableID, (string Name, long Offset, int Size)> Entries = new Dictionary<TableID, (string, long, int)>();
-
-        public ClassDataHeader(BinaryReader reader)
-        {
-            int count = reader.ReadInt32();
-            for(int i = 0; i < count; i++)
-            {
-                int id = reader.ReadInt32();
-                TableID tableId = (TableID)Enum.ToObject(typeof(TableID), id);
-                int nameLen = reader.ReadInt32();
-                string name = new string(reader.ReadChars(nameLen));
-                long offset = reader.ReadInt64();
-                int size = reader.ReadInt32();
-                Entries[tableId] = (name, offset, size);
-            }
-        }
-
-        public TTable GetData<TTable>(TableID id, BinaryReader reader) where TTable : BaseTable,new()
-        {
-            if (!Entries.TryGetValue(id, out var entry)) return null;
-            reader.BaseStream.Seek(entry.Offset, SeekOrigin.Begin);
-            TTable data = new TTable();
-            data.Read(reader);
-            return data;
-        }
-
-
-    }
-}
-"""
-with open(cs_path, 'w', encoding='utf-8') as f:
-    f.write(cs_content)
-
 
 
 

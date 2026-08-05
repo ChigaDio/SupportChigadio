@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   Button, Divider, TextField, Select, MenuItem, FormControl, InputLabel, Grid, Chip, Link,
-  Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, FormControlLabel, Alert
+  Dialog, DialogTitle, DialogContent, DialogActions, Alert
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import VersionBadge from './VersionBadge';
+import CheckboxTree from './CheckboxTree';
 
 function Workspace() {
   const { isAdmin, user, refresh } = useAuth();
@@ -86,12 +87,70 @@ function Workspace() {
     }
   };
 
-  const toggleFile = (idx) => {
-    setConcreteFiles((prev) => prev.map((f, i) => (i === idx ? { ...f, checked: !f.checked } : f)));
+  const toggleFileByPath = (path, checked) => {
+    setConcreteFiles((prev) => prev.map((f) => (f.path === path ? { ...f, checked } : f)));
   };
 
   const setAllChecked = (checked) => {
     setConcreteFiles((prev) => prev.map((f) => ({ ...f, checked })));
+  };
+
+  // concreteFiles(フラットな相対パス一覧)を、フォルダ階層のツリーノードへ変換する。
+  // 例: "scenario_data/scenario_role/HeroRole/HeroRoleAction.cs" は
+  //     scenario_data > scenario_role > HeroRole > HeroRoleAction.cs という親子構造になる。
+  const buildFileTree = (files) => {
+    const root = { children: {} };
+    files.forEach((f) => {
+      const parts = f.path.split('/');
+      let cur = root;
+      parts.forEach((part, idx) => {
+        const isLeaf = idx === parts.length - 1;
+        cur.children = cur.children || {};
+        if (!cur.children[part]) {
+          cur.children[part] = isLeaf ? { isLeaf: true, file: f } : { isLeaf: false, children: {} };
+        }
+        cur = cur.children[part];
+      });
+    });
+
+    const collectLeafFiles = (node) => {
+      if (node.isLeaf) return [node.file];
+      return Object.values(node.children || {}).flatMap(collectLeafFiles);
+    };
+
+    const toNodes = (node, pathPrefix) => Object.entries(node.children || {}).map(([name, child]) => {
+      const fullPath = pathPrefix ? `${pathPrefix}/${name}` : name;
+      if (child.isLeaf) {
+        const f = child.file;
+        return {
+          id: fullPath,
+          label: name,
+          checked: f.checked,
+          onToggle: (checked) => toggleFileByPath(f.path, checked),
+          badge: f.alreadyExists
+            ? <Chip size="small" label="保存先に既存" color="warning" variant="outlined" sx={{ ml: 1 }} />
+            : <Chip size="small" label="新規" color="success" variant="outlined" sx={{ ml: 1 }} />,
+        };
+      }
+      const childNodes = toNodes(child, fullPath);
+      const leafFiles = collectLeafFiles(child);
+      const allChecked = leafFiles.every((f) => f.checked);
+      const noneChecked = leafFiles.every((f) => !f.checked);
+      const checked = allChecked ? true : noneChecked ? false : 'indeterminate';
+      return {
+        id: fullPath,
+        label: name,
+        checked,
+        badge: <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{leafFiles.length}件</Typography>,
+        onToggle: (checkedVal) => {
+          const paths = leafFiles.map((f) => f.path);
+          setConcreteFiles((prev) => prev.map((f) => (paths.includes(f.path) ? { ...f, checked: checkedVal } : f)));
+        },
+        children: childNodes,
+      };
+    });
+
+    return toNodes(root, '');
   };
 
   const confirmDownload = () => {
@@ -262,24 +321,14 @@ function Workspace() {
               <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
                 <Button size="small" onClick={() => setAllChecked(true)}>すべて含める</Button>
                 <Button size="small" onClick={() => setAllChecked(false)}>すべて除外</Button>
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto', alignSelf: 'center' }}>
+                  {concreteFiles.filter((f) => f.checked).length} / {concreteFiles.length} 件を含める
+                </Typography>
               </Box>
-              <Box sx={{ maxHeight: 320, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', p: 1 }}>
-                {concreteFiles.map((f, idx) => (
-                  <FormControlLabel
-                    key={f.path}
-                    sx={{ display: 'flex', width: '100%' }}
-                    control={<Checkbox checked={f.checked} onChange={() => toggleFile(idx)} />}
-                    label={
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                        <span>{f.path}</span>
-                        {f.alreadyExists && (
-                          <Chip size="small" label="保存先に既存" color="warning" variant="outlined" sx={{ ml: 1 }} />
-                        )}
-                      </Box>
-                    }
-                  />
-                ))}
-              </Box>
+              <CheckboxTree
+                nodes={buildFileTree(concreteFiles)}
+                searchPlaceholder="ファイル名・パスで検索..."
+              />
             </>
           )}
         </DialogContent>

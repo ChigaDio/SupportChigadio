@@ -488,6 +488,26 @@ MATERIAL_CS_ONLY_JSON = os.path.join(MATERIAL_CS_ONLY_DATA, 'assets_material_cs_
 EDITOR_DATA = os.path.join(ASSETS_DATA, 'Editor')
 ENUM_DIR = os.path.join(DATA_DIR, 'enum')
 
+def init(data_dir):
+    global DATA_DIR, ASSETS_DATA, SOUND_DATA, SOUND_JSON, TEXTURE_DATA, TEXTURE_JSON
+    global GAMEOBJECT_DATA, GAMEOBJECT_JSON, MATERIAL_DATA, MATERIAL_JSON
+    global MATERIAL_CS_ONLY_DATA, MATERIAL_CS_ONLY_JSON, EDITOR_DATA, ENUM_DIR
+
+    DATA_DIR = os.path.abspath(data_dir)
+    ASSETS_DATA = os.path.join(DATA_DIR, "assets_data")
+    SOUND_DATA = os.path.join(ASSETS_DATA, 'sound')
+    SOUND_JSON = os.path.join(SOUND_DATA, 'assets_sound.json')
+    TEXTURE_DATA = os.path.join(ASSETS_DATA, 'texture')
+    TEXTURE_JSON = os.path.join(TEXTURE_DATA, 'assets_texture.json')
+    GAMEOBJECT_DATA = os.path.join(ASSETS_DATA, 'gameobject')
+    GAMEOBJECT_JSON = os.path.join(GAMEOBJECT_DATA, 'assets_gameobject.json')
+    MATERIAL_DATA = os.path.join(ASSETS_DATA, 'material')
+    MATERIAL_JSON = os.path.join(MATERIAL_DATA, 'assets_material.json')
+    MATERIAL_CS_ONLY_DATA = os.path.join(MATERIAL_DATA, 'cs_only')
+    MATERIAL_CS_ONLY_JSON = os.path.join(MATERIAL_CS_ONLY_DATA, 'assets_material_cs_only.json')
+    EDITOR_DATA = os.path.join(ASSETS_DATA, 'Editor')
+    ENUM_DIR = os.path.join(DATA_DIR, 'enum')
+
 def generate_base():
     """
     必要なディレクトリと初期JSONファイルを作成し、enum_list.jsonを更新

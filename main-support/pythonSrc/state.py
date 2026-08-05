@@ -28,6 +28,11 @@ bp = Blueprint('state', __name__)
 # app.py 側の register(app, DATA_DIR) で設定される
 DATA_DIR = None
 
+def init(data_dir):
+    global DATA_DIR
+    DATA_DIR = data_dir
+    os.makedirs(os.path.join(DATA_DIR, STATE_DATA), exist_ok=True)
+
 
 def regenerate_state_group_id(data_dir):
     """
@@ -175,6 +180,18 @@ def generate_state_cs(name):
         generate_state_manager_data(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
         generate_state_branch(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
         generate_control_classes(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+
+        # Python / JavaScript 版（簡易対応）も合わせて生成する
+        generate_state_id_python(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_state_manager_data_python(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_state_classes_python(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_control_classes_python(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+
+        generate_state_id_javascript(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_state_manager_data_javascript(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_state_classes_javascript(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+        generate_control_classes_javascript(os.path.join(DATA_DIR, STATE_DATA, name), name, data)
+
         logger.info(f"Generated {name}.cs")
         return jsonify({"message": f"{name}.cs generated successfully"})
     except Exception as e:
@@ -563,16 +580,23 @@ def generate_state_classes(file_path, name, json_data):
             ensure_branchnext_in_state_class(state_class_path, name, label, targets)
         else:
             # 新規生成
+            # NOTE: UseXxxSync/UseXxxAsync のoverride（ライフサイクル設定）は
+            # Base{name}{label}State.cs 側（上のブロックで書き込み済み）にのみ持たせる。
+            # 本実装クラス（このファイル）には持たせない。
             with open(state_class_path, 'w', encoding='utf-8') as f:
-                f.write('using UnityEngine;\n\n')
+                f.write('using UnityEngine;\n')
+                f.write('using System.Threading;\n')
+                f.write('using Cysharp.Threading.Tasks;\n\n')
                 f.write('using GameCore.States.Branch;\n')
                 f.write('namespace GameCore.States\n{\n')
                 f.write(f'    public class {name}{label}State : Base{name}{label}State\n')
                 f.write('    {\n')
-                f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-                f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-                f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-                f.write(_build_lifecycle_block(lifecycle))
+                f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsEnterActiveOff(); }}\n')
+                f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsUpdateActiveOff(); }}\n')
+                f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsExitActiveOff(); }}\n')
+                f.write(f'        public override async UniTask EnterAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsEnterActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
+                f.write(f'        public override async UniTask UpdateAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsUpdateActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
+                f.write(f'        public override async UniTask ExitAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsExitActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
                 if len(targets) > 1:
                     f.write(
                         f'        public override GameCore.States.ID.{name}StateID BranchNextState(GameCore.States.Managers.{name}StateManagerData state_manager_data)\n'
@@ -604,22 +628,28 @@ def generate_state_classes(file_path, name, json_data):
             f.write('namespace GameCore.States\n{\n')
             f.write(f'    public abstract class Base{name}{label}State : GameCore.States.Base{name}State\n')
             f.write('    {\n')
-
-
+            f.write(_build_lifecycle_block(transition_lifecycle))
             f.write('    }\n')
             f.write('}\n')
 
         # 新規生成
+        # NOTE: UseXxxSync/UseXxxAsync のoverride（ライフサイクル設定）は
+        # Base{name}{label}State.cs 側（すぐ上で書き込み済み）にのみ持たせる。
+        # 本実装クラス（このファイル）には持たせない。
         with open(state_class_path, 'w', encoding='utf-8') as f:
-            f.write('using UnityEngine;\n\n')
+            f.write('using UnityEngine;\n')
+            f.write('using System.Threading;\n')
+            f.write('using Cysharp.Threading.Tasks;\n\n')
             f.write('using GameCore.States.Branch;\n')
             f.write('namespace GameCore.States\n{\n')
             f.write(f'    public class {name}{label}State : Base{name}{label}State\n')
             f.write('    {\n')
-            f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ }}\n')
-            f.write(_build_lifecycle_block(transition_lifecycle))
+            f.write(f'        public override void Enter(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsEnterActiveOff(); }}\n')
+            f.write(f'        public override void Update(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsUpdateActiveOff(); }}\n')
+            f.write(f'        public override void Exit(GameCore.States.Managers.{name}StateManagerData state_manager_data) {{ IsExitActiveOff(); }}\n')
+            f.write(f'        public override async UniTask EnterAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsEnterActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
+            f.write(f'        public override async UniTask UpdateAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsUpdateActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
+            f.write(f'        public override async UniTask ExitAsync(GameCore.States.Managers.{name}StateManagerData state_manager_data, CancellationToken ct) {{ IsExitActiveAsyncOff(); await UniTask.CompletedTask; }}\n')
             f.write('    }\n')
             f.write('}\n')
             
@@ -788,8 +818,11 @@ def _write_branch_switch_cases(f, name, json_data, nodes, mode):
         elif mode == 'combined':
             # 呼ぶかどうかは state 自身が宣言する UseExitSync/UseExitAsync に従う。
             # （遷移図のノード設定でチェックした方だけが呼ばれるため、二重実行にならない）
-            f.write('                    if (state.UseExitSync) state.Exit(state_manager_data);\n')
-            f.write('                    if (state.UseExitAsync) state.ExitAsync(state_manager_data, combinedCts.Token).Forget(LogAsyncException);\n')
+            # このあと state は次Stateに差し替わるため、Exitフェーズの完了判定
+            # （IsExitActive/IsExitActiveAsync）は exitingState 経由で行う。
+            f.write('                    exitingState = state;\n')
+            f.write('                    if (exitingState.UseExitSync) exitingState.Exit(state_manager_data);\n')
+            f.write('                    if (exitingState.UseExitAsync) exitingState.ExitAsync(state_manager_data, combinedCts.Token).Forget(LogAsyncException);\n')
         else:
             f.write('                    state.Exit(state_manager_data);\n')
 
@@ -798,9 +831,11 @@ def _write_branch_switch_cases(f, name, json_data, nodes, mode):
             f.write('                    var ct2 = RenewStateToken(life_time_token);\n')
             f.write('                    await state.EnterAsync(state_manager_data, ct2);\n')
         elif mode == 'combined':
+            # ここでは即座にEnterを発火しない。exitingState（旧State）の
+            # Exitフェーズ完了を OnUpdateStateCombined 側で待ってから、
+            # 次State（新しいstate）のEnterフェーズを発火する。
             f.write('                    combinedAsyncUpdateStarted = false;\n')
-            f.write('                    if (state.UseEnterSync) state.Enter(state_manager_data);\n')
-            f.write('                    if (state.UseEnterAsync) state.EnterAsync(state_manager_data, combinedCts.Token).Forget(LogAsyncException);\n')
+            f.write('                    combinedEnterPending = true;\n')
         else:
             f.write('                    state.Enter(state_manager_data);\n')
 
@@ -971,7 +1006,7 @@ def generate_control_classes(file_path, name, json_data):
         # BranchState() 同期版
         f.write('        public override void BranchState()\n')
         f.write('        {\n')
-        f.write('            if (state.IsActive) return;\n\n')
+        f.write('            if (state.IsUpdateActive) return;\n\n')
         f.write('            isTransitioning = true;\n')
         f.write('            try\n')
         f.write('            {\n')
@@ -991,7 +1026,7 @@ def generate_control_classes(file_path, name, json_data):
         # BranchStateAsync() 非同期版
         f.write('        public override async UniTask BranchStateAsync(CancellationToken life_time_token)\n')
         f.write('        {\n')
-        f.write('            if (state.IsActive) return;\n\n')
+        f.write('            if (state.IsUpdateActive) return;\n\n')
         f.write('            isTransitioning = true;\n')
         f.write('            try\n')
         f.write('            {\n')
@@ -1009,8 +1044,9 @@ def generate_control_classes(file_path, name, json_data):
         f.write('        }\n\n')
 
         # BranchStateCombined() 同期+非同期を両方動かすモード
-        # (IsActive/IsActiveAsyncが両方falseの時だけ StateControl 側から呼ばれるため、
-        #  ここでは「呼ばれたら無条件に遷移してよい」という前提で良い)
+        # (IsUpdateActive/IsUpdateActiveAsyncが両方falseの時だけ StateControl 側から
+        #  呼ばれるため、ここでは「呼ばれたら無条件にExitして遷移してよい」という
+        #  前提で良い。実際の次StateへのEnterはExit完了待ち後にControl側が発火する)
         f.write('        public override void BranchStateCombined()\n')
         f.write('        {\n')
         f.write('            isTransitioning = true;\n')
@@ -1071,6 +1107,1473 @@ def generate_control_classes(file_path, name, json_data):
             f.write('}\n')
             
 
+
+
+# ============================================================
+# Python / JavaScript コード生成（簡易対応版）
+# ------------------------------------------------------------
+# C#（Unity向け）生成の Enter/Update/Exit フェーズ別アクティブフラグ
+# （IsEnterActive(Async) / IsUpdateActive(Async) / IsExitActive(Async)）と
+# 同じ考え方を Python / JavaScript 向けにも生成する。
+#
+# 【スコープ外にしたもの（今回は移植していません）】
+# - StateBaseID（番号無しラベルのみのID）とその現在/直前追跡
+# - DetailStateBranch群（複数遷移先ごとの条件クラスの自動生成）。
+#   複数遷移先を持つノードは、C#版と同様 state.branch_next_state()
+#   （JSは state.branchNextState()）をoverrideして自前実装してもらう。
+# - manager フィールドのカスタム型システム（ClassData/Bit/Color/Bezier等）。
+#   フィールドは列挙するだけで、型はTODOコメント付きで手動設定してもらう。
+# - 純粋非同期API（C#のBranchStateAsync相当）。Combined APIで代替可能なため省略。
+# ============================================================
+
+def _collect_stack_case_labels(json_data):
+    """transitions（スタック/LIFOで使われるラベル）を、C#版と同じ順序で収集する。"""
+    labels = []
+    for data in json_data.get('transitions', []):
+        label = data.get("fromState", {})
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _collect_node_cases(nodes):
+    """
+    nodes配列を、言語非依存の「ケース記述」のリストに変換する。
+    Python/JavaScript生成の両方がこの1つのトラバース結果を共有する。
+    """
+    cases = []
+    for node in nodes:
+        label = node["data"]["label"]
+        node_id = int(node["id"])
+        targets = node["data"].get("targets", [])
+        sub_nodes = [c["label"] for c in node["data"].get("subNodes", [])]
+        single_target_id = None
+        if len(targets) == 1:
+            next_node = targets[0]
+            target_label = next(
+                (n["data"]["label"] for n in nodes if n["id"] == next_node), None)
+            if target_label:
+                single_target_id = f'{target_label}{int(next_node):02d}'
+        cases.append({
+            'state_id': f'{label}{node_id:02d}',
+            'targets_len': len(targets),
+            'single_target_id': single_target_id,
+            'sub_nodes': sub_nodes,
+        })
+    return cases
+
+
+# ------------------------------------------------------------
+# Python 生成
+# ------------------------------------------------------------
+
+def generate_base_python(data_dir):
+    """
+    Python版の共通基底コード（初回起動時のみ）。
+    - base_python/base_state.py
+    - base_python/base_state_manager_data.py
+    - base_python/base_state_control.py
+    - base_python/state_group_tracker.py
+    """
+    base_dir = os.path.join(data_dir, STATE_DATA, "base_python")
+    os.makedirs(base_dir, exist_ok=True)
+
+    base_state_path = os.path.join(base_dir, "base_state.py")
+    if not os.path.exists(base_state_path):
+        with open(base_state_path, 'w', encoding='utf-8') as f:
+            f.write('''"""
+base_state.py
+ステートの基底クラス（Unity/C#版 BaseState<E,T> に相当）。
+Enter/Update/Exitの同期・非同期版と、フェーズ別アクティブフラグ
+（Enter/Update/Exit x 同期/非同期の計6個）を持つ。
+"""
+
+
+class CancellationToken:
+    """C#のCancellationTokenに相当する簡易実装。"""
+
+    def __init__(self):
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    @property
+    def is_cancelled(self):
+        return self._cancelled
+
+
+class BaseState:
+    def __init__(self):
+        self._is_enter_active = True
+        self._is_enter_active_async = True
+        self._is_update_active = True
+        self._is_update_active_async = True
+        self._is_exit_active = True
+        self._is_exit_active_async = True
+
+        # 使わない側（use_xxx_syncやuse_xxx_asyncがFalse）は、
+        # コンストラクタの時点で対応するis_xxx_active(_async)を自動的にFalseにしておく。
+        if not self.use_enter_sync:
+            self.is_enter_active_off()
+        if not self.use_enter_async:
+            self.is_enter_active_async_off()
+        if not self.use_update_sync:
+            self.is_update_active_off()
+        if not self.use_update_async:
+            self.is_update_active_async_off()
+        if not self.use_exit_sync:
+            self.is_exit_active_off()
+        if not self.use_exit_async:
+            self.is_exit_active_async_off()
+
+    # --- フェーズ別アクティブフラグ ---
+    @property
+    def is_enter_active(self):
+        return self._is_enter_active
+
+    def is_enter_active_off(self):
+        self._is_enter_active = False
+
+    @property
+    def is_enter_active_async(self):
+        return self._is_enter_active_async
+
+    def is_enter_active_async_off(self):
+        self._is_enter_active_async = False
+
+    @property
+    def is_update_active(self):
+        return self._is_update_active
+
+    def is_update_active_off(self):
+        self._is_update_active = False
+
+    @property
+    def is_update_active_async(self):
+        return self._is_update_active_async
+
+    def is_update_active_async_off(self):
+        self._is_update_active_async = False
+
+    @property
+    def is_exit_active(self):
+        return self._is_exit_active
+
+    def is_exit_active_off(self):
+        self._is_exit_active = False
+
+    @property
+    def is_exit_active_async(self):
+        return self._is_exit_active_async
+
+    def is_exit_active_async_off(self):
+        self._is_exit_active_async = False
+
+    # --- 各フェーズで同期/非同期のどちらを使うか（派生クラスでoverride） ---
+    use_enter_sync = True
+    use_enter_async = False
+    use_update_sync = True
+    use_update_async = False
+    use_exit_sync = True
+    use_exit_async = False
+
+    # --- 同期版ライフサイクル ---
+    def enter(self, state_manager_data):
+        pass
+
+    def update(self, state_manager_data):
+        pass
+
+    def exit(self, state_manager_data):
+        pass
+
+    # --- 非同期版ライフサイクル（デフォルトは同期版を呼ぶだけ） ---
+    async def enter_async(self, state_manager_data, ct=None):
+        self.enter(state_manager_data)
+        self.is_enter_active_async_off()
+
+    async def update_async(self, state_manager_data, ct=None):
+        self.update(state_manager_data)
+        self.is_update_active_async_off()
+
+    async def exit_async(self, state_manager_data, ct=None):
+        self.exit(state_manager_data)
+        self.is_exit_active_async_off()
+
+    def branch_next_state(self, state_manager_data):
+        """遷移先が複数あるノードのStateでoverrideする分岐条件。"""
+        return None
+''')
+
+    base_manager_data_path = os.path.join(base_dir, "base_state_manager_data.py")
+    if not os.path.exists(base_manager_data_path):
+        with open(base_manager_data_path, 'w', encoding='utf-8') as f:
+            f.write('''"""
+base_state_manager_data.py
+Unity/C#版 BaseStateManagerData<T> に相当。
+"""
+
+
+class BaseStateManagerData:
+    def __init__(self):
+        self.now_state_id = None
+        self.old_state_id = None
+        self.save_state_id = None
+        self._stack_id_list = []
+
+    def push_state_id(self, state_id):
+        self._stack_id_list.append(state_id)
+
+    def pop_state_id(self):
+        """
+        NOTE: C#版のPopStateID()と同じく「覗き見(peek)」のみで、
+        リストからは取り除かない。実際に取り除くのはpop_up_state_id()。
+        """
+        if self._stack_id_list:
+            return self._stack_id_list[0]
+        return None
+
+    def pop_up_state_id(self):
+        """スタック先頭を実際に取り除く（C#版のPopUpStateID()に相当）。"""
+        if self._stack_id_list:
+            self._stack_id_list.pop(0)
+
+    def change_state_now_id(self, new_state_id):
+        self.old_state_id = self.now_state_id
+        self.now_state_id = new_state_id
+
+    def get_now_state_id(self):
+        return self.now_state_id
+
+    def get_old_state_id(self):
+        return self.old_state_id
+''')
+
+    tracker_path = os.path.join(base_dir, "state_group_tracker.py")
+    if not os.path.exists(tracker_path):
+        with open(tracker_path, 'w', encoding='utf-8') as f:
+            f.write('''"""
+state_group_tracker.py
+現在アクティブなStateグループと、その1つ前のグループを追跡する
+静的トラッカー（Unity/C#版 StateGroupTracker に相当）。
+"""
+
+
+class StateGroupTracker:
+    current_group = None
+    previous_group = None
+
+    @classmethod
+    def change_group(cls, new_group):
+        if new_group == cls.current_group:
+            return
+        cls.previous_group = cls.current_group
+        cls.current_group = new_group
+''')
+
+    base_control_path = os.path.join(base_dir, "base_state_control.py")
+    if not os.path.exists(base_control_path):
+        with open(base_control_path, 'w', encoding='utf-8') as f:
+            f.write('''"""
+base_state_control.py
+ステートコントローラーの基底クラス（Unity/C#版 BaseStateControl<T,E,F> に相当）。
+
+Combined API（同期Enter/Update/Exitと非同期Enter/Update/Exitを同時に動かすモード）は、
+Enter/Update/Exitの3フェーズそれぞれについて、同期・非同期の両方が完了する
+（is_xxx_active / is_xxx_active_async の両方がFalseになる）まで次のフェーズへ
+進まない。
+
+・Enter: 完了するまでUpdateへ進まない。
+・Update: 完了するまでExit（次への遷移）へ進まない。
+・Exit: _exiting_state（Exit対象として退避した旧State）の完了を待ってから、
+  次StateのEnterフェーズを発火する（_combined_enter_pendingで待機）。
+"""
+import asyncio
+
+
+def _log_async_exception(task):
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        print(f"[StateControl] async exception: {exc!r}")
+
+
+class BaseStateControl:
+    def __init__(self):
+        self.state_manager_data = self.create_manager_data()
+        self.state = None
+        self.is_finish = False
+        self.is_transitioning = False
+
+        self._combined_async_update_started = False
+        self._exiting_state = None
+        self._combined_enter_pending = False
+        self._combined_tasks = []
+
+    # --- 派生クラスでoverride ---
+    def create_manager_data(self):
+        raise NotImplementedError
+
+    def get_init_start_id(self):
+        raise NotImplementedError
+
+    def factory_state(self, state_id):
+        raise NotImplementedError
+
+    def branch_state(self):
+        raise NotImplementedError
+
+    def branch_state_combined(self):
+        raise NotImplementedError
+
+    # --- 同期API ---
+    def start_state(self, action=None):
+        if self.state is not None:
+            print("start_state は既に開始済みです。二重呼び出しを無視しました。")
+            return
+        self._on_start_state(self.get_init_start_id(), action)
+
+    def _on_start_state(self, state_id, action):
+        self.state = self.factory_state(state_id)
+        self.state_manager_data.change_state_now_id(state_id)
+        if action:
+            action(self.state_manager_data)
+        self.state.enter(self.state_manager_data)
+
+    def update_state(self, befor_action=None, after_action=None):
+        if self.state is None:
+            self.start_state()
+        self._on_update_state(befor_action, after_action)
+
+    def _on_update_state(self, befor_action=None, after_action=None):
+        if befor_action:
+            befor_action(self.state_manager_data)
+        self.state.update(self.state_manager_data)
+        if not self.is_transitioning:
+            self.branch_state()
+        if after_action:
+            after_action(self.state_manager_data)
+
+    # --- Combined API ---
+    def start_state_combined(self, action=None):
+        if self.state is not None:
+            print("start_state_combined は既に開始済みです。二重呼び出しを無視しました。")
+            return
+        self._on_start_state_combined(self.get_init_start_id(), action)
+
+    def _on_start_state_combined(self, state_id, action):
+        self.state = self.factory_state(state_id)
+        self.state_manager_data.change_state_now_id(state_id)
+        if action:
+            action(self.state_manager_data)
+
+        self._combined_async_update_started = False
+        self._exiting_state = None
+        self._combined_enter_pending = False
+
+        if self.state.use_enter_sync:
+            self.state.enter(self.state_manager_data)
+        if self.state.use_enter_async:
+            self._fire_and_forget(self.state.enter_async(self.state_manager_data))
+
+    def update_state_combined(self, befor_action=None, after_action=None):
+        if self.state is None:
+            self.start_state_combined()
+        self._on_update_state_combined(befor_action, after_action)
+
+    def _on_update_state_combined(self, befor_action=None, after_action=None):
+        if befor_action:
+            befor_action(self.state_manager_data)
+
+        # 直前のbranch_state_combined()でExitを発火済み・次Stateへの切り替え待ちの場合、
+        # exitingStateのExitフェーズ（同期・非同期の両方）が完了するまで待つ。
+        if self._combined_enter_pending:
+            if not self._exiting_state.is_exit_active and not self._exiting_state.is_exit_active_async:
+                self._combined_enter_pending = False
+                self._exiting_state = None
+                if self.state.use_enter_sync:
+                    self.state.enter(self.state_manager_data)
+                if self.state.use_enter_async:
+                    self._fire_and_forget(self.state.enter_async(self.state_manager_data))
+            if after_action:
+                after_action(self.state_manager_data)
+            return
+
+        # Enterフェーズ（同期・非同期の両方）が完了するまではUpdateへ進まない。
+        if self.state.is_enter_active or self.state.is_enter_active_async:
+            if after_action:
+                after_action(self.state_manager_data)
+            return
+
+        if self.state.use_update_sync:
+            self.state.update(self.state_manager_data)
+        if self.state.use_update_async and not self._combined_async_update_started:
+            self._combined_async_update_started = True
+            self._fire_and_forget(self.state.update_async(self.state_manager_data))
+
+        # Updateフェーズ（同期・非同期の両方）が完了した時だけ次へ進む。
+        if not self.is_transitioning and not self.state.is_update_active and not self.state.is_update_active_async:
+            self.branch_state_combined()
+
+        if after_action:
+            after_action(self.state_manager_data)
+
+    def _fire_and_forget(self, coro):
+        task = asyncio.ensure_future(coro)
+        task.add_done_callback(_log_async_exception)
+        self._combined_tasks.append(task)
+        return task
+
+    # --- 生成コードから呼ばれる遷移ヘルパー ---
+    def _begin_exit_combined(self, next_state):
+        """
+        現在のstateをexitingStateとして退避してExitを発火し、
+        次state（まだEnterは呼ばない）に切り替えてExit完了待ちにする。
+        """
+        old = self.state
+        self._exiting_state = old
+        if old.use_exit_sync:
+            old.exit(self.state_manager_data)
+        if old.use_exit_async:
+            self._fire_and_forget(old.exit_async(self.state_manager_data))
+        self.state = next_state
+        self._combined_async_update_started = False
+        self._combined_enter_pending = True
+
+    def _begin_exit_finish(self):
+        """次stateが無い（ステートマシン終了）場合のExit発火。"""
+        old = self.state
+        if old.use_exit_sync:
+            old.exit(self.state_manager_data)
+        if old.use_exit_async:
+            self._fire_and_forget(old.exit_async(self.state_manager_data))
+        self.is_finish = True
+''')
+
+
+def generate_state_id_python(file_path, name, json_data):
+    py_dir = os.path.join(file_path, "Python")
+    os.makedirs(py_dir, exist_ok=True)
+    file_id_path = os.path.join(py_dir, f'{name}StateID.py')
+
+    if not json_data or not json_data.get('nodes'):
+        return
+
+    members = []
+    for label in _collect_stack_case_labels(json_data):
+        members.append(label)
+    for data in json_data.get('nodes', []):
+        label = data.get("data", {}).get("label", "")
+        node_id = data.get("id", 0)
+        if label:
+            members.append(f'{label}{int(node_id):02d}')
+
+    with open(file_id_path, 'w', encoding='utf-8') as f:
+        f.write('from enum import IntEnum\n\n\n')
+        f.write(f'class {name}StateID(IntEnum):\n')
+        f.write('    NONE = 0\n')
+        for i, member in enumerate(members, start=1):
+            f.write(f'    {member} = {i}\n')
+        f.write(f'    MAX = {len(members) + 1}\n')
+
+
+def generate_state_manager_data_python(file_path, name, json_data):
+    py_dir = os.path.join(file_path, "Python")
+    os.makedirs(py_dir, exist_ok=True)
+    file_manager_path = os.path.join(py_dir, f'{name}StateManagerData.py')
+    if os.path.exists(file_manager_path):
+        return  # 本実装は上書きしない（C#版の{name}StateManagerData.csと同じ扱い）
+
+    manager_fields = json_data.get('manager', [])
+    with open(file_manager_path, 'w', encoding='utf-8') as f:
+        f.write('from base_python.base_state_manager_data import BaseStateManagerData\n\n\n')
+        f.write(f'class {name}StateManagerData(BaseStateManagerData):\n')
+        f.write('    """\n')
+        f.write(f'    NOTE: managerフィールドの型はC#版（Base{name}StateManagerData.cs）の\n')
+        f.write('    カスタム型システム（ClassData/Bit/Color/Bezier等）に依存しているため、\n')
+        f.write('    ここでは移植していません。必要なフィールドは手動で追加してください。\n')
+        f.write('    """\n\n')
+        f.write('    def __init__(self):\n')
+        f.write('        super().__init__()\n')
+        if manager_fields:
+            for item in manager_fields:
+                fname = item.get('name', 'value')
+                f.write(f'        self.{fname} = None  # TODO: 型を設定してください\n')
+        else:
+            f.write('        pass\n')
+
+
+def generate_state_classes_python(file_path, name, json_data):
+    py_dir = os.path.join(file_path, "Python")
+    os.makedirs(py_dir, exist_ok=True)
+    file_states_path = os.path.join(py_dir, f'{name}States.py')
+    if os.path.exists(file_states_path):
+        return  # 本実装は上書きしない（C#版の{name}{label}State.csと同じ扱い）
+
+    labels = []
+    label_multi = {}
+    for node in json_data.get('nodes', []):
+        label = node.get("data", {}).get("label", "")
+        if not label:
+            continue
+        if label not in labels:
+            labels.append(label)
+            label_multi[label] = False
+        if len(node.get("data", {}).get("targets", [])) > 1:
+            label_multi[label] = True
+    for node in json_data.get('transitions', []):
+        label = node.get("fromState", "")
+        if label and label not in labels:
+            labels.append(label)
+            label_multi[label] = False
+
+    if not labels:
+        return
+
+    with open(file_states_path, 'w', encoding='utf-8') as f:
+        f.write('from base_python.base_state import BaseState\n\n\n')
+        f.write(f'class Base{name}State(BaseState):\n')
+        f.write('    pass\n\n\n')
+        for label in labels:
+            f.write(f'class {name}{label}State(Base{name}State):\n')
+            f.write('    def enter(self, state_manager_data):\n')
+            f.write('        self.is_enter_active_off()\n\n')
+            f.write('    def update(self, state_manager_data):\n')
+            f.write('        self.is_update_active_off()\n\n')
+            f.write('    def exit(self, state_manager_data):\n')
+            f.write('        self.is_exit_active_off()\n\n')
+            f.write('    async def enter_async(self, state_manager_data, ct=None):\n')
+            f.write('        self.is_enter_active_async_off()\n\n')
+            f.write('    async def update_async(self, state_manager_data, ct=None):\n')
+            f.write('        self.is_update_active_async_off()\n\n')
+            f.write('    async def exit_async(self, state_manager_data, ct=None):\n')
+            f.write('        self.is_exit_active_async_off()\n')
+            if label_multi.get(label):
+                f.write('\n    def branch_next_state(self, state_manager_data):\n')
+                f.write('        # TODO: 複数遷移先の分岐条件をここに実装してください\n')
+                f.write('        return None\n')
+            f.write('\n\n')
+
+
+def _write_branch_cases_python(f, name, json_data, nodes, mode):
+    """
+    mode: 'sync' | 'combined'
+    C#版 _write_branch_switch_cases のロジックをPythonに移植した簡易版。
+    DetailStateBranch（複数遷移先ごとの条件クラスの自動生成）は移植しておらず、
+    複数遷移先を持つノードは self.state.branch_next_state() のoverrideに委ねる。
+    """
+    ctx = {'first': True}
+
+    def head(cond):
+        kw = 'if' if ctx['first'] else 'elif'
+        ctx['first'] = False
+        f.write(f'        {kw} {cond}:\n')
+
+    def write_exit():
+        if mode == 'combined':
+            f.write('            pass  # Exitはself._begin_exit_combined()/_begin_exit_finish()内で発火\n')
+        else:
+            f.write('            self.state.exit(self.state_manager_data)\n')
+
+    def write_enter_or_begin(state_var):
+        if mode == 'combined':
+            f.write(f'            self._begin_exit_combined({state_var})\n')
+        else:
+            f.write(f'            self.state = {state_var}\n')
+            f.write('            self.state.enter(self.state_manager_data)\n')
+
+    def write_finish_inline(indent):
+        if mode == 'combined':
+            f.write(f'{indent}self._begin_exit_finish()\n')
+        else:
+            f.write(f'{indent}self.is_finish = True\n')
+
+    code_label = []
+    for node in json_data.get('transitions', []):
+        label = node["fromState"]
+        if label in code_label:
+            continue
+        code_label.append(label)
+        head(f'state_id == {name}StateID.{label}')
+        write_exit()
+        f.write('            self.state_manager_data.pop_up_state_id()\n')
+        f.write('            popped_id = self.state_manager_data.pop_state_id()\n')
+        f.write('            if popped_id is None:\n')
+        f.write('                popped_id = self.state_manager_data.save_state_id\n')
+        f.write('            if popped_id is None:\n')
+        f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+        write_finish_inline('                ')
+        f.write('                return\n')
+        f.write('            self.state_manager_data.change_state_now_id(popped_id)\n')
+        f.write('            self.state_manager_data.save_state_id = None\n')
+        f.write('            next_state = self.factory_state(popped_id)\n')
+        f.write('            if next_state is None:\n')
+        f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+        f.write('                self.state_manager_data.save_state_id = None\n')
+        write_finish_inline('                ')
+        f.write('                return\n')
+        write_enter_or_begin('next_state')
+        f.write('            return\n')
+
+    for node in nodes:
+        label = node["data"]["label"]
+        node_id = int(node["id"])
+        targets = node["data"].get("targets", [])
+        sub_nodes = node["data"].get("subNodes", [])
+
+        head(f'state_id == {name}StateID.{label}{node_id:02d}')
+        write_exit()
+        f.write('            self.state_manager_data.pop_up_state_id()\n')
+
+        if not targets:
+            if sub_nodes:
+                f.write('            self.state_manager_data.save_state_id = None\n')
+                for child in sub_nodes:
+                    child_label = child["label"]
+                    f.write(f'            self.state_manager_data.push_state_id({name}StateID.{child_label})\n')
+                f.write('            next_id = self.state_manager_data.pop_state_id()\n')
+                f.write('            next_state = self.factory_state(next_id)\n')
+                f.write('            if next_state is None:\n')
+                f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+                f.write('                self.state_manager_data.save_state_id = None\n')
+                write_finish_inline('                ')
+                f.write('                return\n')
+                write_enter_or_begin('next_state')
+                f.write('            return\n')
+            else:
+                write_finish_inline('            ')
+                f.write('            return\n')
+        elif len(targets) == 1:
+            next_node = targets[0]
+            target_label = next(
+                (n["data"]["label"] for n in nodes if n["id"] == next_node), None)
+            if target_label:
+                f.write(f'            next_id = {name}StateID.{target_label}{int(next_node):02d}\n')
+                if sub_nodes:
+                    f.write('            self.state_manager_data.save_state_id = next_id\n')
+                    for child in sub_nodes:
+                        child_label = child["label"]
+                        f.write(f'            self.state_manager_data.push_state_id({name}StateID.{child_label})\n')
+                    f.write('            self.state_manager_data.push_state_id(next_id)\n')
+                    f.write('            next_id = self.state_manager_data.pop_state_id()\n')
+                else:
+                    f.write('            self.state_manager_data.change_state_now_id(next_id)\n')
+                f.write('            next_state = self.factory_state(next_id)\n')
+                f.write('            if next_state is None:\n')
+                f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+                f.write('                self.state_manager_data.save_state_id = None\n')
+                write_finish_inline('                ')
+                f.write('                return\n')
+                write_enter_or_begin('next_state')
+                f.write('            return\n')
+        else:
+            f.write('            next_id = self.state.branch_next_state(self.state_manager_data)\n')
+            if sub_nodes:
+                f.write('            self.state_manager_data.save_state_id = next_id\n')
+                for child in sub_nodes:
+                    child_label = child["label"]
+                    f.write(f'            self.state_manager_data.push_state_id({name}StateID.{child_label})\n')
+                f.write('            self.state_manager_data.push_state_id(next_id)\n')
+                f.write('            next_id = self.state_manager_data.pop_state_id()\n')
+            else:
+                f.write('            self.state_manager_data.change_state_now_id(next_id)\n')
+            f.write('            if next_id is None:\n')
+            f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+            f.write('                self.state_manager_data.save_state_id = None\n')
+            write_finish_inline('                ')
+            f.write('                return\n')
+            f.write('            next_state = self.factory_state(next_id)\n')
+            f.write('            if next_state is None:\n')
+            f.write(f'                self.state_manager_data.change_state_now_id({name}StateID.NONE)\n')
+            f.write('                self.state_manager_data.save_state_id = None\n')
+            write_finish_inline('                ')
+            f.write('                return\n')
+            write_enter_or_begin('next_state')
+            f.write('            return\n')
+
+    if ctx['first']:
+        f.write('        if False:\n')
+        f.write('            pass\n')
+    f.write('        else:\n')
+    f.write('            return\n')
+
+
+def generate_control_classes_python(file_path, name, json_data):
+    py_dir = os.path.join(file_path, "Python")
+    os.makedirs(py_dir, exist_ok=True)
+    file_control_path = os.path.join(py_dir, f'{name}StateControl.py')
+
+    nodes = json_data.get('nodes', [])
+    if not nodes:
+        return
+
+    init_node = next((n for n in nodes if int(n["id"]) == 1), nodes[0])
+    init_label = init_node["data"]["label"]
+    init_id = int(init_node["id"])
+    init_state_id = f"{name}StateID.{init_label}{init_id:02d}"
+
+    labels = []
+    for node in nodes:
+        label = node["data"]["label"]
+        if label not in labels:
+            labels.append(label)
+    stack_labels = _collect_stack_case_labels(json_data)
+    for label in stack_labels:
+        if label not in labels:
+            labels.append(label)
+
+    with open(file_control_path, 'w', encoding='utf-8') as f:
+        f.write('from base_python.base_state_control import BaseStateControl\n')
+        f.write(f'from .{name}StateID import {name}StateID\n')
+        f.write(f'from .{name}StateManagerData import {name}StateManagerData\n')
+        f.write(f'from .{name}States import (\n')
+        for label in labels:
+            f.write(f'    {name}{label}State,\n')
+        f.write(')\n\n\n')
+
+        f.write(f'class {name}StateControl(BaseStateControl):\n')
+        f.write(f'    GROUP_ID = "{name}"\n\n')
+
+        f.write('    def create_manager_data(self):\n')
+        f.write(f'        return {name}StateManagerData()\n\n')
+
+        f.write('    def get_init_start_id(self):\n')
+        f.write(f'        return {init_state_id}\n\n')
+
+        f.write('    def factory_state(self, state_id):\n')
+        f.write('        mapping = self._factory_mapping()\n')
+        f.write('        factory = mapping.get(state_id)\n')
+        f.write('        return factory() if factory else None\n\n')
+
+        f.write('    def _factory_mapping(self):\n')
+        f.write('        return {\n')
+        written = set()
+        for label in stack_labels:
+            f.write(f'            {name}StateID.{label}: {name}{label}State,\n')
+            written.add(f'{label}')
+        for node in nodes:
+            label = node["data"]["label"]
+            node_id = int(node["id"])
+            f.write(f'            {name}StateID.{label}{node_id:02d}: {name}{label}State,\n')
+        f.write('        }\n\n')
+
+        f.write('    def branch_state(self):\n')
+        f.write('        if self.state.is_update_active:\n')
+        f.write('            return\n')
+        f.write('        self.is_transitioning = True\n')
+        f.write('        try:\n')
+        f.write('            state_id = self.state_manager_data.pop_state_id()\n')
+        f.write('            if state_id is None:\n')
+        f.write('                state_id = self.state_manager_data.get_now_state_id()\n')
+        f.write('            self._branch_switch_sync(state_id)\n')
+        f.write('        finally:\n')
+        f.write('            self.is_transitioning = False\n\n')
+
+        f.write('    def _branch_switch_sync(self, state_id):\n')
+        _write_branch_cases_python(f, name, json_data, nodes, mode='sync')
+        f.write('\n')
+
+        f.write('    def branch_state_combined(self):\n')
+        f.write('        self.is_transitioning = True\n')
+        f.write('        try:\n')
+        f.write('            state_id = self.state_manager_data.pop_state_id()\n')
+        f.write('            if state_id is None:\n')
+        f.write('                state_id = self.state_manager_data.get_now_state_id()\n')
+        f.write('            self._branch_switch_combined(state_id)\n')
+        f.write('        finally:\n')
+        f.write('            self.is_transitioning = False\n\n')
+
+        f.write('    def _branch_switch_combined(self, state_id):\n')
+        _write_branch_cases_python(f, name, json_data, nodes, mode='combined')
+
+
+# ------------------------------------------------------------
+# JavaScript 生成
+# ------------------------------------------------------------
+
+def generate_base_javascript(data_dir):
+    """
+    JavaScript版の共通基底コード（初回起動時のみ）。ES Modules形式。
+    - base_javascript/BaseState.js
+    - base_javascript/BaseStateManagerData.js
+    - base_javascript/BaseStateControl.js
+    - base_javascript/StateGroupTracker.js
+    """
+    base_dir = os.path.join(data_dir, STATE_DATA, "base_javascript")
+    os.makedirs(base_dir, exist_ok=True)
+
+    base_state_path = os.path.join(base_dir, "BaseState.js")
+    if not os.path.exists(base_state_path):
+        with open(base_state_path, 'w', encoding='utf-8') as f:
+            f.write('''/**
+ * BaseState.js
+ * ステートの基底クラス（Unity/C#版 BaseState<E,T> に相当）。
+ * Enter/Update/Exitの同期・非同期版と、フェーズ別アクティブフラグ
+ * （Enter/Update/Exit x 同期/非同期の計6個）を持つ。
+ */
+
+export class CancellationToken {
+    constructor() {
+        this._cancelled = false;
+    }
+    cancel() {
+        this._cancelled = true;
+    }
+    get isCancelled() {
+        return this._cancelled;
+    }
+}
+
+export class BaseState {
+    constructor() {
+        this._isEnterActive = true;
+        this._isEnterActiveAsync = true;
+        this._isUpdateActive = true;
+        this._isUpdateActiveAsync = true;
+        this._isExitActive = true;
+        this._isExitActiveAsync = true;
+
+        // 使わない側（useXxxSyncやuseXxxAsyncがfalse）は、
+        // コンストラクタの時点で対応するisXxxActive(Async)を自動的にfalseにしておく。
+        if (!this.useEnterSync) this.isEnterActiveOff();
+        if (!this.useEnterAsync) this.isEnterActiveAsyncOff();
+        if (!this.useUpdateSync) this.isUpdateActiveOff();
+        if (!this.useUpdateAsync) this.isUpdateActiveAsyncOff();
+        if (!this.useExitSync) this.isExitActiveOff();
+        if (!this.useExitAsync) this.isExitActiveAsyncOff();
+    }
+
+    // --- フェーズ別アクティブフラグ ---
+    get isEnterActive() { return this._isEnterActive; }
+    isEnterActiveOff() { this._isEnterActive = false; }
+    get isEnterActiveAsync() { return this._isEnterActiveAsync; }
+    isEnterActiveAsyncOff() { this._isEnterActiveAsync = false; }
+
+    get isUpdateActive() { return this._isUpdateActive; }
+    isUpdateActiveOff() { this._isUpdateActive = false; }
+    get isUpdateActiveAsync() { return this._isUpdateActiveAsync; }
+    isUpdateActiveAsyncOff() { this._isUpdateActiveAsync = false; }
+
+    get isExitActive() { return this._isExitActive; }
+    isExitActiveOff() { this._isExitActive = false; }
+    get isExitActiveAsync() { return this._isExitActiveAsync; }
+    isExitActiveAsyncOff() { this._isExitActiveAsync = false; }
+
+    // --- 各フェーズで同期/非同期のどちらを使うか（派生クラスでoverride） ---
+    get useEnterSync() { return true; }
+    get useEnterAsync() { return false; }
+    get useUpdateSync() { return true; }
+    get useUpdateAsync() { return false; }
+    get useExitSync() { return true; }
+    get useExitAsync() { return false; }
+
+    // --- 同期版ライフサイクル ---
+    enter(stateManagerData) {}
+    update(stateManagerData) {}
+    exit(stateManagerData) {}
+
+    // --- 非同期版ライフサイクル（デフォルトは同期版を呼ぶだけ） ---
+    async enterAsync(stateManagerData, ct) {
+        this.enter(stateManagerData);
+        this.isEnterActiveAsyncOff();
+    }
+    async updateAsync(stateManagerData, ct) {
+        this.update(stateManagerData);
+        this.isUpdateActiveAsyncOff();
+    }
+    async exitAsync(stateManagerData, ct) {
+        this.exit(stateManagerData);
+        this.isExitActiveAsyncOff();
+    }
+
+    /** 遷移先が複数あるノードのStateでoverrideする分岐条件。 */
+    branchNextState(stateManagerData) {
+        return null;
+    }
+}
+''')
+
+    base_manager_data_path = os.path.join(base_dir, "BaseStateManagerData.js")
+    if not os.path.exists(base_manager_data_path):
+        with open(base_manager_data_path, 'w', encoding='utf-8') as f:
+            f.write('''/**
+ * BaseStateManagerData.js
+ * Unity/C#版 BaseStateManagerData<T> に相当。
+ */
+
+export class BaseStateManagerData {
+    constructor() {
+        this.nowStateId = null;
+        this.oldStateId = null;
+        this.saveStateId = null;
+        this._stackIdList = [];
+    }
+
+    pushStateId(stateId) {
+        this._stackIdList.push(stateId);
+    }
+
+    /**
+     * NOTE: C#版のPopStateID()と同じく「覗き見(peek)」のみで、
+     * リストからは取り除かない。実際に取り除くのはpopUpStateId()。
+     */
+    popStateId() {
+        if (this._stackIdList.length > 0) {
+            return this._stackIdList[0];
+        }
+        return null;
+    }
+
+    /** スタック先頭を実際に取り除く（C#版のPopUpStateID()に相当）。 */
+    popUpStateId() {
+        if (this._stackIdList.length > 0) {
+            this._stackIdList.shift();
+        }
+    }
+
+    changeStateNowId(newStateId) {
+        this.oldStateId = this.nowStateId;
+        this.nowStateId = newStateId;
+    }
+
+    getNowStateId() {
+        return this.nowStateId;
+    }
+
+    getOldStateId() {
+        return this.oldStateId;
+    }
+}
+''')
+
+    tracker_path = os.path.join(base_dir, "StateGroupTracker.js")
+    if not os.path.exists(tracker_path):
+        with open(tracker_path, 'w', encoding='utf-8') as f:
+            f.write('''/**
+ * StateGroupTracker.js
+ * 現在アクティブなStateグループと、その1つ前のグループを追跡する
+ * 静的トラッカー（Unity/C#版 StateGroupTracker に相当）。
+ */
+
+export class StateGroupTracker {
+    static currentGroup = null;
+    static previousGroup = null;
+
+    static changeGroup(newGroup) {
+        if (newGroup === StateGroupTracker.currentGroup) return;
+        StateGroupTracker.previousGroup = StateGroupTracker.currentGroup;
+        StateGroupTracker.currentGroup = newGroup;
+    }
+}
+''')
+
+    base_control_path = os.path.join(base_dir, "BaseStateControl.js")
+    if not os.path.exists(base_control_path):
+        with open(base_control_path, 'w', encoding='utf-8') as f:
+            f.write('''/**
+ * BaseStateControl.js
+ * ステートコントローラーの基底クラス（Unity/C#版 BaseStateControl<T,E,F> に相当）。
+ *
+ * Combined API（同期Enter/Update/Exitと非同期Enter/Update/Exitを同時に動かすモード）は、
+ * Enter/Update/Exitの3フェーズそれぞれについて、同期・非同期の両方が完了する
+ * （isXxxActive / isXxxActiveAsync の両方がfalseになる）まで次のフェーズへ進まない。
+ *
+ * ・Enter: 完了するまでUpdateへ進まない。
+ * ・Update: 完了するまでExit（次への遷移）へ進まない。
+ * ・Exit: exitingState（Exit対象として退避した旧State）の完了を待ってから、
+ *   次StateのEnterフェーズを発火する（combinedEnterPendingで待機）。
+ */
+
+function logAsyncException(err) {
+    console.error("[StateControl] async exception:", err);
+}
+
+export class BaseStateControl {
+    constructor() {
+        this.stateManagerData = this.createManagerData();
+        this.state = null;
+        this.isFinish = false;
+        this.isTransitioning = false;
+
+        this._combinedAsyncUpdateStarted = false;
+        this._exitingState = null;
+        this._combinedEnterPending = false;
+    }
+
+    // --- 派生クラスでoverride ---
+    createManagerData() { throw new Error("not implemented"); }
+    getInitStartId() { throw new Error("not implemented"); }
+    factoryState(stateId) { throw new Error("not implemented"); }
+    branchState() { throw new Error("not implemented"); }
+    branchStateCombined() { throw new Error("not implemented"); }
+
+    // --- 同期API ---
+    startState(action = null) {
+        if (this.state !== null) {
+            console.warn("startState は既に開始済みです。二重呼び出しを無視しました。");
+            return;
+        }
+        this._onStartState(this.getInitStartId(), action);
+    }
+
+    _onStartState(stateId, action) {
+        this.state = this.factoryState(stateId);
+        this.stateManagerData.changeStateNowId(stateId);
+        if (action) action(this.stateManagerData);
+        this.state.enter(this.stateManagerData);
+    }
+
+    updateState(beforAction = null, afterAction = null) {
+        if (this.state === null) this.startState();
+        this._onUpdateState(beforAction, afterAction);
+    }
+
+    _onUpdateState(beforAction = null, afterAction = null) {
+        if (beforAction) beforAction(this.stateManagerData);
+        this.state.update(this.stateManagerData);
+        if (!this.isTransitioning) this.branchState();
+        if (afterAction) afterAction(this.stateManagerData);
+    }
+
+    // --- Combined API ---
+    startStateCombined(action = null) {
+        if (this.state !== null) {
+            console.warn("startStateCombined は既に開始済みです。二重呼び出しを無視しました。");
+            return;
+        }
+        this._onStartStateCombined(this.getInitStartId(), action);
+    }
+
+    _onStartStateCombined(stateId, action) {
+        this.state = this.factoryState(stateId);
+        this.stateManagerData.changeStateNowId(stateId);
+        if (action) action(this.stateManagerData);
+
+        this._combinedAsyncUpdateStarted = false;
+        this._exitingState = null;
+        this._combinedEnterPending = false;
+
+        if (this.state.useEnterSync) this.state.enter(this.stateManagerData);
+        if (this.state.useEnterAsync) {
+            this.state.enterAsync(this.stateManagerData).catch(logAsyncException);
+        }
+    }
+
+    updateStateCombined(beforAction = null, afterAction = null) {
+        if (this.state === null) this.startStateCombined();
+        this._onUpdateStateCombined(beforAction, afterAction);
+    }
+
+    _onUpdateStateCombined(beforAction = null, afterAction = null) {
+        if (beforAction) beforAction(this.stateManagerData);
+
+        // 直前のbranchStateCombined()でExitを発火済み・次Stateへの切り替え待ちの場合、
+        // exitingStateのExitフェーズ（同期・非同期の両方）が完了するまで待つ。
+        if (this._combinedEnterPending) {
+            if (!this._exitingState.isExitActive && !this._exitingState.isExitActiveAsync) {
+                this._combinedEnterPending = false;
+                this._exitingState = null;
+                if (this.state.useEnterSync) this.state.enter(this.stateManagerData);
+                if (this.state.useEnterAsync) {
+                    this.state.enterAsync(this.stateManagerData).catch(logAsyncException);
+                }
+            }
+            if (afterAction) afterAction(this.stateManagerData);
+            return;
+        }
+
+        // Enterフェーズ（同期・非同期の両方）が完了するまではUpdateへ進まない。
+        if (this.state.isEnterActive || this.state.isEnterActiveAsync) {
+            if (afterAction) afterAction(this.stateManagerData);
+            return;
+        }
+
+        if (this.state.useUpdateSync) this.state.update(this.stateManagerData);
+        if (this.state.useUpdateAsync && !this._combinedAsyncUpdateStarted) {
+            this._combinedAsyncUpdateStarted = true;
+            this.state.updateAsync(this.stateManagerData).catch(logAsyncException);
+        }
+
+        // Updateフェーズ（同期・非同期の両方）が完了した時だけ次へ進む。
+        if (!this.isTransitioning && !this.state.isUpdateActive && !this.state.isUpdateActiveAsync) {
+            this.branchStateCombined();
+        }
+
+        if (afterAction) afterAction(this.stateManagerData);
+    }
+
+    // --- 生成コードから呼ばれる遷移ヘルパー ---
+
+    /**
+     * 現在のstateをexitingStateとして退避してExitを発火し、
+     * 次state（まだEnterは呼ばない）に切り替えてExit完了待ちにする。
+     */
+    _beginExitCombined(nextState) {
+        const old = this.state;
+        this._exitingState = old;
+        if (old.useExitSync) old.exit(this.stateManagerData);
+        if (old.useExitAsync) {
+            old.exitAsync(this.stateManagerData).catch(logAsyncException);
+        }
+        this.state = nextState;
+        this._combinedAsyncUpdateStarted = false;
+        this._combinedEnterPending = true;
+    }
+
+    /** 次stateが無い（ステートマシン終了）場合のExit発火。 */
+    _beginExitFinish() {
+        const old = this.state;
+        if (old.useExitSync) old.exit(this.stateManagerData);
+        if (old.useExitAsync) {
+            old.exitAsync(this.stateManagerData).catch(logAsyncException);
+        }
+        this.isFinish = true;
+    }
+}
+''')
+
+
+def generate_state_id_javascript(file_path, name, json_data):
+    js_dir = os.path.join(file_path, "JavaScript")
+    os.makedirs(js_dir, exist_ok=True)
+    file_id_path = os.path.join(js_dir, f'{name}StateID.js')
+
+    if not json_data or not json_data.get('nodes'):
+        return
+
+    members = []
+    for label in _collect_stack_case_labels(json_data):
+        members.append(label)
+    for data in json_data.get('nodes', []):
+        label = data.get("data", {}).get("label", "")
+        node_id = data.get("id", 0)
+        if label:
+            members.append(f'{label}{int(node_id):02d}')
+
+    with open(file_id_path, 'w', encoding='utf-8') as f:
+        f.write(f'/** {name}StateID.js */\n\n')
+        f.write(f'export const {name}StateID = Object.freeze({{\n')
+        f.write('    NONE: 0,\n')
+        for i, member in enumerate(members, start=1):
+            f.write(f'    {member}: {i},\n')
+        f.write(f'    MAX: {len(members) + 1},\n')
+        f.write('});\n')
+
+
+def generate_state_manager_data_javascript(file_path, name, json_data):
+    js_dir = os.path.join(file_path, "JavaScript")
+    os.makedirs(js_dir, exist_ok=True)
+    file_manager_path = os.path.join(js_dir, f'{name}StateManagerData.js')
+    if os.path.exists(file_manager_path):
+        return  # 本実装は上書きしない（C#版の{name}StateManagerData.csと同じ扱い）
+
+    manager_fields = json_data.get('manager', [])
+    with open(file_manager_path, 'w', encoding='utf-8') as f:
+        f.write('import { BaseStateManagerData } from "../../base_javascript/BaseStateManagerData.js";\n\n')
+        f.write('/**\n')
+        f.write(f' * NOTE: managerフィールドの型はC#版（Base{name}StateManagerData.cs）の\n')
+        f.write(' * カスタム型システム（ClassData/Bit/Color/Bezier等）に依存しているため、\n')
+        f.write(' * ここでは移植していません。必要なフィールドは手動で追加してください。\n')
+        f.write(' */\n')
+        f.write(f'export class {name}StateManagerData extends BaseStateManagerData {{\n')
+        f.write('    constructor() {\n')
+        f.write('        super();\n')
+        for item in manager_fields:
+            fname = item.get('name', 'value')
+            f.write(f'        this.{fname} = null; // TODO: 型を設定してください\n')
+        f.write('    }\n')
+        f.write('}\n')
+
+
+def generate_state_classes_javascript(file_path, name, json_data):
+    js_dir = os.path.join(file_path, "JavaScript")
+    os.makedirs(js_dir, exist_ok=True)
+    file_states_path = os.path.join(js_dir, f'{name}States.js')
+    if os.path.exists(file_states_path):
+        return  # 本実装は上書きしない（C#版の{name}{label}State.csと同じ扱い）
+
+    labels = []
+    label_multi = {}
+    for node in json_data.get('nodes', []):
+        label = node.get("data", {}).get("label", "")
+        if not label:
+            continue
+        if label not in labels:
+            labels.append(label)
+            label_multi[label] = False
+        if len(node.get("data", {}).get("targets", [])) > 1:
+            label_multi[label] = True
+    for node in json_data.get('transitions', []):
+        label = node.get("fromState", "")
+        if label and label not in labels:
+            labels.append(label)
+            label_multi[label] = False
+
+    if not labels:
+        return
+
+    with open(file_states_path, 'w', encoding='utf-8') as f:
+        f.write('import { BaseState } from "../../base_javascript/BaseState.js";\n\n')
+        f.write(f'export class Base{name}State extends BaseState {{}}\n\n')
+        for label in labels:
+            f.write(f'export class {name}{label}State extends Base{name}State {{\n')
+            f.write('    enter(stateManagerData) {\n')
+            f.write('        this.isEnterActiveOff();\n')
+            f.write('    }\n\n')
+            f.write('    update(stateManagerData) {\n')
+            f.write('        this.isUpdateActiveOff();\n')
+            f.write('    }\n\n')
+            f.write('    exit(stateManagerData) {\n')
+            f.write('        this.isExitActiveOff();\n')
+            f.write('    }\n\n')
+            f.write('    async enterAsync(stateManagerData, ct) {\n')
+            f.write('        this.isEnterActiveAsyncOff();\n')
+            f.write('    }\n\n')
+            f.write('    async updateAsync(stateManagerData, ct) {\n')
+            f.write('        this.isUpdateActiveAsyncOff();\n')
+            f.write('    }\n\n')
+            f.write('    async exitAsync(stateManagerData, ct) {\n')
+            f.write('        this.isExitActiveAsyncOff();\n')
+            f.write('    }\n')
+            if label_multi.get(label):
+                f.write('\n    branchNextState(stateManagerData) {\n')
+                f.write('        // TODO: 複数遷移先の分岐条件をここに実装してください\n')
+                f.write('        return null;\n')
+                f.write('    }\n')
+            f.write('}\n\n')
+
+
+def _write_branch_cases_javascript(f, name, json_data, nodes, mode):
+    """
+    mode: 'sync' | 'combined'
+    C#版 _write_branch_switch_cases のロジックをJavaScriptに移植した簡易版。
+    """
+    def write_exit():
+        if mode == 'combined':
+            f.write('                // Exitはthis._beginExitCombined()/_beginExitFinish()内で発火\n')
+        else:
+            f.write('                this.state.exit(this.stateManagerData);\n')
+
+    def write_enter_or_begin(state_var):
+        if mode == 'combined':
+            f.write(f'                this._beginExitCombined({state_var});\n')
+        else:
+            f.write(f'                this.state = {state_var};\n')
+            f.write('                this.state.enter(this.stateManagerData);\n')
+
+    def write_finish_inline(indent):
+        if mode == 'combined':
+            f.write(f'{indent}this._beginExitFinish();\n')
+        else:
+            f.write(f'{indent}this.isFinish = true;\n')
+
+    code_label = []
+    for node in json_data.get('transitions', []):
+        label = node["fromState"]
+        if label in code_label:
+            continue
+        code_label.append(label)
+        f.write(f'            case {name}StateID.{label}: {{\n')
+        write_exit()
+        f.write('                this.stateManagerData.popUpStateId();\n')
+        f.write('                let poppedId = this.stateManagerData.popStateId();\n')
+        f.write('                if (poppedId === null) poppedId = this.stateManagerData.saveStateId;\n')
+        f.write('                if (poppedId === null) {\n')
+        f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+        write_finish_inline('                    ')
+        f.write('                    return;\n')
+        f.write('                }\n')
+        f.write('                this.stateManagerData.changeStateNowId(poppedId);\n')
+        f.write('                this.stateManagerData.saveStateId = null;\n')
+        f.write('                const nextState = this.factoryState(poppedId);\n')
+        f.write('                if (nextState === null) {\n')
+        f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+        f.write('                    this.stateManagerData.saveStateId = null;\n')
+        write_finish_inline('                    ')
+        f.write('                    return;\n')
+        f.write('                }\n')
+        write_enter_or_begin('nextState')
+        f.write('                return;\n')
+        f.write('            }\n')
+
+    for node in nodes:
+        label = node["data"]["label"]
+        node_id = int(node["id"])
+        targets = node["data"].get("targets", [])
+        sub_nodes = node["data"].get("subNodes", [])
+
+        f.write(f'            case {name}StateID.{label}{node_id:02d}: {{\n')
+        write_exit()
+        f.write('                this.stateManagerData.popUpStateId();\n')
+
+        if not targets:
+            if sub_nodes:
+                f.write('                this.stateManagerData.saveStateId = null;\n')
+                for child in sub_nodes:
+                    child_label = child["label"]
+                    f.write(f'                this.stateManagerData.pushStateId({name}StateID.{child_label});\n')
+                f.write('                const nextId = this.stateManagerData.popStateId();\n')
+                f.write('                const nextState = this.factoryState(nextId);\n')
+                f.write('                if (nextState === null) {\n')
+                f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+                f.write('                    this.stateManagerData.saveStateId = null;\n')
+                write_finish_inline('                    ')
+                f.write('                    return;\n')
+                f.write('                }\n')
+                write_enter_or_begin('nextState')
+                f.write('                return;\n')
+            else:
+                write_finish_inline('                ')
+                f.write('                return;\n')
+        elif len(targets) == 1:
+            next_node = targets[0]
+            target_label = next(
+                (n["data"]["label"] for n in nodes if n["id"] == next_node), None)
+            if target_label:
+                f.write(f'                let nextId = {name}StateID.{target_label}{int(next_node):02d};\n')
+                if sub_nodes:
+                    f.write('                this.stateManagerData.saveStateId = nextId;\n')
+                    for child in sub_nodes:
+                        child_label = child["label"]
+                        f.write(f'                this.stateManagerData.pushStateId({name}StateID.{child_label});\n')
+                    f.write('                this.stateManagerData.pushStateId(nextId);\n')
+                    f.write('                nextId = this.stateManagerData.popStateId();\n')
+                else:
+                    f.write('                this.stateManagerData.changeStateNowId(nextId);\n')
+                f.write('                const nextState = this.factoryState(nextId);\n')
+                f.write('                if (nextState === null) {\n')
+                f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+                f.write('                    this.stateManagerData.saveStateId = null;\n')
+                write_finish_inline('                    ')
+                f.write('                    return;\n')
+                f.write('                }\n')
+                write_enter_or_begin('nextState')
+                f.write('                return;\n')
+        else:
+            f.write('                let nextId = this.state.branchNextState(this.stateManagerData);\n')
+            if sub_nodes:
+                f.write('                this.stateManagerData.saveStateId = nextId;\n')
+                for child in sub_nodes:
+                    child_label = child["label"]
+                    f.write(f'                this.stateManagerData.pushStateId({name}StateID.{child_label});\n')
+                f.write('                this.stateManagerData.pushStateId(nextId);\n')
+                f.write('                nextId = this.stateManagerData.popStateId();\n')
+            else:
+                f.write('                this.stateManagerData.changeStateNowId(nextId);\n')
+            f.write('                if (nextId === null) {\n')
+            f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+            f.write('                    this.stateManagerData.saveStateId = null;\n')
+            write_finish_inline('                    ')
+            f.write('                    return;\n')
+            f.write('                }\n')
+            f.write('                const nextState = this.factoryState(nextId);\n')
+            f.write('                if (nextState === null) {\n')
+            f.write(f'                    this.stateManagerData.changeStateNowId({name}StateID.NONE);\n')
+            f.write('                    this.stateManagerData.saveStateId = null;\n')
+            write_finish_inline('                    ')
+            f.write('                    return;\n')
+            f.write('                }\n')
+            write_enter_or_begin('nextState')
+            f.write('                return;\n')
+        f.write('            }\n')
+
+    f.write('            default:\n')
+    f.write('                return;\n')
+
+
+def generate_control_classes_javascript(file_path, name, json_data):
+    js_dir = os.path.join(file_path, "JavaScript")
+    os.makedirs(js_dir, exist_ok=True)
+    file_control_path = os.path.join(js_dir, f'{name}StateControl.js')
+
+    nodes = json_data.get('nodes', [])
+    if not nodes:
+        return
+
+    init_node = next((n for n in nodes if int(n["id"]) == 1), nodes[0])
+    init_label = init_node["data"]["label"]
+    init_id = int(init_node["id"])
+    init_state_id = f"{name}StateID.{init_label}{init_id:02d}"
+
+    labels = []
+    for node in nodes:
+        label = node["data"]["label"]
+        if label not in labels:
+            labels.append(label)
+    stack_labels = _collect_stack_case_labels(json_data)
+    for label in stack_labels:
+        if label not in labels:
+            labels.append(label)
+
+    with open(file_control_path, 'w', encoding='utf-8') as f:
+        f.write('import { BaseStateControl } from "../../base_javascript/BaseStateControl.js";\n')
+        f.write(f'import {{ {name}StateID }} from "./{name}StateID.js";\n')
+        f.write(f'import {{ {name}StateManagerData }} from "./{name}StateManagerData.js";\n')
+        f.write(f'import {{\n')
+        for label in labels:
+            f.write(f'    {name}{label}State,\n')
+        f.write(f'}} from "./{name}States.js";\n\n')
+
+        f.write(f'export class {name}StateControl extends BaseStateControl {{\n')
+        f.write(f'    static GROUP_ID = "{name}";\n\n')
+
+        f.write('    createManagerData() {\n')
+        f.write(f'        return new {name}StateManagerData();\n')
+        f.write('    }\n\n')
+
+        f.write('    getInitStartId() {\n')
+        f.write(f'        return {init_state_id};\n')
+        f.write('    }\n\n')
+
+        f.write('    factoryState(stateId) {\n')
+        f.write('        switch (stateId) {\n')
+        for label in stack_labels:
+            f.write(f'            case {name}StateID.{label}: return new {name}{label}State();\n')
+        for node in nodes:
+            label = node["data"]["label"]
+            node_id = int(node["id"])
+            f.write(f'            case {name}StateID.{label}{node_id:02d}: return new {name}{label}State();\n')
+        f.write('            default: return null;\n')
+        f.write('        }\n')
+        f.write('    }\n\n')
+
+        f.write('    branchState() {\n')
+        f.write('        if (this.state.isUpdateActive) return;\n')
+        f.write('        this.isTransitioning = true;\n')
+        f.write('        try {\n')
+        f.write('            let stateId = this.stateManagerData.popStateId();\n')
+        f.write('            if (stateId === null) stateId = this.stateManagerData.getNowStateId();\n')
+        f.write('            this._branchSwitchSync(stateId);\n')
+        f.write('        } finally {\n')
+        f.write('            this.isTransitioning = false;\n')
+        f.write('        }\n')
+        f.write('    }\n\n')
+
+        f.write('    _branchSwitchSync(stateId) {\n')
+        f.write('        switch (stateId) {\n')
+        _write_branch_cases_javascript(f, name, json_data, nodes, mode='sync')
+        f.write('        }\n')
+        f.write('    }\n\n')
+
+        f.write('    branchStateCombined() {\n')
+        f.write('        this.isTransitioning = true;\n')
+        f.write('        try {\n')
+        f.write('            let stateId = this.stateManagerData.popStateId();\n')
+        f.write('            if (stateId === null) stateId = this.stateManagerData.getNowStateId();\n')
+        f.write('            this._branchSwitchCombined(stateId);\n')
+        f.write('        } finally {\n')
+        f.write('            this.isTransitioning = false;\n')
+        f.write('        }\n')
+        f.write('    }\n\n')
+
+        f.write('    _branchSwitchCombined(stateId) {\n')
+        f.write('        switch (stateId) {\n')
+        _write_branch_cases_javascript(f, name, json_data, nodes, mode='combined')
+        f.write('        }\n')
+        f.write('    }\n')
+        f.write('}\n')
 
 
 @bp.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
@@ -1148,52 +2651,46 @@ def generate_base(data_dir):
 
     if not os.path.exists(os.path.join(data_dir, STATE_DATA, "BaseState.cs")):
         code_str = """
-        private bool is_active = true;
-        public bool IsActive => is_active;
+        // ------------------------------------------------------------
+        // フェーズ別アクティブフラグ（Enter/Update/Exit × 同期/非同期の計6個）。
+        // 各フェーズが「完了した」とみなされるのは、そのフェーズで使う同期・非同期の
+        // 両方がfalseになった時。使わない側（UseXxxSync/UseXxxAsyncがfalse）は
+        // コンストラクタで自動的にOffにしておくので、使う側だけを待てばよい。
+        // 使う側は、対応するEnter/Update/Exit(Async)の実装が完了したタイミングで
+        // 自分でXxxActiveOff()を呼ぶ（デフォルト生成コードでは、各メソッドの中に
+        // 最初からOff呼び出しが入っている）。
+        // ------------------------------------------------------------
+        private bool is_enter_active = true;
+        public bool IsEnterActive => is_enter_active;
+        protected void IsEnterActiveOff() { is_enter_active = false; }
 
-        /// <summary>
-        /// IsActive・IsActiveAsyncの「両方」がfalseになった瞬間に一度だけ発火する。
-        /// 通知用のフックであり、StateControl自身はこれを遷移のトリガーには使わない
-        /// （Update()の呼び出しスタック内から再入で遷移処理を始めるのは安全ではないため）。
-        /// UIやログなど、「このStateが両方終わったこと」を早く知りたい用途向け。
-        /// </summary>
-        public event Action OnStateFullyInactive;
+        private bool is_enter_active_async = true;
+        public bool IsEnterActiveAsync => is_enter_active_async;
+        protected void IsEnterActiveAsyncOff() { is_enter_active_async = false; }
 
-        private void CheckFullyInactive()
-        {
-            if (!is_active && !is_active_async)
-            {
-                OnStateFullyInactive?.Invoke();
-            }
-        }
+        private bool is_update_active = true;
+        public bool IsUpdateActive => is_update_active;
+        protected void IsUpdateActiveOff() { is_update_active = false; }
 
-        protected void IsActiveOff()
-        {
-            is_active = false;
-            CheckFullyInactive();
-        }
+        private bool is_update_active_async = true;
+        public bool IsUpdateActiveAsync => is_update_active_async;
+        protected void IsUpdateActiveAsyncOff() { is_update_active_async = false; }
 
-        /// <summary>
-        /// Combinedモード（同期・非同期を同時に走らせるAPI）専用のフラグ。
-        /// 非同期側のUpdateAsyncが自分の処理を終えた時に IsActiveAsyncOff() を呼ぶ。
-        /// StateControl の Combined API は IsActive と IsActiveAsync の両方が
-        /// falseになって初めて次の状態へ遷移する。
-        /// </summary>
-        private bool is_active_async = true;
-        public bool IsActiveAsync => is_active_async;
+        private bool is_exit_active = true;
+        public bool IsExitActive => is_exit_active;
+        protected void IsExitActiveOff() { is_exit_active = false; }
 
-        protected void IsActiveAsyncOff()
-        {
-            is_active_async = false;
-            CheckFullyInactive();
-        }
+        private bool is_exit_active_async = true;
+        public bool IsExitActiveAsync => is_exit_active_async;
+        protected void IsExitActiveAsyncOff() { is_exit_active_async = false; }
 
         /// <summary>
         /// Combinedモードで、このStateが各フェーズで同期/非同期のどちらを使うかを宣言する。
         /// 遷移図のノードごとのチェックボックス設定に応じて、生成される具象クラス側で
         /// overrideされる（デフォルトは同期のみ）。
-        /// StateControlのCombined APIはこれを見て呼び出す関数を決めるため、
-        /// 「チェックしていない方を二重に呼んでしまう」ことがない。
+        /// StateControlのCombined APIはこれを見て呼び出す関数と、待つべきフラグを決めるため、
+        /// 「チェックしていない方を二重に呼んでしまう」「使っていない側の完了待ちで
+        /// 止まってしまう」ことがない。
         /// </summary>
         public virtual bool UseEnterSync => true;
         public virtual bool UseEnterAsync => false;
@@ -1204,15 +2701,16 @@ def generate_base(data_dir):
 
         protected BaseState()
         {
-            // Update非同期を使わないStateは、コンストラクタの時点で
-            // IsActiveAsyncを自動的にfalseにしておく（逆も同様）。
-            // これによりCombinedモードの遷移判定
-            // 「IsActiveとIsActiveAsyncが両方falseになったら次へ」が、
-            // 使っていない側の完了待ちで止まってしまうことがない。
+            // 使わない側（UseXxxSync/UseXxxAsyncがfalse）は、コンストラクタの時点で
+            // 対応するIsXxxActive(Async)を自動的にfalseにしておく。
             // ※仮想メンバー呼び出しだが、派生クラスのoverrideプロパティは
             //   フィールド参照を持たない単純な式なので、ここで安全に呼べる。
-            if (!UseUpdateSync) IsActiveOff();
-            if (!UseUpdateAsync) IsActiveAsyncOff();
+            if (!UseEnterSync) IsEnterActiveOff();
+            if (!UseEnterAsync) IsEnterActiveAsyncOff();
+            if (!UseUpdateSync) IsUpdateActiveOff();
+            if (!UseUpdateAsync) IsUpdateActiveAsyncOff();
+            if (!UseExitSync) IsExitActiveOff();
+            if (!UseExitAsync) IsExitActiveAsyncOff();
         }
 
         /// <summary>
@@ -1236,16 +2734,19 @@ def generate_base(data_dir):
         {
             Enter(state_manager_data);
             await UniTask.CompletedTask;
+            IsEnterActiveAsyncOff();
         }
         public virtual async UniTask UpdateAsync(T state_manager_data, CancellationToken ct)
         {
             Update(state_manager_data);
             await UniTask.CompletedTask;
+            IsUpdateActiveAsyncOff();
         }
         public virtual async UniTask ExitAsync(T state_manager_data, CancellationToken ct)
         {
             Exit(state_manager_data);
             await UniTask.CompletedTask;
+            IsExitActiveAsyncOff();
         }
 
         public virtual E BranchNextState(T state_manager_data)
@@ -1514,14 +3015,31 @@ namespace GameCore.States.Control
         // 同時に動かすモード。呼び出し側は同期APIと同じ感覚（awaitなし）で毎フレーム呼べる。
         // 内部で使うCancellationTokenは RootToken（Setup()で入れ替え可能）に連結される。
         //
-        // ・Enter/Exit: state自身が宣言する UseEnterSync/UseEnterAsync等に従って呼ぶ。
+        // Enter/Update/Exit の3フェーズそれぞれに専用のアクティブフラグ
+        // （IsEnterActive/IsEnterActiveAsync, IsUpdateActive/IsUpdateActiveAsync,
+        //  IsExitActive/IsExitActiveAsync）があり、フェーズの同期・非同期の両方が
+        // falseになるまで次のフェーズへは進まない。
+        //
+        // ・Enter: state自身が宣言する UseEnterSync/UseEnterAsync に従って呼ぶ。
         //   同期はその場で、非同期は Forget(LogAsyncException) で発火するだけ（待たない）。
-        // ・Update: 毎フレーム同期版を呼びつつ、非同期版は状態が変わった際に一度だけ発火する。
-        //   遷移するかどうかは state.IsActive と state.IsActiveAsync の「両方」が
-        //   false になった時点で判定する（同期側だけ・非同期側だけが終わっても遷移しない）。
+        //   IsEnterActive/IsEnterActiveAsyncの両方がfalseになるまでUpdateは呼ばれない。
+        // ・Update: 毎フレーム同期版を呼びつつ、非同期版はこの状態になってから
+        //   一度だけ発火する（毎フレーム再発火しない）。
+        //   IsUpdateActive/IsUpdateActiveAsyncの両方がfalseになった時だけ
+        //   BranchStateCombined()（Exit呼び出し）へ進む。
+        // ・Exit: BranchStateCombined()内で旧stateを exitingState に退避して呼ぶ
+        //   （state自体はこの時点で次Stateに差し替わるため）。
+        //   IsExitActive/IsExitActiveAsyncの両方がfalseになるまで、
+        //   次Stateの Enter フェーズは発火されない（combinedEnterPending で待機）。
         // ------------------------------------------------------------
-        private CancellationTokenSource combinedCts;
-        private bool combinedAsyncUpdateStarted;
+        protected CancellationTokenSource combinedCts;
+        protected bool combinedAsyncUpdateStarted;
+
+        // Exit待ちの旧State。BranchStateCombined()内で state を退避してから
+        // Exitフェーズを発火し、その完了を OnUpdateStateCombined 側で待つ。
+        protected F exitingState;
+        // true の間は combinedEnterPending 待機中（exitingStateのExit完了待ち）。
+        protected bool combinedEnterPending;
 
         public void StartStateCombined(Action<E> action = null)
         {
@@ -1553,6 +3071,8 @@ namespace GameCore.States.Control
             combinedCts?.Dispose();
             combinedCts = CancellationTokenSource.CreateLinkedTokenSource(RootToken);
             combinedAsyncUpdateStarted = false;
+            exitingState = null;
+            combinedEnterPending = false;
 
             // Enter: state自身が宣言する UseEnterSync/UseEnterAsync に従って呼ぶ
             if (state.UseEnterSync) state.Enter(state_manager_data);
@@ -1569,6 +3089,30 @@ namespace GameCore.States.Control
         {
             befor_action?.Invoke(state_manager_data);
 
+            // 直前のBranchStateCombined()でExitを発火済み・次Stateへの切り替え待ちの場合、
+            // exitingStateのExitフェーズ（同期・非同期の両方）が完了するまで待つ。
+            // 完了したら次State（state）のEnterフェーズを発火する
+            // （このフレームではまだUpdateは呼ばない）。
+            if (combinedEnterPending)
+            {
+                if (!exitingState.IsExitActive && !exitingState.IsExitActiveAsync)
+                {
+                    combinedEnterPending = false;
+                    exitingState = null;
+                    if (state.UseEnterSync) state.Enter(state_manager_data);
+                    if (state.UseEnterAsync) state.EnterAsync(state_manager_data, combinedCts.Token).Forget(LogAsyncException);
+                }
+                after_action?.Invoke(state_manager_data);
+                return;
+            }
+
+            // Enterフェーズ（同期・非同期の両方）が完了するまではUpdateフェーズへ進まない。
+            if (state.IsEnterActive || state.IsEnterActiveAsync)
+            {
+                after_action?.Invoke(state_manager_data);
+                return;
+            }
+
             // Update: state自身が宣言する UseUpdateSync/UseUpdateAsync に従って呼ぶ。
             // 非同期は、この状態になってから一度だけ発火する（毎フレーム再発火しない）。
             if (state.UseUpdateSync) state.Update(state_manager_data);
@@ -1578,9 +3122,9 @@ namespace GameCore.States.Control
                 state.UpdateAsync(state_manager_data, combinedCts.Token).Forget(LogAsyncException);
             }
 
-            // 同期・非同期の両方が「終わった」と自己申告した時だけ次へ進む。
+            // Updateフェーズ（同期・非同期の両方）が「終わった」と自己申告した時だけ次へ進む。
             // （isTransitioningで、遷移処理自体からの再入も防止する）
-            if (!isTransitioning && !state.IsActive && !state.IsActiveAsync)
+            if (!isTransitioning && !state.IsUpdateActive && !state.IsUpdateActiveAsync)
             {
                 BranchStateCombined();
             }
@@ -1589,9 +3133,12 @@ namespace GameCore.States.Control
         }
 
         /// <summary>
-        /// Combinedモードでの遷移判定。IsActive/IsActiveAsyncが両方falseの時だけ
+        /// Combinedモードでの遷移判定。IsUpdateActive/IsUpdateActiveAsyncが両方falseの時だけ
         /// StateControl側から呼ばれる（呼ばれた時点で無条件にExit・遷移してよい）。
-        /// Exitも同期はその場、非同期はFire-and-Forgetで発火する。
+        /// 旧stateをexitingStateに退避してからExitを発火する（同期はその場、
+        /// 非同期はFire-and-Forget）。次stateのEnterは、exitingStateの
+        /// IsExitActive/IsExitActiveAsyncが両方falseになるのを待ってから
+        /// OnUpdateStateCombined側で発火される（combinedEnterPending）。
         /// </summary>
         public abstract void BranchStateCombined();
 
@@ -1609,6 +3156,8 @@ namespace GameCore.States.Control
             combinedCts?.Cancel();
             combinedCts?.Dispose();
             combinedCts = null;
+            exitingState = null;
+            combinedEnterPending = false;
             rootCts?.Cancel();
             rootCts?.Dispose();
             rootCts = null;
@@ -1714,7 +3263,11 @@ namespace GameCore.States.Control
         f.write('        public abstract TStateId ConditionsBranch(TManagerData manager_data, TState state);\n')
         f.write('    }\n')
         f.write('}\n')
-    
+
+    # Python / JavaScript 版の共通基底コード（簡易対応）も合わせて生成する
+    generate_base_python(data_dir)
+    generate_base_javascript(data_dir)
+
 
 
 

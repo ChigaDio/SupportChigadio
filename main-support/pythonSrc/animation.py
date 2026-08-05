@@ -19,6 +19,13 @@ ASSETS_DATA = os.path.join(DATA_DIR, "assets_data")
 ANIM_DATA = os.path.join(ASSETS_DATA, 'anim_data')
 ANIM_JSON = os.path.join(ANIM_DATA, 'assets_animator.json')
 
+def init(data_dir):
+    global DATA_DIR, ASSETS_DATA, ANIM_DATA, ANIM_JSON
+    DATA_DIR = os.path.abspath(data_dir)
+    ASSETS_DATA = os.path.join(DATA_DIR, "assets_data")
+    ANIM_DATA = os.path.join(ASSETS_DATA, 'anim_data')
+    ANIM_JSON = os.path.join(ANIM_DATA, 'assets_animator.json')
+
 def generate_base():
     if not os.path.exists(ASSETS_DATA):
         os.mkdir(ASSETS_DATA)

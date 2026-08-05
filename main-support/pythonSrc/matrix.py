@@ -49,6 +49,11 @@ else:
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
+def init(data_dir):
+    """app.py から呼び出す初期化関数。"""
+    global DATA_DIR
+    DATA_DIR = os.path.abspath(data_dir)   
+
 
 # MatrixID管理
 @bp.route('/api/class-data-matrix-id', methods=['GET', 'POST', 'PATCH'])
