@@ -232,21 +232,23 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            => GetMaterial({group_enum_name}.{group_name}, {table_name}[(int)id]);")
                     single_lines.append("")
                 elif "TextureCore" == class_name:
+                    single_lines.append(f"       public Texture2D GetTexture({detail_enum_name}ID id)")
+                    single_lines.append(f"            => GetTexture({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                    single_lines.append("") 
+                    
+                    single_lines.append(f"       public Sprite GetSprite({detail_enum_name}ID id)")
+                    single_lines.append(f"            => GetSprite({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                    single_lines.append("") 
                     for item in value:
                         sprite_table_name = f"_{detail_enum_name}_{item["name"]}To{id_enum_name}"
                         sprites = item.get("sprites",[])
                         sprite_name = item.get("name","")
                         
-                        single_lines.append(f"       public Texture2D GetTexture({detail_enum_name}ID id)")
-                        single_lines.append(f"            => GetTexture({group_enum_name}.{group_name}, {table_name}[(int)id]);")
-                        single_lines.append("") 
                         
                         if len(sprites) == 0 or sprite_name == "":
                             continue
 
-                        single_lines.append(f"       public Sprite GetSprite({detail_enum_name}ID id)")
-                        single_lines.append(f"            => GetSprite({group_enum_name}.{group_name}, {table_name}[(int)id]);")
-                        single_lines.append("") 
+
 
                         generic_name = f"{detail_enum_name}_{sprite_name}ID";
                         single_lines.append(f"       public Sprite GetSprite({generic_name} spriteIndex, int fallbackIndex = -1)")
@@ -3018,8 +3020,16 @@ def reload_texture_file(group_name, index):
 def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     target_dir = os.path.join(ENUM_DIR, f"{group_name}_{subgroup_name}_{sprite_name}")
     
+    #もし最初にTextureがなければ追加
+    if "Texture" not in target_dir:
+        target_dir = os.path.join(ENUM_DIR, "Texture", f"{group_name}_{subgroup_name}_{sprite_name}")
+    
     os.makedirs(target_dir, exist_ok=True)
     enum_name = f"{group_name}_{subgroup_name}_{sprite_name}"
+    
+    #もし最初にTextureがなければ追加
+    if "Texture" not in enum_name:
+        enum_name = f"Texture_{group_name}_{subgroup_name}_{sprite_name}"
     
     #enum作成
     cs_content = "namespace GameCore.Enums\n{\n"
@@ -3118,6 +3128,7 @@ def generate_texture_csharp():
     # TextureCore.cs
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -3126,6 +3137,7 @@ using UnityEngine;
 using Cysharp.Threading.Tasks;
 using AddressableSystem;
 using GameCore.Enums;
+using System.Runtime.CompilerServices;
 
 namespace GameCore.Texture
 {
@@ -3392,13 +3404,18 @@ namespace GameCore.Texture
             return null;
         }
 
+        private int EnumToInt<TEnum>(TEnum value) where TEnum : Enum
+        {
+            return Unsafe.As<TEnum, int>(ref value);
+        }
+
         public Sprite GetSprite<TEnum>(TextureGroup group, TextureID textureId, TEnum spriteIndex, int fallbackIndex = -1) where TEnum : Enum
         {
             if (loadedAssets.TryGetValue(group, out var groupAssets) &&
                 groupAssets.TryGetValue(textureId, out var addressable))
             {
                 // TEnum を数値（インデックス）として変換
-                int index = (int)spriteIndex - 1;
+                int index = EnumToInt(spriteIndex) - 1;
 
                 // fallbackIndex が指定されている場合はそちらを優先
                 int targetIndex = fallbackIndex >= 0 ? fallbackIndex : index;
@@ -3436,11 +3453,13 @@ namespace GameCore.Texture
     }
 }
 
+
+
 """
         with open(os.path.join(TEXTURE_DATA, "TextureCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
             
-    if not os.path.exists(os.path.join(ENUM_DIR, "TextureAddressableData.cs")):
+    if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureAddressableData.cs")):
         code_str = """
 
 
@@ -3503,6 +3522,18 @@ namespace GameCore.Texture
             else
             {
                 textureData?.Release();
+            }
+        }
+        
+        public void ReleaseAndUntrack()
+        {
+            if (isSprite)
+            {
+                spriteData?.ReleaseAndUntrack();
+            }
+            else
+            {
+                textureData?.ReleaseAndUntrack();
             }
         }
 
