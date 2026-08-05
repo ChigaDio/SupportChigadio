@@ -393,6 +393,9 @@ def register_enum_names(enum_dir, names):
         enum_list = json.load(f)
         existing_names = [e['name'] for e in enum_list]
         max_id = max([e['id'] for e in enum_list if 'id' in e], default=0)
+        #namesが配列であれば
+        if isinstance(names, str):
+            names = [names]
         for name in names:
             if name not in existing_names:
                 max_id += 1

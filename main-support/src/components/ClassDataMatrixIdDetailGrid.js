@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, createTheme, ThemeProvider } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, createTheme, ThemeProvider, InputAdornment, IconButton, Tooltip } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
@@ -9,6 +9,9 @@ import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import CodeIcon from '@mui/icons-material/Code';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import SearchIcon from '@mui/icons-material/Search';
+import ClearIcon from '@mui/icons-material/Clear';
+import EditIcon from '@mui/icons-material/Edit';
 import Chip from '@mui/material/Chip';
 import Papa from 'papaparse';
 import {
@@ -120,6 +123,9 @@ function ClassDataMatrixIdDetailGrid() {
   const [editingCell, setEditingCell] = useState(null);
   const [cellValues, setCellValues] = useState({});
   const apiRef = useGridApiRef();
+  // ★ 追加: 行ID・列IDが多いと分かりにくいため、検索で絞り込めるようにする
+  const [rowSearch, setRowSearch] = useState('');
+  const [colSearch, setColSearch] = useState('');
 
   // ★ 配列型("int[]"等)・classData型（ネスト）にも対応した共通のデフォルト値生成
   // (gridRows等より先に定義しておく必要があるため、ここに配置)
@@ -187,6 +193,27 @@ function ClassDataMatrixIdDetailGrid() {
       return rowData;
     });
   }, [rowKeys, colKeys, data.data, data.fields]);
+
+  // ★ 追加: 行ID・列IDの検索絞り込み（Matrixは行×列の組み合わせが多くなりがちで
+  //   見つけたいセルを探しづらいため、部分一致で絞り込めるようにする）
+  const filteredRowKeys = useMemo(() => {
+    const q = rowSearch.trim().toLowerCase();
+    if (!q) return rowKeys;
+    return rowKeys.filter(rk => rk.toLowerCase().includes(q));
+  }, [rowKeys, rowSearch]);
+
+  const filteredColKeys = useMemo(() => {
+    const q = colSearch.trim().toLowerCase();
+    if (!q) return colKeys;
+    return colKeys.filter(ck => ck.toLowerCase().includes(q));
+  }, [colKeys, colSearch]);
+
+  // ★ 検索結果に応じて実際にグリッドへ渡す行を絞り込む（列は columns 側で絞り込む）
+  const displayedRows = useMemo(() => {
+    if (filteredRowKeys.length === rowKeys.length) return gridRows;
+    const filteredSet = new Set(filteredRowKeys);
+    return gridRows.filter(row => filteredSet.has(row.rowKey));
+  }, [gridRows, filteredRowKeys, rowKeys.length]);
 
   useEffect(() => {
     if (!name || name.includes(':')) {
@@ -487,10 +514,15 @@ function ClassDataMatrixIdDetailGrid() {
     });
   };
 
-  const handleCellDoubleClick = (params) => {
+  // ★ 修正: ダブルクリック＋DataGridの「セル内編集モード（editable）」の併用が
+  //   打鍵のたびに重くなり入力が詰まる原因だったため、editableは全廃止し、
+  //   クリックでダイアログを開く方式に統一（ClassDataIdDetailGridと同じ考え方）。
+  //   DataGridの編集モードには一切入らないので、キー入力はダイアログ内の
+  //   入力欄だけが受け取るようになる。
+  const handleCellClick = (rowKey, colKey) => {
     if (!data.fields.length) return;
-    setEditingCell({ rowKey: params.row.rowKey, colKey: params.field });
-    setCellValues(data.data[params.row.rowKey]?.[params.field] || {});
+    setEditingCell({ rowKey, colKey });
+    setCellValues(data.data[rowKey]?.[colKey] || {});
     setOpenCellEditor(true);
   };
 
@@ -508,6 +540,9 @@ function ClassDataMatrixIdDetailGrid() {
   //    ClassDataIdDetailGrid.js から共有している SingleValueEditor /
   //    ArrayFieldEditor / ClassFieldEditor に統一（数値入力の不具合修正も含む）。
 
+  // ★ 修正: 全カラムをグリッド内編集(editable)ではなく専用ダイアログ編集に統一。
+  //   （ClassDataIdDetailGridの修正と同じ理由。editable+セル内編集モードの併用が
+  //     打鍵のたびに重くなり入力が詰まる原因だった）
   const columns = useMemo(() => {
     return [
       {
@@ -517,13 +552,14 @@ function ClassDataMatrixIdDetailGrid() {
         // ★ 行ID(Row Key)は背景色を緑にして目立たせる
         cellClassName: 'matrix-row-id-cell',
       },
-      ...colKeys.map(ck => ({
+      // ★ 検索ボックスで絞り込んだ列だけを表示する（列IDが多いときの見やすさ対策）
+      ...filteredColKeys.map(ck => ({
         field: ck,
         headerName: ck,
         width: 240,
-        editable: !!data.fields.length,
+        editable: false,
         // ★ 単一行のテキストではなく、フィールド名/値を並べた
-        //   見やすいミニテーブルとして表示する
+        //   見やすいミニテーブルとして表示する。クリックで編集ダイアログを開く。
         renderCell: (params) => {
           const value = params.value || {};
           if (data.fields.length === 0) {
@@ -531,65 +567,158 @@ function ClassDataMatrixIdDetailGrid() {
           }
           return (
             <Box
-              component="table"
+              onClick={() => handleCellClick(params.row.rowKey, ck)}
               sx={{
                 width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: '0.75rem',
-                lineHeight: 1.4,
-                '& td': {
-                  padding: '2px 6px',
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  verticalAlign: 'top',
-                },
-                '& tr:last-of-type td': { borderBottom: 'none' },
+                height: '100%',
+                cursor: 'pointer',
+                px: 0.5,
+                py: 0.5,
+                '&:hover': { bgcolor: 'action.hover' },
               }}
             >
-              <tbody>
-                {data.fields.map(f => {
-                  const fieldValue = value[f.name] ?? getDefaultValue(f.type);
-                  const preview = formatPreviewValue(fieldValue, f.type, classSchemas, f.options);
-                  return (
-                    <tr key={f.name}>
-                      <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>
-                        {f.name}{f.description ? `（${f.description}）` : ''}
-                      </td>
-                      <td
-                        title={preview}
-                        style={{
-                          wordBreak: 'break-word',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                        }}
-                      >
-                        {preview}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.25 }}>
+                <EditIcon fontSize="inherit" color="action" sx={{ fontSize: 12, flexShrink: 0 }} />
+                <Typography variant="caption" color="text.disabled" sx={{ fontSize: 10 }}>クリックで編集</Typography>
+              </Box>
+              <Box
+                component="table"
+                sx={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: '0.75rem',
+                  lineHeight: 1.4,
+                  '& td': {
+                    padding: '2px 6px',
+                    borderBottom: '1px solid',
+                    borderColor: 'divider',
+                    verticalAlign: 'top',
+                  },
+                  '& tr:last-of-type td': { borderBottom: 'none' },
+                }}
+              >
+                <tbody>
+                  {data.fields.map(f => {
+                    const fieldValue = value[f.name] ?? getDefaultValue(f.type);
+                    const preview = formatPreviewValue(fieldValue, f.type, classSchemas, f.options);
+                    return (
+                      <tr key={f.name}>
+                        <td style={{ fontWeight: 600, color: '#666', whiteSpace: 'nowrap' }}>
+                          {f.name}{f.description ? `（${f.description}）` : ''}
+                        </td>
+                        <td
+                          title={preview}
+                          style={{
+                            wordBreak: 'break-word',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                          }}
+                        >
+                          {preview}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Box>
             </Box>
           );
         },
       }))
     ];
-  }, [colKeys, data.fields, classSchemas]);
+  }, [filteredColKeys, data.fields, classSchemas]);
+
+  // ============================================================
+  // ★ 追加: 行の高さを「数値」で事前計算する。
+  //   以前は getRowHeight={() => 'auto'} でDOM実測（autoモード）していたが、
+  //   これはダイアログ内で1文字打つたびにDataGrid側の再計算コストが乗る
+  //   原因のひとつだった（ClassDataIdDetailGridと同じ問題）。
+  //   Matrixの各セルは「常に data.fields と同じ行数」のミニテーブルなので、
+  //   フィールド数から高さは一意に決まる（内容量では変化しない：各項目は
+  //   WebkitLineClamp:2で最大2行に固定しているため）。
+  // ============================================================
+  const MATRIX_FIELD_ROW_PX = 38; // フィールド1件あたりの高さ（2行クランプ＋余白＋罫線）
+  const MATRIX_ROW_BASE_PX = 52;  // 最低の行高さ
+  const MATRIX_ROW_EXTRA_PX = 34; // 「クリックで編集」ラベル分＋セルpadding
+
+  const matrixRowHeight = useMemo(() => {
+    const fieldCount = data.fields.length || 1;
+    return Math.max(MATRIX_ROW_BASE_PX, fieldCount * MATRIX_FIELD_ROW_PX + MATRIX_ROW_EXTRA_PX);
+  }, [data.fields.length]);
+
+  const getMatrixRowHeight = useCallback(() => matrixRowHeight, [matrixRowHeight]);
 
   return (
     <ThemeProvider theme={theme}>
-      <Box sx={{ p: 3, maxWidth: '1200px', margin: '0 auto' }}>
+      <Box sx={{ p: 3, maxWidth: '1600px', margin: '0 auto' }}>
         <Typography variant="h5" gutterBottom sx={{ fontWeight: 500, color: 'text.primary', display: 'flex', alignItems: 'center', gap: 1 }}>
           {name}
           {currentTag && <Chip label={currentTag} size="small" color="primary" variant="outlined" />}
         </Typography>
         <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>Row: {data.rowId}</Typography>
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>Col: {data.colId}</Typography>
+            {/* ★ 追加: 行ID・列IDが多いと目的のセルを探しづらいため検索ボックスを設置 */}
+            <TextField
+              size="small"
+              placeholder="行IDを検索"
+              value={rowSearch}
+              onChange={(e) => setRowSearch(e.target.value)}
+              sx={{ width: 160 }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: rowSearch && (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setRowSearch('')}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <TextField
+              size="small"
+              placeholder="列IDを検索"
+              value={colSearch}
+              onChange={(e) => setColSearch(e.target.value)}
+              sx={{ width: 160 }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: colSearch && (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setColSearch('')}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <Tooltip title="検索に一致した行数 / 全行数">
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`行 ${filteredRowKeys.length} / ${rowKeys.length}`}
+              />
+            </Tooltip>
+            <Tooltip title="検索に一致した列数 / 全列数">
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`列 ${filteredColKeys.length} / ${colKeys.length}`}
+              />
+            </Tooltip>
           </Box>
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
             <Button variant="contained" color="primary" startIcon={<AddIcon />} onClick={() => setOpenAddField(true)}>
@@ -625,15 +754,17 @@ function ClassDataMatrixIdDetailGrid() {
         ) : (
           <div style={{ height: 600, width: '100%' }}>
             <DataGrid
-              rows={gridRows}
+              rows={displayedRows}
               columns={columns}
               pageSizeOptions={[5, 10, 20]}
               getRowId={(row) => row.id}
-              editMode="cell"
               apiRef={apiRef}
-              onCellDoubleClick={handleCellDoubleClick}
-              // ★ ミニテーブルのプレビューが見切れないよう、行の高さをコンテンツに合わせる
-              getRowHeight={() => 'auto'}
+              // ★ 修正: editable(セル内編集モード)は使わず、renderCell側のonClickで
+              //   ダイアログを開く方式に統一したため editMode="cell" / onCellDoubleClick は不要。
+              //   （editable + セル内編集モードの併用が打鍵のたびに重くなる原因だった）
+              // ★ 修正: 'auto'（DOM実測）ではなく、フィールド数から事前計算した数値の
+              //   行高さを返す。ダイアログ入力のたびに全行の高さ再計算が走らなくなる。
+              getRowHeight={getMatrixRowHeight}
               sx={{
                 '& .MuiDataGrid-main': {
                   borderRadius: '8px',
