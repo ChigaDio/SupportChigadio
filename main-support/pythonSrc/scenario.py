@@ -203,7 +203,7 @@ namespace GameCore.Scenario
         }
         public virtual async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
-            IsOneUpdateAsync = true;
+            IsUpdateAsync = true;
             // Implement action logic here
             await UniTask.CompletedTask;
         }
@@ -892,7 +892,7 @@ namespace GameCore.Scenario
 
         public static long GetEventSeekPos(string eventName,string subName)
         {
-            var find = _events.Find(data => data.EventId == eventName);
+            var find = _events.Find(data => data.EventName == eventName);
             var findSub = find.SubEvents.Find(data => data.SubEventName == subName);
             return findSub.SubEventOffset;
         }
