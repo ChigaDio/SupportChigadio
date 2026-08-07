@@ -1991,7 +1991,7 @@ def class_id_generate():
         os.makedirs(scenario_event_dir, exist_ok=True)
 
         # scenario_event_list.jsonを読み込み
-        scenario_list_path = os.path.join(DATA_DIR,SCENARIO_EVENT, "scenario_event_list.json")
+        scenario_list_path = os.path.join(DATA_DIR, SCENARIO_EVENT, "scenario_event_list.json")
         try:
             with open(scenario_list_path, "r", encoding="utf-8") as f:
                 scenario_list = json.load(f)
@@ -2002,6 +2002,42 @@ def class_id_generate():
             print(f"エラー: {scenario_list_path} のJSON形式が不正です。")
             return
 
+        # --- 手動追加カラムの退避 ---
+        # ScenarioEvent.jsonは毎回作り直すが、event_id/sub_event_id以外のカラム(手動で
+        # 追加された想定)は既存ファイルから引き継ぐ。行の紐付けは「親イベントid」＋
+        # 「サブイベントid(無ければ名前にフォールバック)」の安定キー(_scenario_key)で
+        # 行うことで、イベント名/サブイベント名がリネームされてもデータが消えないようにする。
+        # 初回移行時(まだ_scenario_keyを持たない旧データ)は event_id/sub_event_id の
+        # 値一致でフォールバック照合する。
+        scenario_event_path = os.path.join(scenario_event_dir, "ScenarioEvent.json")
+        manual_columns = []
+        old_data_by_key = {}
+        old_data_by_name = {}
+        try:
+            with open(scenario_event_path, "r", encoding="utf-8") as f:
+                old_add_data = json.load(f)
+            manual_columns = [
+                col for col in old_add_data.get("columns", [])
+                if col.get("name") not in ("event_id", "sub_event_id")
+            ]
+            manual_col_names = {col["name"] for col in manual_columns}
+            for old_row in old_add_data.get("rows", []):
+                old_row_data = old_row.get("data", {})
+                manual_values = {k: v for k, v in old_row_data.items() if k in manual_col_names}
+                if not manual_values:
+                    continue
+                scenario_key = old_row.get("_scenario_key")
+                if scenario_key is not None:
+                    old_data_by_key[tuple(scenario_key)] = manual_values
+                # 旧データ(_scenario_key無し)の救済用に、名前ベースのキーでも控えておく
+                name_key = (
+                    old_row_data.get("event_id", {}).get("value"),
+                    old_row_data.get("sub_event_id", {}).get("value"),
+                )
+                old_data_by_name[name_key] = manual_values
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
         # ScenarioEvent.jsonのデータ構造を初期化
         # 以前はeventID/subIDにそれぞれ生の名前を入れていたが、
         # Scenario_{親}_{サブ}(class_data_id側のScenarioタグ配下エントリ)と
@@ -2010,7 +2046,7 @@ def class_id_generate():
             "columns": [
                 {"name": "event_id", "type": "string", "description" : "イベントID"},
                 {"name": "sub_event_id", "type": "string","description" : "サブイベントID"},
-            ],
+            ] + manual_columns,
             "rows": []
         }
 
@@ -2022,20 +2058,36 @@ def class_id_generate():
                 continue
             for details in item["subEvents"]:
                 scenario_value = f"Scenario_{item.get('name', '')}_{details.get('name', '')}"
+
+                # 安定キー: 親イベントid + サブイベントid(無ければ名前にフォールバック)
+                scenario_key = [item.get("id"), details.get("id", details.get("name", ""))]
+                name_key = (item.get("name", ""), details.get("name", ""))
+                matched_manual_values = old_data_by_key.get(tuple(scenario_key))
+                if matched_manual_values is None:
+                    matched_manual_values = old_data_by_name.get(name_key, {})
+
+                row_data = {
+                    "event_id": {"value": item.get('name', ''), "type": "string"},
+                    "sub_event_id": {"value": details.get('name', ''), "type": "string"},
+                }
+                # 手動カラムの値を引き継ぐ(見つからなければ型に応じた初期値で埋める)
+                for col in manual_columns:
+                    if col["name"] in matched_manual_values:
+                        row_data[col["name"]] = matched_manual_values[col["name"]]
+                    else:
+                        row_data[col["name"]] = {"value": get_initial_value(col.get("type", "string")), "type": col.get("type", "string")}
+
                 add_id_data = {
                     "id": count,
                     "enum_property": f"{item.get('name', '')}_{details.get('name', '')}",
                     "description": f"{item.get('description', '')}_{details.get('name', '')}",
-                    "data": {
-                        "event_id": {"value": item.get('name', ''), "type": "string"},
-                        "sub_event_id": {"value": details.get('name', ''), "type": "string"},
-                    }
-                }   
+                    "data": row_data,
+                    "_scenario_key": scenario_key,
+                }
                 add_data["rows"].append(add_id_data)
                 count += 1
 
         # ScenarioEvent.jsonに保存
-        scenario_event_path = os.path.join(scenario_event_dir, "ScenarioEvent.json")
         with open(scenario_event_path, "w", encoding="utf-8") as fw:
             json.dump(add_data, fw, ensure_ascii=False, indent=2)
         print(f"{scenario_event_path} にデータを保存しました。")
