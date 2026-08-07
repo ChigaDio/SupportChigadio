@@ -15,6 +15,9 @@ from venv import logger
 # 呼ばれ済みであることを前提とする(_state['DATA_DIR'] が必要なAPI呼び出しは
 # 実行時=Flaskアプリ起動後にしか行われないため問題ない)。
 import pythonSrc.customclassdata as customclassdata
+# ClassDataID側(Row.cs/Table.cs/TableID.cs/バイナリの自動生成、Scenario_{親}エントリの
+# 追加・リネーム・削除追従、IDの並び替え)と連携するために読み込む。
+import pythonSrc.class_data_id as class_data_id_api
 
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
@@ -1986,7 +1989,8 @@ def class_id_generate():
         # 紐付く形の単一カラムに変更した(項目6)。
         add_data = {
             "columns": [
-                {"name": "scenario", "type": "string"},
+                {"name": "event_id", "type": "string", "description" : "イベントID"},
+                {"name": "sub_event_id", "type": "string","description" : "サブイベントID"},
             ],
             "rows": []
         }
@@ -2004,9 +2008,10 @@ def class_id_generate():
                     "enum_property": f"{item.get('name', '')}_{details.get('name', '')}",
                     "description": f"{item.get('description', '')}_{details.get('name', '')}",
                     "data": {
-                        "scenario": {"value": scenario_value, "type": "string"},
+                        "event_id": {"value": item.get('name', ''), "type": "string"},
+                        "sub_event_id": {"value": details.get('name', ''), "type": "string"},
                     }
-                }
+                }   
                 add_data["rows"].append(add_id_data)
                 count += 1
 
@@ -2016,6 +2021,11 @@ def class_id_generate():
             json.dump(add_data, fw, ensure_ascii=False, indent=2)
         print(f"{scenario_event_path} にデータを保存しました。")
 
+        # ScenarioEventのRow.cs/Table.cs/TableID.cs(+py/js)とバイナリも、
+        # JSON更新のたびにその場で自動再生成する(手動でC#生成ボタンを押さなくても最新に保つ)。
+        class_data_id_api.generate_class_data_id_cs_core("ScenarioEvent", add_data["columns"], add_data["rows"])
+        class_data_id_api.generate_binary_core("ScenarioEvent", add_data["columns"], add_data["rows"])
+
         # 項目7・11: Scenario_{親}() 開始関数・ScenarioExecuteUpdateオーバーロードは
         # class_data_id.py 側の sync_scenario_parent_enum_files() で
         # Scenario_{親}ID enum(assets.py方式)を使って正式に生成される
@@ -2023,3 +2033,40 @@ def class_id_generate():
 
     except Exception as e:
         print(f"予期しないエラーが発生しました: {e}")
+
+
+def sync_all_scenario_class_data(scenario_events):
+    """シナリオイベント(親/サブ)の追加・編集・削除・コピーの度に app.py から呼ばれる
+    統合エントリポイント。以下を一括で行う:
+
+      1. ScenarioEvent(全シナリオの索引テーブル)のJSON/Row.cs/Table.cs/TableID.cs/
+         バイナリを最新の scenario_event_list.json の内容で再生成する
+      2. 各Scenario_{親}(class_data_id側のScenarioタグ配下エントリ)のJSON/Row.cs/
+         Table.cs/TableID.cs/バイナリを、追加・リネーム・削除に追従して再生成する
+         (もう存在しない親のエントリはファイルごと削除、リネームされた親は
+         旧エントリを退避してから新名義へ移行する)
+      3. class_data_id_list.json のID採番を
+         「Scenario関連以外(既存の並び順維持) → ScenarioEvent → 各Scenarioグループ
+         (イベント登録順)」の順に並び替える
+
+    scenario_events: scenario_event_list.json そのままの形
+      ([{ "id":..., "name":..., "subEvents":[{"name":...}, ...] }, ...])
+    """
+    # 1. ScenarioEvent側を最新化(JSON生成 → ScenarioEvent.json → Row/Table/TableID/バイナリ再生成)
+    class_id_generate()
+
+    # 2. 各Scenario_{親}を最新化(追加・リネーム・削除への追従 + Row/Table/TableID/バイナリ再生成)
+    events = [
+        {
+            "name": ev["name"],
+            "parent": ev["id"],
+            "subs": [sub["name"] for sub in ev.get("subEvents", [])],
+        }
+        for ev in scenario_events
+    ]
+    result = class_data_id_api.sync_scenario_class_data_ids_core(events)
+
+    # 3. IDの並び替え(Scenario以外は既存順維持 → ScenarioEvent → 各Scenarioグループを登録順で)
+    class_data_id_api.reorder_scenario_class_data_ids(events)
+
+    return result

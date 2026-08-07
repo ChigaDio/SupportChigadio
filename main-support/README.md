@@ -1,70 +1,44 @@
-# Getting Started with Create React App
+﻿# Unity Data Tool
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+> Unity プロジェクトのデータ定義・アセット・シナリオを、一つの管理画面から編集して生成するローカルツール。
 
-## Available Scripts
+| 領域 | 主な機能 | ガイド |
+| --- | --- | --- |
+| データ定義 | Enum / ClassData / ID・Matrix・定数 / State / Behavior / SaveData | [データ生成](docs/features/data-generation.md) |
+| アセット | Sound / Texture / GameObject / Material / Animator / Scene | [アセット管理](docs/features/assets.md) |
+| シナリオ | ロール、イベント、遷移、条件、バイナリ出力 | [シナリオ](docs/features/scenario.md) |
+| チーム運用 | 認証・権限、バージョン、ログ、配布、告知 | [運用機能](docs/features/operations.md) |
 
-In the project directory, you can run:
+## クイックスタート
 
-### `npm start`
+Node.js（npm）と Python 3 を用意します。
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```powershell
+npm install
+pip install Flask psutil websockets
+npm run build
+python app.py Normal
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+画面は `http://localhost:8000` で開きます。`Normal` はローカルで全編集を許可し、`Server` はログインと権限管理を有効にします。起動モードを省略した場合はダイアログで選択します。
 
-### `npm test`
+> `npm start` は React の UI だけを開発用に起動します。通常利用では、`npm run build` の後に Flask を起動してください。
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## ドキュメント
 
-### `npm run build`
+- [アーキテクチャ](docs/architecture.md) — 全体の構造とソースの対応
+- [データ生成](docs/features/data-generation.md) — 型・テーブル・状態・生成物
+- [アセット管理](docs/features/assets.md) — Unity アセットの整理と生成
+- [シナリオ](docs/features/scenario.md) — ロール、イベント、遷移、バイナリ
+- [運用機能](docs/features/operations.md) — 認証、履歴、配布、告知
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## ディレクトリ早見表
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+```text
+main-support/
+├─ app.py          # Flask の起動・統合 API
+├─ pythonSrc/      # 生成ロジック、Flask Blueprint、運用サービス
+├─ src/            # React 管理画面
+├─ data/           # 編集データと生成物
+└─ build/          # npm run build の出力（Flask が配信）
+```

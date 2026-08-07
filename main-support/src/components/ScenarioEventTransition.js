@@ -978,7 +978,8 @@ function ScenarioEventTransition() {
   useEffect(() => {
     const handler = (e) => {
       const { draggedId, targetId } = e.detail;
-      setTabData(prev => {
+      let changed = false;
+      updateTabData(prev => {
         const cur = prev[activeTab] || { nodes: [], edges: [] };
         const from = cur.nodes.findIndex(n => n.id === draggedId);
         const to = cur.nodes.findIndex(n => n.id === targetId);
@@ -986,8 +987,11 @@ function ScenarioEventTransition() {
         const newNodes = [...cur.nodes];
         const [moved] = newNodes.splice(from, 1);
         newNodes.splice(to, 0, moved);
+        changed = true;
         return { ...prev, [activeTab]: { ...cur, nodes: newNodes } };
       });
+      // updateTabData経由でtabDataRefも同期されるので、ここで自動保存をスケジュールしてよい
+      if (changed) scheduleSave();
     };
     window.addEventListener('reorderNode', handler);
     return () => window.removeEventListener('reorderNode', handler);
@@ -1078,6 +1082,11 @@ function ScenarioEventTransition() {
     if (tabId === activeTab) return;
     if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return; }
 
+    // デバウンス待ちの自動保存が残っている場合、activeTabRefが切り替わる前に
+    // 「今のタブ」に対して確定させる。そうしないと600ms以内にタブを切り替えた際、
+    // 保存が新しいタブに対して発火してしまい、元のタブの編集が失われる。
+    debouncedAutoSaveRef.current.flush();
+
     if (tabId.startsWith('subgroup-')) {
       const pId = pid || tabId.replace('subgroup-', '');
       const existingTab = tabs.find(t => t.id === tabId);
@@ -1096,6 +1105,8 @@ function ScenarioEventTransition() {
             nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target)
           );
           setTabData(prev => ({ ...prev, [tabId]: { nodes, edges } }));
+          // 読み込みが正常に完了した場合のみ、このサブグループタブへの保存を許可する
+          loadedTabsRef.current[tabId] = true;
           setActiveTab(tabId);
         })
         .catch(e => console.error('SubGroupロードエラー:', e))

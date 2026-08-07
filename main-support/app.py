@@ -1501,7 +1501,7 @@ def handle_scenario_event_list():
             json.dump(new_event, f)
         # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
         with open(list_path, 'r', encoding='utf-8') as f:
-            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(json.load(f))
+            scenario.sync_all_scenario_class_data(json.load(f))
         return jsonify({"message": "Event created"})
 
 @app.route('/api/scenario-event/<id>', methods=['PATCH', 'DELETE'])
@@ -1539,7 +1539,7 @@ def handle_scenario_event(id):
                 f.truncate()
                 json.dump(events, f)
             # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+            scenario.sync_all_scenario_class_data(events)
         if os.path.exists(event_dir):
             shutil.rmtree(event_dir)
         return jsonify({"message": "Event deleted"})
@@ -1574,7 +1574,7 @@ def add_sub_event(id):
                         ef.truncate()
                         json.dump(eventData, ef)
                     # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-                    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+                    scenario.sync_all_scenario_class_data(events)
                     return jsonify({"message": "Sub event added", "subId": max_sub_id})
         return jsonify({"error": "Event not found"}), 404
     return jsonify({"error": "Event not found"}), 404
@@ -1605,7 +1605,7 @@ def handle_sub_event(id, subId):
                             with open(event_path, 'w', encoding='utf-8') as ef:
                                 json.dump(event, ef)
                             # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-                            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+                            scenario.sync_all_scenario_class_data(events)
                             return jsonify({"message": "Sub event updated"})
             return jsonify({"error": "Sub event not found"}), 404
     elif request.method == 'DELETE':
@@ -1621,7 +1621,7 @@ def handle_sub_event(id, subId):
                         with open(event_path, 'w', encoding='utf-8') as ef:
                             json.dump(event, ef)
                         # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-                        pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+                        scenario.sync_all_scenario_class_data(events)
                         return jsonify({"message": "Sub event deleted"})
         return jsonify({"error": "Event or sub event not found"}), 404
 
@@ -1692,7 +1692,7 @@ def copy_scenario_event(id):
         json.dump(new_event, f)
 
     # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+    scenario.sync_all_scenario_class_data(events)
 
     return jsonify({"message": "イベントをコピーしました", "id": new_id})
 
@@ -1753,7 +1753,7 @@ def copy_sub_event(id, subId):
         json.dump(target_data, f)
 
     # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+    scenario.sync_all_scenario_class_data(events)
 
     return jsonify({"message": "サブイベントをコピーしました", "subId": max_sub_id, "targetEventId": target_event_id})
 

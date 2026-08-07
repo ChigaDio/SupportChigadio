@@ -215,12 +215,12 @@ def class_data_id_detail(name):
             logger.error(f"Error deleting class-data-id {name}: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
-@bp.route('/api/generate-class-data-id/<name>', methods=['POST'])
-def generate_class_data_id_cs(name):
-    try:
-        data = request.get_json()
-        columns = data['columns']
-        rows = data['rows']
+def generate_class_data_id_cs_core(name, columns, rows):
+    """{name}Row.cs / {name}Table.cs / {name}TableID.cs（+ py/js版）を生成する実処理本体。
+    Flaskのrequestに依存しないので、HTTPルート(generate_class_data_id_cs)からも、
+    sync_scenario_class_data_ids_core など内部処理からも呼び出せる。
+    """
+    if True:
         basic_types, unity_types, enum_list, class_list, class_data_id_list ,enum_data,class_data_id,class_data= get_type_lists()
         enum_name = f"{name}TableID"  # Enum名をTableIDに変更
 
@@ -454,21 +454,24 @@ namespace GameCore.Tables
         with open(js_enum_path, 'w', encoding='utf-8') as f:
             f.write(generators.generate_enum_js(f"{name}TableID", enum_data))
 
-        return jsonify({"message": f"C# files generated: {cs_path}, {enum_cs_path}"})
+        return {"message": f"C# files generated: {cs_path}, {enum_cs_path}", "cs_path": cs_path, "enum_cs_path": enum_cs_path}
+
+
+@bp.route('/api/generate-class-data-id/<name>', methods=['POST'])
+def generate_class_data_id_cs(name):
+    try:
+        data = request.get_json()
+        result = generate_class_data_id_cs_core(name, data['columns'], data['rows'])
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    
 
-
-
-# ClassDataID Binary生成（行のレコード値を正確に書き込み）
-@bp.route('/api/generate-binary/<name>', methods=['POST'])
-def generate_binary(name):
-    try:
-        data = request.get_json()
-        columns = data['columns']
-        rows = data['rows']
+def generate_binary_core(name, columns, rows):
+    """{name}Table.bytes を生成する実処理本体。Flaskのrequestに依存しないので、
+    HTTPルート(generate_binary)からも内部処理からも呼び出せる。
+    """
+    if True:
         bin_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name, f"{name}Table.bytes")
         os.makedirs(os.path.dirname(bin_path), exist_ok=True)
         
@@ -585,8 +588,16 @@ def generate_binary(name):
                 f.write(struct.pack('i' * len(rows), *row_offsets))
                 f.seek(end_pos)
 
-        
-        return jsonify({"message": f"Binary generated: {bin_path}"})
+
+        return {"message": f"Binary generated: {bin_path}", "bin_path": bin_path}
+
+
+@bp.route('/api/generate-binary/<name>', methods=['POST'])
+def generate_binary(name):
+    try:
+        data = request.get_json()
+        result = generate_binary_core(name, data['columns'], data['rows'])
+        return jsonify(result)
     except Exception as e:
         logger.error(f"Error generating binary for {name}: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -897,6 +908,7 @@ def set_class_data_id_subgroup(name):
 # シナリオイベント側(親/サブの追加・削除)から、このエンドポイントを
 # 呼び出すことで、常に最新のイベント構成へ自動追従させる。
 SCENARIO_TAG_NAME = "Scenario"
+SCENARIO_SUB_NAME = "ScenarioMain"
 
 
 def _ensure_scenario_tag():
@@ -912,13 +924,21 @@ def _ensure_scenario_tag():
 
     target = next((t for t in tags if t['name'] == SCENARIO_TAG_NAME), None)
     if target is None:
+        # 初めてScenarioタグを作るときだけ、サブタグ(サブグループ)の既定値として
+        # ScenarioMainを設定する。
         max_id = max([t['id'] for t in tags], default=0) + 1
-        target = {"id": max_id, "name": SCENARIO_TAG_NAME, "subgroups": []}
+        target = {"id": max_id, "name": SCENARIO_TAG_NAME, "subgroups": [SCENARIO_SUB_NAME]}
         tags.append(target)
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(tags, f, ensure_ascii=False, indent=2)
     else:
         target.setdefault('subgroups', [])
+        # 既存のScenarioタグにScenarioMainが(まだ)無ければ追加する
+        # (「最初にtagsを見てなかったら追加で」の要望への対応)。
+        if SCENARIO_SUB_NAME not in target['subgroups']:
+            target['subgroups'].append(SCENARIO_SUB_NAME)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(tags, f, ensure_ascii=False, indent=2)
 
     return tags, target
 
@@ -1028,16 +1048,32 @@ def sync_scenario_parent_enum_files(events):
         f.write(utils_content)
 
 
+def _remove_class_data_id_entry_files(name):
+    """class_data_id配下の {name}/ ディレクトリ(Row.cs/Table.cs/TableID.cs/bytes等一式)を削除する。"""
+    entry_dir = os.path.join(DATA_DIR, CLASS_DATA_ID, name)
+    if os.path.isdir(entry_dir):
+        shutil.rmtree(entry_dir)
+
+
 def sync_scenario_class_data_ids_core(events):
-    """events: [{ "parent": str, "subs": [str, ...] }, ...] を受け取り、
-    ClassDataID側のScenarioタグ配下を追従させる実処理本体(項目6・8)。
-    Flaskのrequestに依存しないので、HTTP経由でもapp.py側からの直接呼び出しでも使える。
+    """events: [{ "name": str, "parent": str(event id), "subs": [str, ...] }, ...] を受け取り、
+    ClassDataID側のScenarioタグ配下(Scenario_{親}エントリ)を追従させる実処理本体。
+    Flaskのrequestに依存しないので、HTTP経由でもapp.py/scenario.py側からの直接呼び出しでも使える。
+
+    やること:
+    - イベントの識別は表示名ではなく id(ev['parent'])で行う。これにより
+      親イベントの「名前変更」を「削除+新規追加」ではなく正しく「リネーム」として扱える。
+    - 存在しなくなった親イベントのエントリは、class_data_id_list.jsonからもファイル一式からも削除する。
+    - サブイベントの追加・削除・並び替えを含め、既存エントリも毎回JSONを再同期する。
+    - 同期後、そのScenario_{親}エントリのRow.cs/Table.cs/TableID.cs(+py/js)とバイナリ(.bytes)を
+      その場で自動的に再生成する(手動でC#生成ボタンを押さなくても常に最新になる)。
     """
     tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
     os.makedirs(tags_dir, exist_ok=True)
     list_path = os.path.join(tags_dir, 'class_data_id_list.json')
 
-    tags, scenario_tag = _ensure_scenario_tag()
+    # Scenarioタグ・ScenarioMainサブタグの存在を保証(初回のみ既定値を設定)
+    _ensure_scenario_tag()
 
     try:
         with open(list_path, 'r', encoding='utf-8') as f:
@@ -1045,53 +1081,188 @@ def sync_scenario_class_data_ids_core(events):
     except FileNotFoundError:
         items = []
 
-    # 現在あるべき Scenario_{親} / Scenario_{親}_{サブ} の集合
-    wanted_subgroups = [f"Scenario_{ev['parent']}" for ev in events]
-    wanted_items = {}  # subgroup_name -> [item_name, ...]
-    for ev in events:
-        parent = ev['parent']
-        sub_group_name = f"Scenario_{parent}"
-        wanted_items[sub_group_name] = [f"Scenario_{parent}_{sub}" for sub in ev.get('subs', [])]
+    # event_id(=ev['parent']) -> {"item_name":..., "name":..., "subs":[...]}
+    wanted_by_id = {
+        ev['parent']: {
+            "item_name": f"Scenario_{ev['name']}",
+            "name": ev['name'],
+            "subs": ev.get('subs', []),
+        }
+        for ev in events
+    }
 
-    # サブグループの追加・削除を同期
-    scenario_tag['subgroups'] = wanted_subgroups
-    with open(os.path.join(tags_dir, 'tags.json'), 'w', encoding='utf-8') as f:
-        json.dump(tags, f, ensure_ascii=False, indent=2)
+    def is_scenario_item(item):
+        return item.get('tag') == SCENARIO_TAG_NAME and item.get('name') != 'ScenarioEvent'
 
-    # Scenarioタグ配下の既存エントリのうち、もう存在しないものを削除
-    wanted_all_item_names = {name for names in wanted_items.values() for name in names}
-    items = [
-        item for item in items
-        if item.get('tag') != SCENARIO_TAG_NAME or item['name'] in wanted_all_item_names
-    ]
-    existing_names = {item['name'] for item in items if item.get('tag') == SCENARIO_TAG_NAME}
+    # --- 既存Scenario系エントリのうち、scenario_event_id が未付与のもの(旧仕様で
+    #     作られたエントリ)を、名前の一致で可能な限り自己修復する ---
+    used_ids = {item.get('scenario_event_id') for item in items if is_scenario_item(item)}
+    for item in items:
+        if not is_scenario_item(item) or item.get('scenario_event_id') is not None:
+            continue
+        for ev_id, wanted in wanted_by_id.items():
+            if ev_id in used_ids:
+                continue
+            if item.get('name') == wanted['item_name']:
+                item['scenario_event_id'] = ev_id
+                used_ids.add(ev_id)
+                break
 
-    # 足りないエントリを新規作成(class_data_idのカラム変数はScenarioと紐付け、
-    # 値は Scenario_{親}_{サブ} を設定する = エントリ名そのものがその値になる)
+    # --- 存在しなくなった親イベントのエントリを削除(リネーム/削除への追従) ---
+    removed = []
+    kept_items = []
+    for item in items:
+        if is_scenario_item(item) and item.get('scenario_event_id') is not None and item['scenario_event_id'] not in wanted_by_id:
+            _remove_class_data_id_entry_files(item['name'])
+            removed.append(item['name'])
+            continue
+        kept_items.append(item)
+    items = kept_items
+
+    # --- リネーム検出: scenario_event_id は一致するが name が変わっている ---
+    renamed = []
+    by_event_id = {item.get('scenario_event_id'): item for item in items if is_scenario_item(item) and item.get('scenario_event_id') is not None}
+    for ev_id, wanted in wanted_by_id.items():
+        item = by_event_id.get(ev_id)
+        if item is not None and item['name'] != wanted['item_name']:
+            _remove_class_data_id_entry_files(item['name'])  # 旧名のRow/Table/バイナリ一式を削除
+            renamed.append((item['name'], wanted['item_name']))
+            item['name'] = wanted['item_name']
+
+    # --- 新規イベント分のエントリを追加 ---
+    existing_ids_in_use = {item.get('scenario_event_id') for item in items if is_scenario_item(item)}
     max_id = max([item.get('id', 0) for item in items], default=0)
     created = []
-    for sub_group_name, item_names in wanted_items.items():
-        for item_name in item_names:
-            if item_name in existing_names:
-                continue
-            max_id += 1
-            new_item = {
-                "name": item_name,
-                "id": max_id,
-                "tag": SCENARIO_TAG_NAME,
-                "subgroup": sub_group_name,
-            }
-            items.append(new_item)
-            created.append(item_name)
+    for ev_id, wanted in wanted_by_id.items():
+        if ev_id in existing_ids_in_use:
+            continue
+        max_id += 1
+        items.append({
+            "name": wanted['item_name'],
+            "id": max_id,
+            "tag": SCENARIO_TAG_NAME,
+            "subgroup": SCENARIO_SUB_NAME,
+            "scenario_event_id": ev_id,
+        })
+        created.append(wanted['item_name'])
+
+    # --- 全Scenario_{親}エントリのJSON/Row.cs/Table.cs/TableID.cs/バイナリを再同期・再生成 ---
+    for item in items:
+        if not is_scenario_item(item):
+            continue
+        wanted = wanted_by_id.get(item.get('scenario_event_id'))
+        if wanted is None:
+            continue
+        data = sync_scenario_class_data_ids_from_details(wanted['name'], wanted['subs'], item['name'])
+        generate_class_data_id_cs_core(item['name'], data['columns'], data['rows'])
+        generate_binary_core(item['name'], data['columns'], data['rows'])
 
     with open(list_path, 'w', encoding='utf-8') as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
-    # 項目6・追加要望: 親ごとの Scenario_{親}ID enum と、
-    # Scenario_{親}() 開始ラッパー関数を同期・再生成する。
+    # 親ごとの Scenario_{親}ID enum と、Scenario_{親}() 開始ラッパー関数を同期・再生成する。
     sync_scenario_parent_enum_files(events)
 
-    return created, wanted_subgroups
+    # タグ/サブグループ単位の一括Load/Unload util(TableIdUtils.cs)も併せて最新化する。
+    try:
+        generate_tags_load_script()
+    except Exception as e:
+        logger.warning(f"TableIdUtils.cs再生成をスキップしました: {e}")
+
+    return {"created": created, "removed": removed, "renamed": renamed}
+
+
+def reorder_scenario_class_data_ids(events):
+    """class_data_id_list.json のid採番を、以下の方針で並び替える:
+
+      1. Scenario関連(タグ=Scenario のエントリ、および name="ScenarioEvent")以外の
+         既存IDは、元の並び順(現在のid昇順)を保ったまま 1 から詰めてインクリメント
+      2. その直後に ScenarioEvent
+      3. その後ろに 各Scenarioグループ(Scenario_{親})を、イベント登録順(eventsの順序)で並べる
+
+    シナリオの追加・編集・削除の度に呼ばれる想定(sync_scenario_class_data_ids_core と
+    セットで使う)。
+    """
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+    except FileNotFoundError:
+        return
+
+    def is_scenario_group_item(item):
+        return item.get('tag') == SCENARIO_TAG_NAME and item.get('name') != 'ScenarioEvent'
+
+    others = [item for item in items if not is_scenario_group_item(item) and item.get('name') != 'ScenarioEvent']
+    others.sort(key=lambda item: item.get('id', 0))  # 元の並び順を保持
+
+    scenario_event_item = next((item for item in items if item.get('name') == 'ScenarioEvent'), None)
+
+    scenario_items_by_name = {item['name']: item for item in items if is_scenario_group_item(item)}
+    ordered_scenario_items = []
+    for ev in events:
+        item = scenario_items_by_name.pop(f"Scenario_{ev['name']}", None)
+        if item is not None:
+            ordered_scenario_items.append(item)
+    # eventsに載っていない(想定外の)Scenarioエントリが残っていれば、末尾に元順で保持しておく
+    if scenario_items_by_name:
+        leftovers = list(scenario_items_by_name.values())
+        leftovers.sort(key=lambda item: item.get('id', 0))
+        ordered_scenario_items.extend(leftovers)
+
+    new_order = list(others)
+    if scenario_event_item is not None:
+        new_order.append(scenario_event_item)
+    new_order.extend(ordered_scenario_items)
+
+    for i, item in enumerate(new_order, start=1):
+        item['id'] = i
+
+    with open(list_path, 'w', encoding='utf-8') as f:
+        json.dump(new_order, f, ensure_ascii=False, indent=2)
+
+def sync_scenario_class_data_ids_from_details(name,details_event,event):
+
+    #クラスパスを取得
+    class_id_path = os.path.join(DATA_DIR, CLASS_DATA_ID,event)
+    #フォルダを作成
+    os.makedirs(class_id_path,exist_ok=True)
+    
+    data = {
+    "columns": [],
+    "rows": []
+    }
+
+    data["columns"].append({ "type": "ScenarioEvent", "name": "scenario_id", "description": "シナリオのID", "options": {} })
+    
+    count = 1
+    for details in details_event:
+        
+        data["rows"].append(
+            {
+                "id" : count,
+                "enum_property": details,
+                "description": "",
+                "data": {
+                "scenario_id": {
+                    "value": f"ScenarioEventID.{name}_{details}",
+                    "type": "ScenarioEvent"
+                    }
+                } 
+            }
+        )
+        count += 1
+    
+
+    class_id_path_json = os.path.join(class_id_path,f"{event}.json")
+    with open(class_id_path_json, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return data
+
+        
+
+
 
 
 def sync_scenario_class_data_ids_from_scenario_events(scenario_events):
@@ -1102,6 +1273,7 @@ def sync_scenario_class_data_ids_from_scenario_events(scenario_events):
     """
     events = [
         {
+            "name":ev["name"],
             "parent": ev["id"],
             "subs": [sub["name"] for sub in ev.get("subEvents", [])],
         }
@@ -1127,11 +1299,11 @@ def sync_scenario_class_data_ids():
     """
     try:
         events = (request.get_json() or {}).get('events', [])
-        created, wanted_subgroups = sync_scenario_class_data_ids_core(events)
+        result = sync_scenario_class_data_ids_core(events)
+        reorder_scenario_class_data_ids(events)
         return jsonify({
             "message": "Scenario用ClassDataIDを同期しました",
-            "created": created,
-            "subgroups": wanted_subgroups,
+            **result,
         }), 200
     except Exception as e:
         logger.error(f"Scenario ClassDataID同期エラー: {str(e)}")
