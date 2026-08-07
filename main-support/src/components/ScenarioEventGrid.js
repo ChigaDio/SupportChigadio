@@ -9,6 +9,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import SearchIcon from '@mui/icons-material/Search';
@@ -17,6 +18,9 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import BuildIcon from '@mui/icons-material/Build';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import MenuItem from '@mui/material/MenuItem';
 import { useNavigate } from 'react-router-dom';
 
 // スナックバー通知
@@ -27,8 +31,111 @@ const useSnackbar = () => {
   return { snack, show, hide };
 };
 
+// サブイベント行(名前・説明の編集に対応)
+const SubEventRow = ({ event, sub, onDeleteSub, onEditSub, onCopySub, navigate, expanded }) => {
+  const [editMode, setEditMode] = useState(false);
+  const [editName, setEditName] = useState(sub.name);
+  const [editDesc, setEditDesc] = useState(sub.description || '');
+
+  const commit = () => {
+    onEditSub(event.id, sub.subId, { name: editName, description: editDesc });
+    setEditMode(false);
+  };
+
+  return (
+    <TableRow
+      sx={{
+        display: expanded ? 'table-row' : 'none',
+        bgcolor: 'background.paper',
+        '&:hover': { bgcolor: 'grey.50' },
+      }}
+    >
+      <TableCell sx={{ pl: 1 }} />
+      <TableCell>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 2 }}>
+          <Box sx={{ width: 2, height: 24, bgcolor: 'primary.light', borderRadius: 1 }} />
+          <Chip label={`#${sub.subId}`} size="small" sx={{ fontFamily: 'monospace', height: 20 }} />
+          {editMode ? (
+            <TextField
+              size="small"
+              value={editName}
+              onChange={e => setEditName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditMode(false); }}
+              autoFocus
+            />
+          ) : (
+            <Typography
+              variant="body2"
+              sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline', color: 'primary.main' } }}
+              onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}`)}
+            >
+              {sub.name}
+            </Typography>
+          )}
+        </Box>
+      </TableCell>
+      <TableCell>
+        {editMode ? (
+          <TextField
+            size="small"
+            placeholder="説明"
+            value={editDesc}
+            onChange={e => setEditDesc(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') commit(); }}
+            fullWidth
+          />
+        ) : (
+          <Typography variant="body2" color="text.secondary">{sub.description || '—'}</Typography>
+        )}
+      </TableCell>
+      <TableCell>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<AccountTreeIcon />}
+            onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/transition`)}
+            sx={{ fontSize: '0.7rem', py: 0.25 }}
+          >
+            遷移図
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<MenuBookIcon />}
+            onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/story`)}
+            sx={{ fontSize: '0.7rem', py: 0.25 }}
+          >
+            物語設定
+          </Button>
+        </Box>
+      </TableCell>
+      <TableCell align="right">
+        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
+          <Tooltip title="編集">
+            <IconButton size="small" onClick={() => setEditMode(m => !m)}>
+              <EditIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="コピー">
+            <IconButton size="small" onClick={() => onCopySub(event.id, sub.subId)}>
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="削除">
+            <IconButton size="small" color="error" onClick={() => onDeleteSub(event.id, sub.subId)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </TableCell>
+    </TableRow>
+  );
+};
+
 // イベント行コンポーネント
-const EventRow = ({ event, subEvents, onAddSub, onDeleteEvent, onDeleteSub, onEditEvent, navigate }) => {
+const EventRow = ({ event, subEvents, onAddSub, onDeleteEvent, onDeleteSub, onEditEvent, onEditSub, onCopyEvent, onCopySub, navigate }) => {
   const [expanded, setExpanded] = useState(true);
   const [editName, setEditName] = useState(event.name);
   const [editDesc, setEditDesc] = useState(event.description || '');
@@ -114,6 +221,11 @@ const EventRow = ({ event, subEvents, onAddSub, onDeleteEvent, onDeleteSub, onEd
                 <AddIcon fontSize="small" />
               </IconButton>
             </Tooltip>
+            <Tooltip title="コピー">
+              <IconButton size="small" onClick={() => onCopyEvent(event.id)}>
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="削除">
               <IconButton size="small" color="error" onClick={() => onDeleteEvent(event.id)}>
                 <DeleteIcon fontSize="small" />
@@ -125,59 +237,16 @@ const EventRow = ({ event, subEvents, onAddSub, onDeleteEvent, onDeleteSub, onEd
 
       {/* サブイベント行 */}
       {subEvents.map((sub) => (
-        <TableRow
-          key={sub.id}
-          sx={{
-            display: expanded ? 'table-row' : 'none',
-            bgcolor: 'background.paper',
-            '&:hover': { bgcolor: 'grey.50' },
-          }}
-        >
-          <TableCell sx={{ pl: 1 }} />
-          <TableCell>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pl: 2 }}>
-              <Box sx={{ width: 2, height: 24, bgcolor: 'primary.light', borderRadius: 1 }} />
-              <Chip label={`#${sub.subId}`} size="small" sx={{ fontFamily: 'monospace', height: 20 }} />
-              <Typography
-                variant="body2"
-                sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline', color: 'primary.main' } }}
-                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}`)}
-              >
-                {sub.name}
-              </Typography>
-            </Box>
-          </TableCell>
-          <TableCell />
-          <TableCell>
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<AccountTreeIcon />}
-                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/transition`)}
-                sx={{ fontSize: '0.7rem', py: 0.25 }}
-              >
-                遷移図
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<MenuBookIcon />}
-                onClick={() => navigate(`/scenario-event/${event.id}/sub/${sub.subId}/story`)}
-                sx={{ fontSize: '0.7rem', py: 0.25 }}
-              >
-                物語設定
-              </Button>
-            </Box>
-          </TableCell>
-          <TableCell align="right">
-            <Tooltip title="削除">
-              <IconButton size="small" color="error" onClick={() => onDeleteSub(event.id, sub.subId)}>
-                <DeleteIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </TableCell>
-        </TableRow>
+        <SubEventRow
+          key={sub.subId}
+          event={event}
+          sub={sub}
+          expanded={expanded}
+          onDeleteSub={onDeleteSub}
+          onEditSub={onEditSub}
+          onCopySub={onCopySub}
+          navigate={navigate}
+        />
       ))}
     </>
   );
@@ -199,6 +268,17 @@ function ScenarioEventGrid() {
   const [selectedEventId, setSelectedEventId] = useState(null);
   const [openSubDialog, setOpenSubDialog] = useState(false);
   const [newSubName, setNewSubName] = useState('');
+  const [newSubDescription, setNewSubDescription] = useState('');
+
+  // イベントコピーダイアログ(項目5: 親イベント。サブイベントもコピーするかチェック、デフォルトON)
+  const [copyEventId, setCopyEventId] = useState(null);
+  const [openCopyEventDialog, setOpenCopyEventDialog] = useState(false);
+  const [copySubsChecked, setCopySubsChecked] = useState(true);
+
+  // サブイベントコピーダイアログ(項目5: 別の親 or 同じ親へコピー)
+  const [copySubTarget, setCopySubTarget] = useState(null); // { eventId, subId }
+  const [openCopySubDialog, setOpenCopySubDialog] = useState(false);
+  const [copySubTargetEventId, setCopySubTargetEventId] = useState('');
 
   // データ取得
   useEffect(() => {
@@ -278,20 +358,76 @@ function ScenarioEventGrid() {
     fetch(`/api/scenario-event/${selectedEventId}/sub`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newSubName }),
+      body: JSON.stringify({ name: newSubName, description: newSubDescription }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r))
       .then(result => {
         showSnack(result.message || 'サブイベントを追加しました');
         setEvents(prev => prev.map(e =>
           e.id === selectedEventId
-            ? { ...e, subEvents: [...(e.subEvents || []), { subId: result.subId, name: newSubName }] }
+            ? { ...e, subEvents: [...(e.subEvents || []), { subId: result.subId, name: newSubName, description: newSubDescription }] }
             : e
         ));
         setNewSubName('');
+        setNewSubDescription('');
         setOpenSubDialog(false);
       })
       .catch(() => showSnack('サブイベント追加エラー', 'error'));
+  };
+
+  // サブイベント編集(項目4: 説明文も含む)
+  const handleEditSub = (eventId, subId, { name, description }) => {
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(() => {
+        setEvents(prev => prev.map(e =>
+          e.id === eventId
+            ? { ...e, subEvents: e.subEvents.map(s => s.subId === subId ? { ...s, name, description } : s) }
+            : e
+        ));
+        showSnack('更新しました');
+      })
+      .catch(() => showSnack('更新エラー', 'error'));
+  };
+
+  // イベントコピー(項目5)
+  const handleCopyEvent = () => {
+    fetch(`/api/scenario-event/${copyEventId}/copy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ copySubs: copySubsChecked }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => {
+        showSnack(result.message || 'コピーしました');
+        setOpenCopyEventDialog(false);
+        // サーバー側でID採番等を行っているため再取得して整合性を保つ
+        return fetch('/api/scenario-event').then(r => r.ok ? r.json() : []);
+      })
+      .then(data => { if (Array.isArray(data)) setEvents(data); })
+      .catch(() => showSnack('コピーエラー', 'error'));
+  };
+
+  // サブイベントコピー(項目5: 別の親/同じ親)
+  const handleCopySub = () => {
+    const { eventId, subId } = copySubTarget;
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}/copy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetEventId: copySubTargetEventId || eventId }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => {
+        showSnack(result.message || 'コピーしました');
+        setOpenCopySubDialog(false);
+        return fetch('/api/scenario-event').then(r => r.ok ? r.json() : []);
+      })
+      .then(data => { if (Array.isArray(data)) setEvents(data); })
+      .catch(() => showSnack('コピーエラー', 'error'));
   };
 
   // サブイベント削除
@@ -420,6 +556,13 @@ function ScenarioEventGrid() {
                   onDeleteEvent={handleDeleteEvent}
                   onDeleteSub={handleDeleteSub}
                   onEditEvent={handleEditEvent}
+                  onEditSub={handleEditSub}
+                  onCopyEvent={(id) => { setCopyEventId(id); setCopySubsChecked(true); setOpenCopyEventDialog(true); }}
+                  onCopySub={(eventId, subId) => {
+                    setCopySubTarget({ eventId, subId });
+                    setCopySubTargetEventId(eventId);
+                    setOpenCopySubDialog(true);
+                  }}
                   navigate={navigate}
                 />
               ))}
@@ -496,12 +639,82 @@ function ScenarioEventGrid() {
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSubEvent(); }}
             size="small"
           />
+          <TextField
+            margin="dense"
+            label="説明"
+            fullWidth
+            variant="outlined"
+            value={newSubDescription}
+            onChange={(e) => setNewSubDescription(e.target.value)}
+            size="small"
+            sx={{ mt: 1.5 }}
+          />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setOpenSubDialog(false)} color="inherit">キャンセル</Button>
           <Button onClick={handleCreateSubEvent} variant="contained" color="secondary" disabled={!newSubName.trim()}>
             追加
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* イベントコピーダイアログ(項目5) */}
+      <Dialog open={openCopyEventDialog} onClose={() => setOpenCopyEventDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ContentCopyIcon color="primary" />
+            イベントをコピー
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            新しいIDで複製します。名前には「のコピー」が付きます。
+          </Alert>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={copySubsChecked}
+                onChange={(e) => setCopySubsChecked(e.target.checked)}
+              />
+            }
+            label="サブイベントもコピーする"
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setOpenCopyEventDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleCopyEvent} variant="contained">コピー</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* サブイベントコピーダイアログ(項目5: 別の親/同じ親) */}
+      <Dialog open={openCopySubDialog} onClose={() => setOpenCopySubDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ContentCopyIcon color="secondary" />
+            サブイベントをコピー
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            select
+            margin="dense"
+            label="コピー先の親イベント"
+            fullWidth
+            size="small"
+            value={copySubTargetEventId}
+            onChange={(e) => setCopySubTargetEventId(e.target.value)}
+            helperText="元と同じ親イベントを選ぶと、その親の中に複製されます"
+          >
+            {events.map(e => (
+              <MenuItem key={e.id} value={e.id}>
+                {e.name}{copySubTarget && e.id === copySubTarget.eventId ? '（元の親）' : ''}
+              </MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setOpenCopySubDialog(false)} color="inherit">キャンセル</Button>
+          <Button onClick={handleCopySub} variant="contained" color="secondary">コピー</Button>
         </DialogActions>
       </Dialog>
 

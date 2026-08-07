@@ -45,6 +45,7 @@ else:
     # main-support/ の1つ上のディレクトリ（project/）を基準にする
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
+ENUM_DIR = os.path.join(DATA_DIR, 'enum')
 
 def init(data_dir):
     """app.py から呼び出す初期化関数。"""
@@ -486,10 +487,21 @@ def generate_binary(name):
                 f.write(name_bytes)
                 f.write(struct.pack('i', len(type_bytes)))
                 f.write(type_bytes)
-                
-            
+
+            # ------------------------------------------------------------
+            # 行オフセットテーブル(シングルロード対応: 項目3-新規)。
+            # ここにいったんプレースホルダを書いておき、各行を書き終えた後に
+            # 実際の開始位置でシークして書き戻す(assets.pyの offsets 方式と同じ)。
+            # これにより「id -> 何バイト目から読めばよいか」がわかり、
+            # 全行を順番に読まなくても該当行だけシークして読み込める。
+            # ------------------------------------------------------------
+            row_offsets = [0] * len(rows)
+            row_offsets_pos = f.tell()
+            f.write(struct.pack('i' * len(rows), *row_offsets)) if rows else None
+
             # データ: 行ごとにEnumValue, 各カラム値
-            for row in rows:
+            for row_index, row in enumerate(rows):
+                row_offsets[row_index] = f.tell()
                 f.write(struct.pack('i', row.get('id', 0)))
                 for col in columns:
                     col_type = col['type'].lower()
@@ -565,7 +577,13 @@ def generate_binary(name):
                                 write_binary_field(f, v, base_type, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=col.get('options'), custom_type_info=custom_type_info)
                             else:
                                 f.write(struct.pack('i', 0))  # 未サポート型
-                    
+
+            # オフセットテーブルを実値で書き戻す
+            if rows:
+                end_pos = f.tell()
+                f.seek(row_offsets_pos)
+                f.write(struct.pack('i' * len(rows), *row_offsets))
+                f.seek(end_pos)
 
         
         return jsonify({"message": f"Binary generated: {bin_path}"})
@@ -738,6 +756,9 @@ def set_class_data_id_tag(name):
                     return jsonify({"error": f"タグ {tag} が見つかりません"}), 404
  
         target['tag'] = tag
+        # タグを変更した場合、サブグループはそのタグに属さなくなるのでクリアする
+        if target.get('subgroup') and target.get('tag') != tag:
+            target['subgroup'] = None
         with open(list_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
  
@@ -747,9 +768,381 @@ def set_class_data_id_tag(name):
     except Exception as e:
         logger.error(f"タグ割り当てエラー {name}: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    
+
+
+# ============================================================
+# ClassDataID サブグループ機能(タグ配下の第2階層)
+# ============================================================
+# tags.json の各タグエントリに "subgroups": [名前, ...] を持たせる
+# (登録順がそのままサブグループの並び順・enum ID順になる)。
+# class_data_id_list.json の各エントリは "subgroup": 名前|null を持つ。
+# サブグループはタグに従属するため、タグが変わる/削除されると
+# 該当エントリの subgroup も一緒にクリアされる。
+@bp.route('/api/class-data-id-tags/<int:tag_id>/subgroups', methods=['GET', 'POST'])
+def manage_class_data_id_subgroups(tag_id):
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+
+    target = next((t for t in data if t['id'] == tag_id), None)
+    if not target:
+        return jsonify({"error": "指定されたタグが見つかりません"}), 404
+    target.setdefault('subgroups', [])
+
+    if request.method == 'GET':
+        return jsonify(target['subgroups']), 200
+
+    # POST: サブグループを新規追加(登録順を維持)
+    try:
+        sub_name = (request.get_json() or {}).get('name')
+        if not sub_name:
+            return jsonify({"error": "サブグループ名は必須です"}), 400
+        if sub_name in target['subgroups']:
+            return jsonify({"error": f"サブグループ {sub_name} はすでに存在します"}), 400
+
+        target['subgroups'].append(sub_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({"message": f"サブグループ {sub_name} を作成しました", "data": target['subgroups']}), 201
+    except Exception as e:
+        logger.error(f"サブグループ作成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route('/api/class-data-id-tags/<int:tag_id>/subgroups/<path:sub_name>', methods=['DELETE'])
+def delete_class_data_id_subgroup(tag_id, sub_name):
+    """サブグループを削除する。所属していたエントリはタグ直下(subgroup=null)へ戻す"""
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        target = next((t for t in data if t['id'] == tag_id), None)
+        if not target:
+            return jsonify({"error": "指定されたタグが見つかりません"}), 404
+        target.setdefault('subgroups', [])
+        if sub_name not in target['subgroups']:
+            return jsonify({"error": f"サブグループ {sub_name} が見つかりません"}), 404
+        target['subgroups'].remove(sub_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # class_data_id_list.json 側で当該サブグループに属していたエントリを解除
+        list_path = os.path.join(tags_dir, 'class_data_id_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                list_data = json.load(f)
+            changed = False
+            for item in list_data:
+                if item.get('tag') == target['name'] and item.get('subgroup') == sub_name:
+                    item['subgroup'] = None
+                    changed = True
+            if changed:
+                with open(list_path, 'w', encoding='utf-8') as f:
+                    json.dump(list_data, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"message": f"サブグループ {sub_name} を削除しました"}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"サブグループ削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route('/api/class-data-id/<name>/subgroup', methods=['PUT'])
+def set_class_data_id_subgroup(name):
+    """特定のClassDataIDエントリにサブグループを割り当てる(subgroup=nullで解除)。
+    エントリに現在割り当てられているタグの subgroups に含まれている必要がある。"""
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+    try:
+        subgroup = request.get_json().get('subgroup')
+
+        with open(list_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        target = next((item for item in data if item['name'] == name), None)
+        if not target:
+            return jsonify({"error": f"ClassDataID {name} が見つかりません"}), 404
+
+        if subgroup is not None:
+            if not target.get('tag'):
+                return jsonify({"error": "サブグループを設定するには先にタグを設定してください"}), 400
+            tags_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'tags.json')
+            with open(tags_path, 'r', encoding='utf-8') as f:
+                tag_list = json.load(f)
+            tag_entry = next((t for t in tag_list if t['name'] == target['tag']), None)
+            if not tag_entry or subgroup not in tag_entry.get('subgroups', []):
+                return jsonify({"error": f"サブグループ {subgroup} はタグ {target['tag']} に登録されていません"}), 404
+
+        target['subgroup'] = subgroup
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({"message": f"{name} にサブグループを設定しました", "data": target}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "class_data_id_list.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"サブグループ割り当てエラー {name}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# Scenario連携(項目6・8)
+# ============================================================
+# ClassDataID側の「タグ」を Scenario 用に1つ固定で使う(タグ名固定: "Scenario")。
+# 親イベントごとに Scenario_{親} というサブグループを作り、
+# その中に Scenario_{親}_{サブ} という ClassDataID エントリを1つずつ作る。
+# シナリオイベント側(親/サブの追加・削除)から、このエンドポイントを
+# 呼び出すことで、常に最新のイベント構成へ自動追従させる。
+SCENARIO_TAG_NAME = "Scenario"
+
+
+def _ensure_scenario_tag():
+    """"Scenario"タグが存在するか確認し、無ければ新規作成して返す(項目8)。"""
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    os.makedirs(tags_dir, exist_ok=True)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            tags = json.load(f)
+    except FileNotFoundError:
+        tags = []
+
+    target = next((t for t in tags if t['name'] == SCENARIO_TAG_NAME), None)
+    if target is None:
+        max_id = max([t['id'] for t in tags], default=0) + 1
+        target = {"id": max_id, "name": SCENARIO_TAG_NAME, "subgroups": []}
+        tags.append(target)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(tags, f, ensure_ascii=False, indent=2)
+    else:
+        target.setdefault('subgroups', [])
+
+    return tags, target
+
+
+def generate_scenario_parent_enum_csharp(parent_name, sub_names):
+    """親イベントごとの Scenario_{親}ID enum を生成する(assets.pyの
+    generate_subgroup_enum_details_csharp と同じ考え方)。
+    中身は Scenario_{親}_{サブ} の各サブの名前。
+    ENUM_DIR/Scenario_{親}/Scenario_{親}ID.cs に生成する。
+    """
+    target_dir = os.path.join(ENUM_DIR, f"Scenario_{parent_name}")
+    os.makedirs(target_dir, exist_ok=True)
+    enum_name = f"Scenario_{parent_name}"
+
+    cs_content = "namespace GameCore.Enums\n{\n"
+    cs_content += f"    public enum {enum_name}ID\n    {{\n"
+    cs_content += "        None = 0, // デフォルト値\n"
+    for i, sub_name in enumerate(sub_names, start=1):
+        cs_content += f"        {sub_name} = {i},\n"
+    cs_content += f"        Max = {len(sub_names) + 1}\n"
+    cs_content += "    }\n}"
+
+    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(cs_content)
+
+    json_dict = []
+    js_path = os.path.join(target_dir, f"{enum_name}.json")
+    with open(js_path, 'w', encoding='utf-8') as f:
+        for i, sub_name in enumerate(sub_names, start=1):
+            json_dict.append({
+                "description": f"Scenario_{parent_name}_{sub_name}",
+                "id": i,
+                "property": sub_name,
+                "value": i,
+            })
+        json.dump(json_dict, f, ensure_ascii=False, indent=4)
+
+    return enum_name
+
+
+def sync_scenario_parent_enum_files(events):
+    """現在のイベント構成に基づき、Scenario_{親}ID enum一式を再生成し、
+    存在しなくなった親のenumフォルダは削除する(項目6: 追加・削除に自動追従)。
+    さらに assets.py の LoadSingle 群と同様に、親ごとの開始ラッパー関数
+    (Scenario_{親}())を ScenarioParentUtils.cs へまとめて生成する
+    (シナリオマネージャーコアの ScenarioExecuteUpdate を呼び出すだけの薄いラッパー)。
+    """
+    os.makedirs(ENUM_DIR, exist_ok=True)
+    expected_dirs = set()
+    wrapper_lines = []
+
+    for ev in events:
+        parent_name = ev['parent']
+        sub_names = ev.get('subs', [])
+        if not sub_names:
+            continue
+        enum_name = generate_scenario_parent_enum_csharp(parent_name, sub_names)
+        expected_dirs.add(f"Scenario_{parent_name}")
+
+        # Scenario_{親}() ラッパー(assets.pyのLoadSingle群と同じ考え方:
+        # ローカルenumの値からサブ名を求めてScenarioManagerCoreへ委譲する)
+        wrapper_lines.append(f"        // {parent_name}")
+        wrapper_lines.append(f"        public static async UniTask Scenario_{parent_name}(")
+        wrapper_lines.append(f"            this ScenarioManagerCore core,")
+        wrapper_lines.append(f"            {enum_name}ID sub = {enum_name}ID.{sub_names[0]},")
+        wrapper_lines.append(f"            bool addressable = false,")
+        wrapper_lines.append(f"            Action<ScenarioExecuteData> action = null,")
+        wrapper_lines.append(f"            CancellationTokenSource cts = null)")
+        wrapper_lines.append("        {")
+        wrapper_lines.append(f"            var subName = _{enum_name}IDToName(sub);")
+        wrapper_lines.append(f"            await core.ScenarioExecuteUpdate(\"{parent_name}\", subName, addressable, action, cts);")
+        wrapper_lines.append("        }")
+        wrapper_lines.append("")
+        wrapper_lines.append(f"        private static string _{enum_name}IDToName({enum_name}ID id)")
+        wrapper_lines.append("        {")
+        wrapper_lines.append("            switch (id)")
+        wrapper_lines.append("            {")
+        for sub_name in sub_names:
+            wrapper_lines.append(f"                case {enum_name}ID.{sub_name}: return \"{sub_name}\";")
+        wrapper_lines.append("                default: return string.Empty;")
+        wrapper_lines.append("            }")
+        wrapper_lines.append("        }")
+        wrapper_lines.append("")
+
+    # 存在しなくなった親のenumフォルダを削除(項目6: 削除への追従)
+    if os.path.isdir(ENUM_DIR):
+        for entry in os.listdir(ENUM_DIR):
+            if entry.startswith("Scenario_") and entry not in expected_dirs:
+                entry_path = os.path.join(ENUM_DIR, entry)
+                if os.path.isdir(entry_path):
+                    shutil.rmtree(entry_path)
+
+    # ScenarioParentUtils.cs(Scenario_{親}()ラッパー群)を生成
+    scenario_root_dir = os.path.join(DATA_DIR, 'scenario', 'scenario_event_data')
+    os.makedirs(scenario_root_dir, exist_ok=True)
+    utils_content = "using System;\n"
+    utils_content += "using System.Threading;\n"
+    utils_content += "using Cysharp.Threading.Tasks;\n"
+    utils_content += "using GameCore.Enums;\n\n"
+    utils_content += "namespace GameCore.Scenario\n{\n"
+    utils_content += "    // sync-scenario実行のたびに再生成される。手動編集は反映されないので注意。\n"
+    utils_content += "    public static class ScenarioParentUtils\n    {\n"
+    utils_content += "\n".join(wrapper_lines)
+    utils_content += "\n    }\n}\n"
+    with open(os.path.join(scenario_root_dir, "ScenarioParentUtils.cs"), 'w', encoding='utf-8') as f:
+        f.write(utils_content)
+
+
+def sync_scenario_class_data_ids_core(events):
+    """events: [{ "parent": str, "subs": [str, ...] }, ...] を受け取り、
+    ClassDataID側のScenarioタグ配下を追従させる実処理本体(項目6・8)。
+    Flaskのrequestに依存しないので、HTTP経由でもapp.py側からの直接呼び出しでも使える。
+    """
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    os.makedirs(tags_dir, exist_ok=True)
+    list_path = os.path.join(tags_dir, 'class_data_id_list.json')
+
+    tags, scenario_tag = _ensure_scenario_tag()
+
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+    except FileNotFoundError:
+        items = []
+
+    # 現在あるべき Scenario_{親} / Scenario_{親}_{サブ} の集合
+    wanted_subgroups = [f"Scenario_{ev['parent']}" for ev in events]
+    wanted_items = {}  # subgroup_name -> [item_name, ...]
+    for ev in events:
+        parent = ev['parent']
+        sub_group_name = f"Scenario_{parent}"
+        wanted_items[sub_group_name] = [f"Scenario_{parent}_{sub}" for sub in ev.get('subs', [])]
+
+    # サブグループの追加・削除を同期
+    scenario_tag['subgroups'] = wanted_subgroups
+    with open(os.path.join(tags_dir, 'tags.json'), 'w', encoding='utf-8') as f:
+        json.dump(tags, f, ensure_ascii=False, indent=2)
+
+    # Scenarioタグ配下の既存エントリのうち、もう存在しないものを削除
+    wanted_all_item_names = {name for names in wanted_items.values() for name in names}
+    items = [
+        item for item in items
+        if item.get('tag') != SCENARIO_TAG_NAME or item['name'] in wanted_all_item_names
+    ]
+    existing_names = {item['name'] for item in items if item.get('tag') == SCENARIO_TAG_NAME}
+
+    # 足りないエントリを新規作成(class_data_idのカラム変数はScenarioと紐付け、
+    # 値は Scenario_{親}_{サブ} を設定する = エントリ名そのものがその値になる)
+    max_id = max([item.get('id', 0) for item in items], default=0)
+    created = []
+    for sub_group_name, item_names in wanted_items.items():
+        for item_name in item_names:
+            if item_name in existing_names:
+                continue
+            max_id += 1
+            new_item = {
+                "name": item_name,
+                "id": max_id,
+                "tag": SCENARIO_TAG_NAME,
+                "subgroup": sub_group_name,
+            }
+            items.append(new_item)
+            created.append(item_name)
+
+    with open(list_path, 'w', encoding='utf-8') as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+    # 項目6・追加要望: 親ごとの Scenario_{親}ID enum と、
+    # Scenario_{親}() 開始ラッパー関数を同期・再生成する。
+    sync_scenario_parent_enum_files(events)
+
+    return created, wanted_subgroups
+
+
+def sync_scenario_class_data_ids_from_scenario_events(scenario_events):
+    """scenario_event_list.json そのままの形([{ "id":..., "subEvents":[{"name":...}] }, ...])を
+    受け取れる薄いラッパー。app.py側の親/サブ追加・削除ハンドラから、その場で
+    直接この関数を呼び出すだけで同期できる(HTTPを経由しない)。
+    親の識別には id(URLやディレクトリ名にも使われている一意な値)を使う。
+    """
+    events = [
+        {
+            "parent": ev["id"],
+            "subs": [sub["name"] for sub in ev.get("subEvents", [])],
+        }
+        for ev in scenario_events
+    ]
+    return sync_scenario_class_data_ids_core(events)
+
+
+@bp.route('/api/class-data-id/sync-scenario', methods=['POST'])
+def sync_scenario_class_data_ids():
+    """シナリオイベント(親/サブ)の現在の構成を受け取り、ClassDataID側の
+    Scenario タグ配下(Scenario_{親}サブグループ・Scenario_{親}_{サブ}エントリ)を
+    追従させる(項目6: イベント追加・削除時の自動更新)。HTTP経由での呼び出し用。
+    app.py側から直接呼ぶ場合は sync_scenario_class_data_ids_from_scenario_events を使う。
+
+    request body:
+    {
+        "events": [
+            { "parent": "Opening", "subs": ["Intro", "Meeting"] },
+            { "parent": "Ending",  "subs": ["Good", "Bad"] }
+        ]
+    }
+    """
+    try:
+        events = (request.get_json() or {}).get('events', [])
+        created, wanted_subgroups = sync_scenario_class_data_ids_core(events)
+        return jsonify({
+            "message": "Scenario用ClassDataIDを同期しました",
+            "created": created,
+            "subgroups": wanted_subgroups,
+        }), 200
+    except Exception as e:
+        logger.error(f"Scenario ClassDataID同期エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+
 def generate_tags_load_script():
-    """tags.json をロードしてタグ名を列挙するC#スクリプトを生成"""
+    """tags.json / class_data_id_list.json をもとに、タグ単位・サブグループ単位の
+    一括ロード/アンロードutilと、ClassDataID単体(複数まとめても可)のシングル
+    ロード/アンロードutilをまとめて TableIdUtils.cs に生成する。"""
     tags_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'tags.json')
     try:
         tags = []
@@ -759,82 +1152,204 @@ def generate_tags_load_script():
         class_data_id_list = []
         with open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'), 'r', encoding='utf-8') as f:
             class_data_id_list = json.load(f)
-            
-        dict_tags_load_write_script = {}
-        
-        for tag in tags:
-            tag_name = tag["name"]
-            tagged_items = [
-                item["name"] for item in class_data_id_list
-                if item.get("tag") == tag_name
-            ]
-        
+
+        # ------------------------------------------------------------
+        # 重複処理の削減(項目9): Load/Unloadの同期・非同期4メソッドを
+        # 1か所で組み立てる共通ヘルパー。タグ単位・サブグループ単位どちらも
+        # これを通す。
+        # ------------------------------------------------------------
+        def build_bulk_block(suffix, item_names):
             lines = []
             indent = 0
-        
+
             def add(text=""):
                 lines.append("    " * indent + text)
-        
-            # -------------------------
-            # 非同期
-            # -------------------------
-            add(f"public static async UniTask LoadAsync{tag_name}(Action action = null)")
+
+            # 非同期ロード
+            add(f"public static async UniTask LoadAsync{suffix}(Action action = null)")
             add("{")
             indent += 1
-        
             add("await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
-        
-            for item_name in tagged_items:
+            for item_name in item_names:
                 add(f"header.GetData<GameCore.Tables.{item_name}Table>(GameCore.Enums.TableID.{item_name}, reader);")
                 add("await UniTask.Yield();")
-        
             add("action?.Invoke();")
             add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
-        
             indent -= 1
             add("}")
             add()
-        
-            # -------------------------
-            # 同期
-            # -------------------------
-            add(f"public static void Load{tag_name}(Action action = null)")
+
+            # 同期ロード
+            add(f"public static void Load{suffix}(Action action = null)")
             add("{")
             indent += 1
-        
             add("UniTask.Action(async () =>")
             add("{")
             indent += 1
-        
             add("await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
-        
-            for item_name in tagged_items:
+            for item_name in item_names:
                 add(f"header.GetData<GameCore.Tables.{item_name}Table>(GameCore.Enums.TableID.{item_name}, reader);")
-        
             add("action?.Invoke();")
             add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
-        
             indent -= 1
             add("}).Invoke();")
-        
             indent -= 1
             add("}")
             add()
-        
-            dict_tags_load_write_script[tag_name] = lines
-        
-        append_str = "\n".join(
-            "\n".join(lines)
-            for lines in dict_tags_load_write_script.values()
-        )
+
+            # 非同期アンロード(新規)
+            add(f"public static async UniTask UnloadAsync{suffix}(Action action = null)")
+            add("{")
+            indent += 1
+            for item_name in item_names:
+                add(f"ClassDataIDCore.Instance.UnloadClassData(GameCore.Enums.TableID.{item_name});")
+                add("await UniTask.Yield();")
+            add("action?.Invoke();")
+            add("await UniTask.CompletedTask;")
+            indent -= 1
+            add("}")
+            add()
+
+            # 同期アンロード(新規)
+            add(f"public static void Unload{suffix}(Action action = null)")
+            add("{")
+            indent += 1
+            for item_name in item_names:
+                add(f"ClassDataIDCore.Instance.UnloadClassData(GameCore.Enums.TableID.{item_name});")
+            add("action?.Invoke();")
+            indent -= 1
+            add("}")
+            add()
+
+            return lines
+
+        all_blocks = []
+
+        for tag in tags:
+            tag_name = tag["name"]
+            tag_items = [
+                item["name"] for item in class_data_id_list
+                if item.get("tag") == tag_name
+            ]
+            # タグ全体(サブグループ問わず全部)
+            all_blocks += build_bulk_block(tag_name, tag_items)
+
+            # サブグループ単位(項目: サブグループ単位でのロード、アンロード)
+            for sub_name in tag.get('subgroups', []):
+                sub_items = [
+                    item["name"] for item in class_data_id_list
+                    if item.get("tag") == tag_name and item.get("subgroup") == sub_name
+                ]
+                all_blocks += build_bulk_block(f"{tag_name}_{sub_name}", sub_items)
+
+        # ------------------------------------------------------------
+        # シングルロード/アンロード(項目: シングルロード・アンロード)。
+        # ClassDataID 1件のみのオーバーロードに加え、配列引数で複数件を
+        # 一括ロード/アンロードできるオーバーロードも生成する。
+        # 各テーブルはgenerate_binaryで書き込んだ行オフセットテーブルを使い、
+        # 該当行だけシークして読み込む想定(ClassDataIDCore側でTableID→
+        # ファイルパス解決とシーク読み込みを行う)。
+        # ------------------------------------------------------------
+        single_lines = []
+        indent = 0
+
+        def add_single(text=""):
+            single_lines.append("    " * indent + text)
+
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("await ClassDataIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var id in ids)")
+        add_single("{")
+        indent += 1
+        add_single("await ClassDataIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("await UniTask.Yield();")
+        indent -= 1
+        add_single("}")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void LoadSingle(GameCore.Enums.TableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(id, action); }).Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void LoadSingle(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(ids, action); }).Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("action?.Invoke();")
+        add_single("await UniTask.CompletedTask;")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var id in ids)")
+        add_single("{")
+        indent += 1
+        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("await UniTask.Yield();")
+        indent -= 1
+        add_single("}")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void UnloadSingle(GameCore.Enums.TableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void UnloadSingle(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var id in ids) ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        all_blocks += single_lines
+
+        append_str = "\n".join(all_blocks)
         
         code_str =f"""
 using System;

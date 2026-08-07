@@ -20,6 +20,10 @@ function ClassDataIdGrid() {
   const [editingTagId, setEditingTagId] = useState(null);
   const [editingTagName, setEditingTagName] = useState('');
 
+  // サブグループ管理（タグ配下）
+  const [expandedTagId, setExpandedTagId] = useState(null);
+  const [newSubgroupName, setNewSubgroupName] = useState('');
+
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -120,10 +124,70 @@ function ClassDataIdGrid() {
       })
       .then(() => {
         setClassDataIdData(classDataIdData.map(item =>
-          item.name === rowName ? { ...item, tag: tagToSave } : item
+          item.name === rowName ? { ...item, tag: tagToSave, subgroup: null } : item
         ));
       })
       .catch(error => alert('タグ更新エラー: ' + error.message));
+  };
+
+  // --- サブグループ割り当て（タグ配下の第2階層） ---
+  const handleSubgroupChange = (rowName, subgroupValue) => {
+    const subgroupToSave = subgroupValue === NO_TAG ? null : subgroupValue;
+    fetch(`/api/class-data-id/${encodeURIComponent(rowName)}/subgroup`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subgroup: subgroupToSave }),
+    })
+      .then(response => {
+        if (!response.ok) return response.json().then(e => { throw new Error(e.error || 'サブグループの更新に失敗'); });
+        return response.json();
+      })
+      .then(() => {
+        setClassDataIdData(classDataIdData.map(item =>
+          item.name === rowName ? { ...item, subgroup: subgroupToSave } : item
+        ));
+      })
+      .catch(error => alert('サブグループ更新エラー: ' + error.message));
+  };
+
+  // --- サブグループ管理（タグ管理ダイアログ内、タグごとに追加・削除） ---
+  const handleAddSubgroup = (tag) => {
+    if (!newSubgroupName.trim()) {
+      alert('サブグループ名は必須です');
+      return;
+    }
+    fetch(`/api/class-data-id-tags/${tag.id}/subgroups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newSubgroupName }),
+    })
+      .then(response => response.json().then(data => ({ ok: response.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error(data.error || 'サブグループの作成に失敗');
+        setTags(tags.map(t => (t.id === tag.id ? { ...t, subgroups: data.data } : t)));
+        setNewSubgroupName('');
+      })
+      .catch(error => alert('サブグループ作成エラー: ' + error.message));
+  };
+
+  const handleDeleteSubgroup = (tag, subgroupName) => {
+    if (!window.confirm(`サブグループ「${subgroupName}」を削除しますか？（割り当て済みのClassDataIDはタグ直下に戻ります）`)) return;
+    fetch(`/api/class-data-id-tags/${tag.id}/subgroups/${encodeURIComponent(subgroupName)}`, {
+      method: 'DELETE',
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('サブグループの削除に失敗');
+        return response.json();
+      })
+      .then(() => {
+        setTags(tags.map(t => (
+          t.id === tag.id ? { ...t, subgroups: (t.subgroups || []).filter(s => s !== subgroupName) } : t
+        )));
+        setClassDataIdData(classDataIdData.map(item =>
+          (item.tag === tag.name && item.subgroup === subgroupName) ? { ...item, subgroup: null } : item
+        ));
+      })
+      .catch(error => alert('サブグループ削除エラー: ' + error.message));
   };
 
   // --- タグ管理（新規追加・編集・削除） ---
@@ -194,7 +258,7 @@ function ClassDataIdGrid() {
       .then(() => {
         setTags(tags.filter(t => t.id !== tag.id));
         setClassDataIdData(classDataIdData.map(item =>
-          item.tag === tag.name ? { ...item, tag: null } : item
+          item.tag === tag.name ? { ...item, tag: null, subgroup: null } : item
         ));
       })
       .catch(error => alert('タグ削除エラー: ' + error.message));
@@ -239,6 +303,32 @@ function ClassDataIdGrid() {
           </Select>
         </FormControl>
       ),
+    },
+    {
+      field: 'subgroup',
+      headerName: 'サブグループ',
+      width: 180,
+      renderCell: (params) => {
+        const currentTag = tags.find(t => t.name === params.row.tag);
+        const subgroups = currentTag?.subgroups || [];
+        if (!params.row.tag) {
+          return <Typography variant="body2" color="text.disabled">タグ未設定</Typography>;
+        }
+        return (
+          <FormControl size="small" fullWidth>
+            <Select
+              value={params.row.subgroup || NO_TAG}
+              onChange={(e) => handleSubgroupChange(params.row.name, e.target.value)}
+              displayEmpty
+            >
+              <MenuItem value={NO_TAG}>未設定</MenuItem>
+              {subgroups.map(sg => (
+                <MenuItem key={sg} value={sg}>{sg}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        );
+      },
     },
     {
       field: 'actions',
@@ -359,26 +449,60 @@ function ClassDataIdGrid() {
             <Typography variant="body2" color="text.secondary">タグがまだありません</Typography>
           )}
           {tags.map(tag => (
-            <Box key={tag.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              {editingTagId === tag.id ? (
-                <>
-                  <TextField
-                    size="small"
-                    value={editingTagName}
-                    onChange={(e) => setEditingTagName(e.target.value)}
-                    fullWidth
-                  />
-                  <Button size="small" onClick={() => handleRenameTag(tag)}>保存</Button>
-                  <Button size="small" onClick={() => setEditingTagId(null)}>キャンセル</Button>
-                </>
-              ) : (
-                <>
-                  <Typography sx={{ flex: 1 }}>{tag.name}</Typography>
-                  <Button size="small" onClick={() => startEditTag(tag)}>編集</Button>
-                  <IconButton size="small" color="error" onClick={() => handleDeleteTag(tag)}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </>
+            <Box key={tag.id} sx={{ mb: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {editingTagId === tag.id ? (
+                  <>
+                    <TextField
+                      size="small"
+                      value={editingTagName}
+                      onChange={(e) => setEditingTagName(e.target.value)}
+                      fullWidth
+                    />
+                    <Button size="small" onClick={() => handleRenameTag(tag)}>保存</Button>
+                    <Button size="small" onClick={() => setEditingTagId(null)}>キャンセル</Button>
+                  </>
+                ) : (
+                  <>
+                    <Typography sx={{ flex: 1 }}>{tag.name}</Typography>
+                    <Button
+                      size="small"
+                      onClick={() => setExpandedTagId(expandedTagId === tag.id ? null : tag.id)}
+                    >
+                      サブグループ({(tag.subgroups || []).length})
+                    </Button>
+                    <Button size="small" onClick={() => startEditTag(tag)}>編集</Button>
+                    <IconButton size="small" color="error" onClick={() => handleDeleteTag(tag)}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </>
+                )}
+              </Box>
+              {expandedTagId === tag.id && (
+                <Box sx={{ pl: 2, pr: 1, py: 1, ml: 1, borderLeft: '2px solid', borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                    <TextField
+                      size="small"
+                      label="新しいサブグループ名"
+                      fullWidth
+                      value={newSubgroupName}
+                      onChange={(e) => setNewSubgroupName(e.target.value)}
+                    />
+                    <Button size="small" variant="contained" onClick={() => handleAddSubgroup(tag)}>追加</Button>
+                  </Box>
+                  {(tag.subgroups || []).length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">サブグループがまだありません</Typography>
+                  ) : (
+                    (tag.subgroups || []).map(sg => (
+                      <Box key={sg} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                        <Typography variant="body2" sx={{ flex: 1 }}>{sg}</Typography>
+                        <IconButton size="small" color="error" onClick={() => handleDeleteSubgroup(tag, sg)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    ))
+                  )}
+                </Box>
               )}
             </Box>
           ))}

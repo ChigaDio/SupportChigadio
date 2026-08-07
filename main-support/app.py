@@ -16,6 +16,7 @@ app.py
 その後 Flask ルートを提供する。
 """
 from math import isnan, isfinite
+import copy
 import logging
 import re
 import shutil
@@ -1183,8 +1184,8 @@ namespace GameCore.Scenario {
                     return null;
             }
         }
-
-        public static BaseOrigintScenarioRoleAction CreateRoleAction(BaseScenarioRoleData data) {
+        
+        public static BaseOrigintScenarioRoleAction CreateNewRoleAction(BaseScenarioRoleData data) {
             if (data == null) return null;
             switch (data.RoleID) {
 """
@@ -1195,6 +1196,82 @@ namespace GameCore.Scenario {
     factory_content += """                default:
                     return null;
             }
+        }
+        
+        // 役職ごとのプール構造：
+        // freePool: 未使用インスタンスを O(1) で出し入れする Stack
+        // activeSet: 解放時に正しいアクションか確認、あるいは線形探索を避けるための管理
+        private class RolePool {
+            public readonly Stack<BaseOrigintScenarioRoleAction> FreeStack = new Stack<BaseOrigintScenarioRoleAction>();
+            // どのアクションが使われているかをO(1)で判定・管理したい場合のセット
+            public readonly HashSet<BaseOrigintScenarioRoleAction> ActiveSet = new HashSet<BaseOrigintScenarioRoleAction>();
+        }
+
+        private static readonly Dictionary<ScenarioRoleID, RolePool> actionPool
+            = new Dictionary<ScenarioRoleID, RolePool>();
+
+        private static RolePool GetOrCreatePool(ScenarioRoleID id) {
+            if (!actionPool.TryGetValue(id, out var pool)) {
+                pool = new RolePool();
+                actionPool[id] = pool;
+            }
+            return pool;
+        }
+
+        public static void WarmUpPool(BaseScenarioRoleData data,int count) {
+            var pool = GetOrCreatePool(data.RoleID);
+            int currentTotal = pool.FreeStack.Count + pool.ActiveSet.Count;
+            int needed = count - currentTotal;
+            
+            for (int i = 0; i < needed; i++) {
+                var newAction = CreateNewRoleAction(data);
+                if (newAction != null) {
+                    pool.FreeStack.Push(newAction);
+                }
+            }
+        }
+
+        public static async UniTask<BaseOrigintScenarioRoleAction> CreateRoleActionAsync(BaseScenarioRoleData data, CancellationToken ct = default) {
+            if (data == null) return null;
+            var pool = GetOrCreatePool(data.RoleID);
+
+            BaseOrigintScenarioRoleAction action;
+
+            if (pool.FreeStack.Count > 0) {
+                action = pool.FreeStack.Pop();
+            } else {
+                action = CreateNewRoleAction(data);
+                if (action == null) return null;
+            }
+
+            action.Reset();
+
+            try {
+                // キャンセルトークンを紐付けて非同期リセットを実行
+                await action.ResetAsync().WithCancellation(ct);
+            } catch (System.OperationCanceledException) {
+                // 万が一キャンセルされた場合は、プールからポップしたアクションを再度スタックに戻すか、
+                // もし新規生成したものであれば破棄・未使用に戻すなどの配慮が必要です
+                pool.FreeStack.Push(action);
+                throw;
+            }
+
+            pool.ActiveSet.Add(action);
+            return action;
+        }
+
+        public static void ReleaseRoleAction(ScenarioRoleID id, BaseOrigintScenarioRoleAction action) {
+            if (action == null) return;
+            if (!actionPool.TryGetValue(id, out var pool)) return;
+
+            // O(1) でアクティブセットから外し、未使用スタックに戻す
+            if (pool.ActiveSet.Remove(action)) {
+                pool.FreeStack.Push(action);
+            }
+        }
+
+        public static void AllClear() {
+            actionPool.Clear();
         }
     }
 }
@@ -1333,38 +1410,46 @@ namespace GameCore.Scenario {{
         public override void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom initialization logic
             base.OnInitialize(executeData,ct);
+            IsEnter = true;
         }}
         
         public override void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
+            IsOneUpdate = true;
         }}
 
         public override void OnExecute(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom action logic using RoleData
             Debug.Log($"Executing {name} with RoleID: {{RoleData.RoleID}}");
+            IsUpdate = true;
         }}
 
         public override void OnFinalize(ScenarioExecuteData executeData, CancellationTokenSource ct) {{
             // Custom cleanup logic
+            IsFinish = true;
         }}
         
         public override async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {{
 
             await base.OnInitializeAsync(executeData, ct);
+            IsEnterAsync = true;
         }}
         public override async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {{
             // Implement action logic here
             await UniTask.CompletedTask;
+            IsOneUpdateAsync = true;
         }}
         public override async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {{
             // Implement action logic here
             await UniTask.CompletedTask;
+            IsUpdateAsync = true;
         }}
         public override async UniTask OnFinalizeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {{
             await UniTask.CompletedTask;
+            IsFinishAsync = true;
         }}
     }}
 }}
@@ -1414,6 +1499,9 @@ def handle_scenario_event_list():
         os.makedirs(event_dir, exist_ok=True)
         with open(os.path.join(event_dir, f"{id}.json"), 'w', encoding='utf-8') as f:
             json.dump(new_event, f)
+        # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+        with open(list_path, 'r', encoding='utf-8') as f:
+            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(json.load(f))
         return jsonify({"message": "Event created"})
 
 @app.route('/api/scenario-event/<id>', methods=['PATCH', 'DELETE'])
@@ -1450,6 +1538,8 @@ def handle_scenario_event(id):
                 f.seek(0)
                 f.truncate()
                 json.dump(events, f)
+            # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
         if os.path.exists(event_dir):
             shutil.rmtree(event_dir)
         return jsonify({"message": "Event deleted"})
@@ -1458,6 +1548,7 @@ def handle_scenario_event(id):
 def add_sub_event(id):
     data = request.json
     name = data.get('name')
+    description = data.get('description', '')
     if not name:
         return jsonify({"error": "Name is required"}), 400
     list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
@@ -1468,7 +1559,7 @@ def add_sub_event(id):
             for event in events:
                 if event['id'] == id:
                     max_sub_id = max([s['subId'] for s in event.get('subEvents', [])], default=0) + 1
-                    new_sub = {"subId": max_sub_id, "name": name}
+                    new_sub = {"subId": max_sub_id, "name": name, "description": description}
                     event['subEvents'].append(new_sub)
                     f.seek(0)
                     f.truncate()
@@ -1482,6 +1573,8 @@ def add_sub_event(id):
                         ef.seek(0)
                         ef.truncate()
                         json.dump(eventData, ef)
+                    # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+                    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
                     return jsonify({"message": "Sub event added", "subId": max_sub_id})
         return jsonify({"error": "Event not found"}), 404
     return jsonify({"error": "Event not found"}), 404
@@ -1493,6 +1586,7 @@ def handle_sub_event(id, subId):
     if request.method == 'PATCH':
         data = request.json
         name = data.get('name')
+        description = data.get('description')
         if not os.path.exists(list_path):
             return jsonify({"error": "Event not found"}), 404
         with open(list_path, 'r+', encoding='utf-8') as f:
@@ -1503,11 +1597,15 @@ def handle_sub_event(id, subId):
                         if sub['subId'] == subId:
                             if name is not None:
                                 sub['name'] = name
+                            if description is not None:
+                                sub['description'] = description
                             f.seek(0)
                             f.truncate()
                             json.dump(events, f)
                             with open(event_path, 'w', encoding='utf-8') as ef:
                                 json.dump(event, ef)
+                            # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+                            pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
                             return jsonify({"message": "Sub event updated"})
             return jsonify({"error": "Sub event not found"}), 404
     elif request.method == 'DELETE':
@@ -1522,9 +1620,144 @@ def handle_sub_event(id, subId):
                         json.dump(events, f)
                         with open(event_path, 'w', encoding='utf-8') as ef:
                             json.dump(event, ef)
+                        # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+                        pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
                         return jsonify({"message": "Sub event deleted"})
         return jsonify({"error": "Event or sub event not found"}), 404
-    
+
+
+# ============================================================
+# コピー機能(項目5)
+# ============================================================
+@app.route('/api/scenario-event/<id>/copy', methods=['POST'])
+def copy_scenario_event(id):
+    """親イベントをコピーする。copySubs(デフォルトTrue)でサブイベントも
+    まとめてコピーするかを選べる。IDは自動採番、名前は "{元の名前} のコピー"。
+    """
+    data = request.json or {}
+    copy_subs = data.get('copySubs', True)
+
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    if not os.path.exists(list_path):
+        return jsonify({"error": "Event not found"}), 404
+
+    with open(list_path, 'r+', encoding='utf-8') as f:
+        events = json.load(f)
+        source = next((e for e in events if e['id'] == id), None)
+        if not source:
+            return jsonify({"error": "Event not found"}), 404
+
+        numeric_ids = [int(e['id']) for e in events if str(e['id']).isdigit()]
+        new_id = str(max(numeric_ids, default=0) + 1)
+
+        new_sub_events = []
+        if copy_subs:
+            for i, sub in enumerate(source.get('subEvents', []), start=1):
+                new_sub_events.append({
+                    "subId": i,
+                    "name": sub['name'],
+                    "description": sub.get('description', ''),
+                })
+
+        new_event = {
+            "id": new_id,
+            "name": f"{source['name']} のコピー",
+            "description": source.get('description', ''),
+            "subEvents": new_sub_events,
+        }
+        events.append(new_event)
+        f.seek(0)
+        f.truncate()
+        json.dump(events, f)
+
+    # 個別ファイル(遷移図データ含む)も作成
+    src_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
+    src_event_path = os.path.join(src_event_dir, f"{id}.json")
+    new_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, new_id)
+    os.makedirs(new_event_dir, exist_ok=True)
+    new_event_path = os.path.join(new_event_dir, f"{new_id}.json")
+
+    if copy_subs and os.path.exists(src_event_path):
+        with open(src_event_path, 'r', encoding='utf-8') as f:
+            src_data = json.load(f)
+        src_subgroups = src_data.get('subgroups', {})
+        new_subgroups = {}
+        for old_sub, new_sub in zip(source.get('subEvents', []), new_sub_events):
+            old_sub_id_str = str(old_sub['subId'])
+            if old_sub_id_str in src_subgroups:
+                # 遷移図データ(nodes/edges、サブグループ含む)をそのままコピー
+                new_subgroups[str(new_sub['subId'])] = copy.deepcopy(src_subgroups[old_sub_id_str])
+        new_event = {**new_event, "subgroups": new_subgroups}
+    with open(new_event_path, 'w', encoding='utf-8') as f:
+        json.dump(new_event, f)
+
+    # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+
+    return jsonify({"message": "イベントをコピーしました", "id": new_id})
+
+
+@app.route('/api/scenario-event/<id>/sub/<int:subId>/copy', methods=['POST'])
+def copy_sub_event(id, subId):
+    """サブイベントをコピーする。targetEventId で別の親/同じ親どちらへも
+    コピーできる(省略時は同じ親へコピー)。"""
+    data = request.json or {}
+    target_event_id = data.get('targetEventId', id)
+
+    list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
+    if not os.path.exists(list_path):
+        return jsonify({"error": "Event not found"}), 404
+
+    with open(list_path, 'r+', encoding='utf-8') as f:
+        events = json.load(f)
+        source_event = next((e for e in events if e['id'] == id), None)
+        if not source_event:
+            return jsonify({"error": "Event not found"}), 404
+        source_sub = next((s for s in source_event.get('subEvents', []) if s['subId'] == subId), None)
+        if not source_sub:
+            return jsonify({"error": "Sub event not found"}), 404
+
+        target_event = next((e for e in events if e['id'] == target_event_id), None)
+        if not target_event:
+            return jsonify({"error": "Copy target event not found"}), 404
+
+        max_sub_id = max([s['subId'] for s in target_event.get('subEvents', [])], default=0) + 1
+        new_sub = {
+            "subId": max_sub_id,
+            "name": source_sub['name'] if target_event_id != id else f"{source_sub['name']} のコピー",
+            "description": source_sub.get('description', ''),
+        }
+        target_event['subEvents'].append(new_sub)
+        f.seek(0)
+        f.truncate()
+        json.dump(events, f)
+
+    # 遷移図データ(nodes/edges)もコピー
+    src_event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
+    target_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, target_event_id)
+    os.makedirs(target_event_dir, exist_ok=True)
+    target_event_path = os.path.join(target_event_dir, f"{target_event_id}.json")
+
+    src_subgroup_data = {'nodes': [], 'edges': []}
+    if os.path.exists(src_event_path):
+        with open(src_event_path, 'r', encoding='utf-8') as f:
+            src_data = json.load(f)
+        src_subgroup_data = src_data.get('subgroups', {}).get(str(subId), {'nodes': [], 'edges': []})
+
+    target_data = {}
+    if os.path.exists(target_event_path):
+        with open(target_event_path, 'r', encoding='utf-8') as f:
+            target_data = json.load(f)
+    target_data.setdefault('subgroups', {})[str(max_sub_id)] = copy.deepcopy(src_subgroup_data)
+    with open(target_event_path, 'w', encoding='utf-8') as f:
+        json.dump(target_data, f)
+
+    # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+    pythonSrc.class_data_id.sync_scenario_class_data_ids_from_scenario_events(events)
+
+    return jsonify({"message": "サブイベントをコピーしました", "subId": max_sub_id, "targetEventId": target_event_id})
+
+
 # Transition管理
 # 既存のエンドポイント（省略された部分は前のコードと同じ）
 @app.route('/api/scenario-event/<eventId>/sub/<subId>/transition', methods=['GET', 'POST'])

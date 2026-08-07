@@ -22,6 +22,8 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import SaveIcon from '@mui/icons-material/Save';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import FileUploadIcon from '@mui/icons-material/FileUpload';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -49,6 +51,147 @@ const useSnack = () => {
 const getNextNodeId = (nodes) => {
   const ids = nodes.map(n => parseInt(n.id, 10)).filter(n => !isNaN(n));
   return ids.length > 0 ? (Math.max(...ids) + 1).toString() : '1';
+};
+
+// ============================================================
+// CSV入出力(項目10)
+// ノードとエッジをまとめて1つのCSVに書き出す/読み込む。
+// 1列目(type)で "node" / "edge" を区別する。
+// 説明文などに含まれる改行・カンマ・ダブルクォートは
+// RFC4180準拠でクォート/エスケープする。
+// ============================================================
+const CSV_COLUMNS = ['type', 'id', 'description', 'roleIds', 'x', 'y', 'source', 'target', 'sourceHandle', 'targetHandle'];
+
+const csvEscapeCell = (value) => {
+  const str = value === undefined || value === null ? '' : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+};
+
+const rowsToCsv = (rows) => {
+  const lines = [CSV_COLUMNS.join(',')];
+  for (const row of rows) {
+    lines.push(CSV_COLUMNS.map(col => csvEscapeCell(row[col])).join(','));
+  }
+  return lines.join('\r\n');
+};
+
+// シンプルなRFC4180 CSVパーサ(クォート内の改行・エスケープ済みダブルクォートに対応)
+const parseCsv = (text) => {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\r') {
+      // \r\n の \r は無視、\n側で行確定
+    } else if (ch === '\n') {
+      row.push(field); field = '';
+      rows.push(row); row = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 1 || (r.length === 1 && r[0] !== ''));
+};
+
+const exportTabToCsv = (tabData, tabId) => {
+  const rows = [];
+  for (const node of tabData.nodes) {
+    rows.push({
+      type: 'node',
+      id: node.id,
+      description: node.data?.description || '',
+      roleIds: (node.data?.roles || []).map(r => r.roleId ?? r.id ?? '').join(';'),
+      x: node.position?.x ?? 0,
+      y: node.position?.y ?? 0,
+      source: '', target: '', sourceHandle: '', targetHandle: '',
+    });
+  }
+  for (const edge of tabData.edges) {
+    rows.push({
+      type: 'edge',
+      id: edge.id || '',
+      description: '', roleIds: '', x: '', y: '',
+      source: edge.source, target: edge.target,
+      sourceHandle: edge.sourceHandle || '', targetHandle: edge.targetHandle || '',
+    });
+  }
+  const csv = rowsToCsv(rows);
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `scenario_${tabId}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+// CSVの内容から { nodes, edges } を再構築する。
+// 既存のノード/ロール構造を壊さないよう、description/position/roleIds のみ
+// CSVから復元し、roles配列自体は roleId のみの最小構成で再構築する
+// (詳細なroleデータはRoleDataDrawer側で個別に読み直される想定)。
+const parseCsvToTabData = (text) => {
+  const table = parseCsv(text);
+  if (table.length === 0) return { nodes: [], edges: [] };
+  const header = table[0];
+  const colIndex = {};
+  header.forEach((h, i) => { colIndex[h.trim()] = i; });
+  const get = (row, col) => (colIndex[col] !== undefined ? (row[colIndex[col]] ?? '') : '');
+
+  const nodes = [];
+  const edges = [];
+  for (const row of table.slice(1)) {
+    const type = get(row, 'type');
+    if (type === 'node') {
+      const id = get(row, 'id');
+      if (!id) continue;
+      const roleIds = get(row, 'roleIds');
+      nodes.push({
+        id,
+        type: 'customGroup',
+        position: { x: parseFloat(get(row, 'x')) || 0, y: parseFloat(get(row, 'y')) || 0 },
+        data: {
+          label: id,
+          description: get(row, 'description'),
+          roles: roleIds ? roleIds.split(';').filter(Boolean).map(roleId => ({ roleId, uniqueId: `${id}_${roleId}` })) : [],
+          subgroups: {},
+        },
+        draggable: true,
+      });
+    } else if (type === 'edge') {
+      const source = get(row, 'source');
+      const target = get(row, 'target');
+      if (!source || !target) continue;
+      edges.push({
+        id: get(row, 'id') || `e-${source}-${target}`,
+        source, target,
+        sourceHandle: get(row, 'sourceHandle') || undefined,
+        targetHandle: get(row, 'targetHandle') || undefined,
+      });
+    }
+  }
+  // 存在しないノードを参照するエッジは除外(不整合防止)
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const validEdges = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+  return { nodes, edges: validEdges };
 };
 
 // ============================================================
@@ -301,7 +444,7 @@ const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => (
           }} onClick={() => { onAdd(role); onClose(); }}>
             <Typography variant="body2" fontWeight="bold">{role.name}</Typography>
             {role.description && (
-              <Typography variant="caption" color="text.secondary">{role.description}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', display: 'block' }}>{role.description}</Typography>
             )}
           </Paper>
         ))}
@@ -436,10 +579,15 @@ const BlockCard = ({
           onClick={(e) => { e.stopPropagation(); onEditId(node.id); }}
         />
 
-        {/* ラベル/説明 */}
-        <Typography variant="caption" color="white" noWrap sx={{ flex: 1, opacity: 0.9 }}>
-          {node.data.description || (isSub ? `SubGroup Node` : `Group Node`)}
-        </Typography>
+        {/* ラベル/説明（改行を含む場合はツールチップで全文をプレビュー表示） */}
+        <Tooltip
+          title={node.data.description ? <Box sx={{ whiteSpace: 'pre-wrap' }}>{node.data.description}</Box> : ''}
+          disableHoverListener={!node.data.description || !node.data.description.includes('\n')}
+        >
+          <Typography variant="caption" color="white" noWrap sx={{ flex: 1, opacity: 0.9 }}>
+            {(node.data.description || (isSub ? `SubGroup Node` : `Group Node`)).replace(/\n/g, ' / ')}
+          </Typography>
+        </Tooltip>
 
         {/* roles カウント */}
         {roles.length > 0 && (
@@ -743,6 +891,31 @@ function ScenarioEventTransition() {
 
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
 
+  // ============================================================
+  // 保存バグ修正用の参照群
+  // ------------------------------------------------------------
+  // ・tabDataRef: setState は非同期なため、直後に保存処理を呼んでも
+  //   古い(更新前の)tabDataを参照してしまうことがあった(＝保存漏れ/
+  //   空データでの上書きの原因)。updateTabData内で同期的に書き込み、
+  //   常に最新の状態を保存処理から参照できるようにする。
+  // ・loadedTabsRef: タブ(main / subgroup-xxx)ごとに「サーバーからの
+  //   初回読み込みが完了したか」を保持する。読み込み完了前は保存を
+  //   一切行わない(＝空のJSONで上書きしてしまう問題を防ぐ)。
+  // ・savingRef / pendingSaveRef: 保存処理の排他制御。保存中に新しい
+  //   保存要求が来た場合はリクエストを重複発行せず、完了後に最新の
+  //   データで1回だけ保存し直す(取りこぼし防止)。
+  // ============================================================
+  const tabDataRef = useRef(tabData);
+  const activeTabRef = useRef(activeTab);
+  const eventIdRef = useRef(eventId);
+  const subIdRef = useRef(subId);
+  const loadedTabsRef = useRef({});
+  const savingRef = useRef(false);
+  const pendingSaveRef = useRef(null);
+
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+  useEffect(() => { eventIdRef.current = eventId; subIdRef.current = subId; }, [eventId, subId]);
+
   const currentTabData = tabData[activeTab] || { nodes: [], edges: [] };
   const isSub = activeTab.startsWith('subgroup-');
   const parentId = isSub ? activeTab.replace('subgroup-', '') : null;
@@ -774,6 +947,9 @@ function ScenarioEventTransition() {
     if (!eventId || !subId) { setIsLoading(false); return; }
     const ctrl = new AbortController();
     setIsLoading(true);
+    // 新しいeventId/subIdへの遷移時は、読み込み完了フラグを一旦リセットする
+    // （読み込みが完了するまでmainタブへの保存を禁止するため）。
+    loadedTabsRef.current.main = false;
     fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, { signal: ctrl.signal })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(result => {
@@ -781,11 +957,21 @@ function ScenarioEventTransition() {
         const edges = (result.edges || []).filter(e =>
           nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target)
         );
-        setTabData(prev => ({ ...prev, main: { nodes, edges } }));
+        const loaded = { main: { nodes, edges } };
+        tabDataRef.current = loaded;
+        setTabData(loaded);
+        // 読み込みが正常に完了した場合のみ保存を許可する
+        loadedTabsRef.current.main = true;
       })
-      .catch(e => { if (e.name !== 'AbortError') console.error('初期ロードエラー:', e); })
+      .catch(e => {
+        if (e.name !== 'AbortError') {
+          console.error('初期ロードエラー:', e);
+          showSnack('データの読み込みに失敗しました。保存はできません', 'error');
+        }
+      })
       .finally(() => setIsLoading(false));
     return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId, subId]);
 
   // ── ドラッグ&ドロップ並び替えイベント ──
@@ -807,15 +993,35 @@ function ScenarioEventTransition() {
     return () => window.removeEventListener('reorderNode', handler);
   }, [activeTab]);
 
-  // ── debounce保存 ──
-  const debouncedSave = useMemo(() => debounce((tabDataArg, activeTabArg, eventIdArg, subIdArg) => {
-    if (!tabDataArg[activeTabArg] || !eventIdArg || !subIdArg) return;
+  // ── 保存処理本体 ──
+  // 常に tabDataRef.current / eventIdRef.current / subIdRef.current という
+  // 「最新値」だけを参照する。呼び出し元から値を引数で受け取らないことで、
+  // クロージャの古い状態を保存してしまう問題を構造的に防ぐ。
+  const performSave = useCallback((tabId) => {
+    const eventIdCur = eventIdRef.current;
+    const subIdCur = subIdRef.current;
+    if (!tabId || !eventIdCur || !subIdCur) return;
+
+    // 1) 読み込み完了前は保存しない（空JSONでの上書き防止）
+    if (!loadedTabsRef.current[tabId]) return;
+
+    const cur = tabDataRef.current[tabId];
+    if (!cur) return;
+
+    // 2) 保存処理中に呼ばれた場合は多重発行せず、完了後に最新データで
+    //    もう一度だけ保存するようキューする（取りこぼし防止）
+    if (savingRef.current) {
+      pendingSaveRef.current = tabId;
+      return;
+    }
+
+    savingRef.current = true;
     setIsLoading(true);
-    const pid = activeTabArg.startsWith('subgroup-') ? activeTabArg.replace('subgroup-', '') : null;
-    const cur = tabDataArg[activeTabArg];
+
+    const pid = tabId.startsWith('subgroup-') ? tabId.replace('subgroup-', '') : null;
     const saveData = {
       nodes: cur.nodes.map(n => ({
-        id: n.id, type: n.type || (activeTabArg === 'main' ? 'customGroup' : 'subGroupNode'),
+        id: n.id, type: n.type || (tabId === 'main' ? 'customGroup' : 'subGroupNode'),
         position: n.position || { x: 0, y: 0 },
         data: { label: n.data.label, description: n.data.description || '', roles: n.data.roles || [], subgroups: n.data.subgroups || {}, isSubGroup: n.data.isSubGroup },
         draggable: true,
@@ -823,17 +1029,49 @@ function ScenarioEventTransition() {
       edges: cur.edges,
     };
     const url = pid
-      ? `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition/${pid}/subgroup`
-      : `/api/scenario-event/${eventIdArg}/sub/${subIdArg}/transition`;
+      ? `/api/scenario-event/${eventIdCur}/sub/${subIdCur}/transition/${pid}/subgroup`
+      : `/api/scenario-event/${eventIdCur}/sub/${subIdCur}/transition`;
+
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveData) })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
-      .catch(e => console.error('保存エラー:', e))
-      .finally(() => setIsLoading(false));
-  }, 600), []);
+      .catch(e => {
+        console.error('保存エラー:', e);
+        showSnack('保存に失敗しました。再度お試しください', 'error');
+      })
+      .finally(() => {
+        savingRef.current = false;
+        setIsLoading(false);
+        // 保存中に来た最新の保存要求があれば、ここで1回だけ実行する
+        if (pendingSaveRef.current) {
+          const nextTabId = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          performSave(nextTabId);
+        }
+      });
+  }, [showSnack]);
 
+  // 連続編集をまとめるためのdebounce（自動保存用）。
+  // 実際に呼び出す関数は毎回同じインスタンスを使い回し、常に
+  // activeTabRef.current（最新のタブ）で保存する。
+  const debouncedAutoSaveRef = useRef();
+  if (!debouncedAutoSaveRef.current) {
+    debouncedAutoSaveRef.current = debounce(() => {
+      performSave(activeTabRef.current);
+    }, 600);
+  }
+
+  // ノード編集などの操作後に呼ぶ自動保存（デバウンスされる）
+  const scheduleSave = useCallback(() => {
+    debouncedAutoSaveRef.current();
+  }, []);
+
+  // 「保存」ボタン用。デバウンスを待たず、保留中の自動保存があれば
+  // それを確定させたうえで即座に保存する。これにより「押しても反応が
+  // 無いように見える」状態を無くし、クリックすれば必ず保存が実行される。
   const saveCurrentTab = useCallback(() => {
-    debouncedSave(tabData, activeTab, eventId, subId);
-  }, [debouncedSave, tabData, activeTab, eventId, subId]);
+    debouncedAutoSaveRef.current.cancel();
+    performSave(activeTabRef.current);
+  }, [performSave]);
 
   // ── タブ切り替え ──
   const handleTabSwitch = useCallback((tabId, pid = null) => {
@@ -878,6 +1116,10 @@ function ScenarioEventTransition() {
   const updateTabData = (updater) => {
     setTabData(prev => {
       const updated = typeof updater === 'function' ? updater(prev) : updater;
+      // setState自体は非同期でも、参照(tabDataRef)はここで同期的に
+      // 最新化しておく。これにより直後にsaveCurrentTab()を呼んでも
+      // 更新前の古いデータで保存してしまうことがなくなる。
+      tabDataRef.current = updated;
       return updated;
     });
   };
@@ -888,7 +1130,7 @@ function ScenarioEventTransition() {
     const [moved] = newNodes.splice(from, 1);
     newNodes.splice(to, 0, moved);
     updateTabData(prev => ({ ...prev, [activeTab]: { ...prev[activeTab], nodes: newNodes } }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
   };
 
   const handleAddNode = () => {
@@ -913,7 +1155,7 @@ function ScenarioEventTransition() {
     }));
     setAddDialogOpen(false);
     setNewDescription('');
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack(`ノード ${newId} を追加`);
   };
 
@@ -928,7 +1170,7 @@ function ScenarioEventTransition() {
         }
       };
     });
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack(`ノード ${nodeId} を削除`);
   };
 
@@ -956,7 +1198,7 @@ function ScenarioEventTransition() {
       ...prev,
       [activeTab]: { ...prev[activeTab], nodes: [...prev[activeTab].nodes, newNode] }
     }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack(`ノード ${newId} としてペースト`);
   };
 
@@ -1005,7 +1247,7 @@ function ScenarioEventTransition() {
     });
 
     setEditDialogOpen(false);
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack('更新しました');
   };
 
@@ -1020,7 +1262,7 @@ function ScenarioEventTransition() {
         )
       }
     }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
   };
 
   const handleDeleteRole = (nodeId, uniqueId) => {
@@ -1035,7 +1277,7 @@ function ScenarioEventTransition() {
         )
       }
     }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
   };
 
   const handleSaveRole = (nodeId, uniqueId, formData) => {
@@ -1083,7 +1325,7 @@ function ScenarioEventTransition() {
       ...prev,
       [activeTab]: { ...prev[activeTab], edges: [...prev[activeTab].edges, edge] }
     }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
   };
 
   const handleRemoveEdge = (edge) => {
@@ -1094,7 +1336,7 @@ function ScenarioEventTransition() {
         edges: prev[activeTab].edges.filter(e => !(e.source === edge.source && e.target === edge.target))
       }
     }));
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack(`接続 ${edge.source}→${edge.target} を削除`);
   };
 
@@ -1132,7 +1374,7 @@ function ScenarioEventTransition() {
         }
       };
     });
-    setTimeout(saveCurrentTab, 0);
+    scheduleSave();
     showSnack(`ノード ${nodeId} → グループ ${targetGroupId} に移動 (新ID: ${newId})`);
   };
 
@@ -1262,6 +1504,43 @@ function ScenarioEventTransition() {
             {currentTabData.nodes.length} ノード / {currentTabData.edges.length} 接続
           </Typography>
 
+          <Tooltip title="現在のタブのノード・接続をCSVとしてダウンロードします">
+            <Button variant="outlined" size="small"
+              startIcon={<FileDownloadIcon />}
+              onClick={() => exportTabToCsv(currentTabData, activeTab)}
+              sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+              CSV出力
+            </Button>
+          </Tooltip>
+          <Tooltip title="CSVを読み込んで現在のタブへ反映します（内容は上書きされます）">
+            <Button variant="outlined" size="small" component="label"
+              startIcon={<FileUploadIcon />}
+              disabled={isLoading}
+              sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+              CSV入力
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+                onChange={async (e) => {
+                  const file = e.target.files && e.target.files[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  try {
+                    const text = await file.text();
+                    const parsed = parseCsvToTabData(text);
+                    updateTabData(prev => ({ ...prev, [activeTab]: parsed }));
+                    scheduleSave();
+                    showSnack(`CSVから ${parsed.nodes.length} ノード / ${parsed.edges.length} 接続を読み込みました`);
+                  } catch (err) {
+                    console.error('CSV読み込みエラー:', err);
+                    showSnack('CSVの読み込みに失敗しました: ' + err.message, 'error');
+                  }
+                }}
+              />
+            </Button>
+          </Tooltip>
+
           <Button variant="contained" size="small" color="success"
             startIcon={<SaveIcon />}
             onClick={saveCurrentTab}
@@ -1318,7 +1597,10 @@ function ScenarioEventTransition() {
             label="説明（任意）"
             value={newDescription}
             onChange={e => setNewDescription(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleAddNode(); }}
+            multiline
+            minRows={2}
+            maxRows={6}
+            helperText="改行して複数行入力できます"
           />
         </DialogContent>
         <DialogActions>
@@ -1349,7 +1631,10 @@ function ScenarioEventTransition() {
               label="説明"
               value={newDescription}
               onChange={e => setNewDescription(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleEditNode(); }}
+              multiline
+              minRows={2}
+              maxRows={6}
+              helperText="改行して複数行入力できます"
             />
           </Stack>
         </DialogContent>

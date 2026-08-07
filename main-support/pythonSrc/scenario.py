@@ -1,5 +1,6 @@
 from cmath import isfinite, isnan
 import io
+import re
 import struct
 import sys
 import os
@@ -50,6 +51,60 @@ def generate_scenario_folder(parent_path : str):
     if not os.path.exists(os.path.join(parent_path, SCENARIO_EVENT)):
         os.makedirs(os.path.join(parent_path, SCENARIO_EVENT))
 
+def compute_max_role_concurrency():
+    """全シナリオイベントの遷移図データを走査し、役職(Role名)ごとに
+    「1つのサブグループ内で同時に呼ばれる最大数」を求める。
+    ScenarioRoleFactoryのプール事前ウォームアップ(項目3)に使う。
+    戻り値: { role_name: max_concurrent_count, ... }
+    """
+    max_counts = {}
+    event_list_path = os.path.join(DATA_DIR, SCENARIO_EVENT, "scenario_event_list.json")
+    if not os.path.exists(event_list_path):
+        return max_counts
+
+    try:
+        with open(event_list_path, 'r', encoding='utf-8') as f:
+            events = json.load(f)
+    except Exception:
+        return max_counts
+
+    for event in events:
+        event_id = event.get('id')
+        if not event_id:
+            continue
+        event_path = os.path.join(DATA_DIR, SCENARIO_EVENT, event_id, f"{event_id}.json")
+        if not os.path.exists(event_path):
+            continue
+        try:
+            with open(event_path, 'r', encoding='utf-8') as f:
+                event_data = json.load(f)
+        except Exception:
+            continue
+
+        # main(親イベント直下)＋サブグループのそれぞれを「1アクション単位」として集計
+        groups_to_check = []
+        if 'nodes' in event_data:
+            groups_to_check.append(event_data.get('nodes', []))
+        for sub_data in event_data.get('subgroups', {}).values():
+            groups_to_check.append(sub_data.get('nodes', []))
+
+        for nodes in groups_to_check:
+            counts = {}
+            for node in nodes:
+                for role in (node.get('data', {}) or {}).get('roles', []) or []:
+                    role_name = role.get('name')
+                    if not role_name:
+                        continue
+                    counts[role_name] = counts.get(role_name, 0) + 1
+            for role_name, count in counts.items():
+                if count > max_counts.get(role_name, 0):
+                    max_counts[role_name] = count
+
+    return max_counts
+
+
+
+
 def generate_base_script_file(parent_path : str):
     if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "BaseScenearioRoleData.cs")):
         code_str = """
@@ -88,17 +143,28 @@ namespace GameCore.Scenario
 {
     public  class BaseOrigintScenarioRoleAction
     {
-        public bool IsCompleted { get; protected set; } = false;
-        public bool IsOneExecute { get; protected set; } = false;
-        public bool IsStartUp { get; protected set; } = false;
-        public bool IsRelease { get; protected set; } = false;
+        // ------------------------------------------------------------
+        // 各関数(Enter/OneUpdate/Update/Finish、同期・非同期それぞれ)に
+        // 紐づいたフラグ。デフォルトfalseで、本実装(具象クラス)側の
+        // 最初の自動生成でoverrideされた際、その処理が終わったところで
+        // trueにする(＝「この関数の処理が完了した」という意味)。
+        // 以前あったIsCompleted/IsOneExecute/IsStartUp/IsReleaseは廃止し、
+        // 制御はすべてこの8個のフラグに一本化した。
+        // ------------------------------------------------------------
+        public bool IsEnter { get; protected set; } = false;
+        public bool IsEnterAsync { get; protected set; } = false;
+        public bool IsOneUpdate { get; protected set; } = false;
+        public bool IsOneUpdateAsync { get; protected set; } = false;
+        public bool IsUpdate { get; protected set; } = false;
+        public bool IsUpdateAsync { get; protected set; } = false;
+        public bool IsFinish { get; protected set; } = false;
+        public bool IsFinishAsync { get; protected set; } = false;
         public virtual void ReadBinary(BinaryReader reader)
         {
             
         }
         public virtual void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
-            IsCompleted = false;
         }
         public virtual void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
@@ -115,7 +181,6 @@ namespace GameCore.Scenario
         
         public virtual async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
-            IsCompleted = false;
             await UniTask.CompletedTask;
         }
         public virtual async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
@@ -132,9 +197,38 @@ namespace GameCore.Scenario
         {
             await UniTask.CompletedTask;
         }
+
+        // ------------------------------------------------------------
+        // RoleActionの再利用対応(項目3)。プールに戻す前に呼ばれ、
+        // 使い回すインスタンスの状態を初期状態(全フェーズ未完了)に戻す。
+        // 実装クラス側はoverrideし、base.Reset()を呼んだうえで
+        // 自身の内部状態の初期化コードを追加する。
+        // ------------------------------------------------------------
+        public virtual void Reset()
+        {
+            IsEnter = false;
+            IsEnterAsync = false;
+            IsOneUpdate = false;
+            IsOneUpdateAsync = false;
+            IsUpdate = false;
+            IsUpdateAsync = false;
+            IsFinish = false;
+            IsFinishAsync = false;
+        }
+        public virtual async UniTask ResetAsync()
+        {
+            IsEnter = false;
+            IsEnterAsync = false;
+            IsOneUpdate = false;
+            IsOneUpdateAsync = false;
+            IsUpdate = false;
+            IsUpdateAsync = false;
+            IsFinish = false;
+            IsFinishAsync = false;
+            await UniTask.CompletedTask;
+        }
     }
 }
-
 
 
 """
@@ -275,30 +369,118 @@ namespace GameCore.Scenario {
             f.write(enum_content)
             
      
-    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioRoleFactory.cs")):       
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_ROLE, "ScenarioRoleFactory.cs")):
+        # シナリオデータを解析し、役職ごとに「1アクション(1サブグループ)内で
+        # 同時に呼ばれる最大数」を求めてプールを事前に用意しておく。
+        role_max_concurrency = compute_max_role_concurrency()
+        warmup_lines = []
+        for role_name, max_count in sorted(role_max_concurrency.items()):
+            if max_count <= 0:
+                continue
+            
+            warmup_lines.append(f"                new {role_name}ID");
+            warmup_lines.append(f"");
+
         # Generate ScenarioRoleFactory class
-        factory_content = """
+        factory_content = f"""
 using System;
-namespace GameCore.Scenario {
-    public static class ScenarioRoleFactory {
-        public static BaseScenarioRoleData CreateRoleData(ScenarioRoleID id) {
-            switch (id) {
+using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
 
+namespace GameCore.Scenario {{
+    public static class ScenarioRoleFactory {{
+        public static BaseScenarioRoleData CreateRoleData(ScenarioRoleID id) {{
+            switch (id) {{
                 default:
                     return null;
-            }
-        }
+            }}
+        }}
 
-        public static BaseOrigintScenarioRoleAction CreateRoleAction(BaseScenarioRoleData data) {
+        private static BaseOrigintScenarioRoleAction CreateNewRoleAction(BaseScenarioRoleData data) {{
+            switch (data.RoleID) {{
+                default:
+                    return null;
+            }}
+        }}
+
+        // 役職ごとのプール構造：
+        // freePool: 未使用インスタンスを O(1) で出し入れする Stack
+        // activeSet: 解放時に正しいアクションか確認、あるいは線形探索を避けるための管理
+        private class RolePool {{
+            public readonly Stack<BaseOrigintScenarioRoleAction> FreeStack = new Stack<BaseOrigintScenarioRoleAction>();
+            // どのアクションが使われているかをO(1)で判定・管理したい場合のセット
+            public readonly HashSet<BaseOrigintScenarioRoleAction> ActiveSet = new HashSet<BaseOrigintScenarioRoleAction>();
+        }}
+
+        private static readonly Dictionary<ScenarioRoleID, RolePool> actionPool
+            = new Dictionary<ScenarioRoleID, RolePool>();
+
+        private static RolePool GetOrCreatePool(ScenarioRoleID id) {{
+            if (!actionPool.TryGetValue(id, out var pool)) {{
+                pool = new RolePool();
+                actionPool[id] = pool;
+            }}
+            return pool;
+        }}
+
+        public static void WarmUpPool(BaseScenarioRoleData data,int count) {{
+            var pool = GetOrCreatePool(data.RoleID);
+            int currentTotal = pool.FreeStack.Count + pool.ActiveSet.Count;
+            int needed = count - currentTotal;
+            
+            for (int i = 0; i < needed; i++) {{
+                var newAction = CreateNewRoleAction(data);
+                if (newAction != null) {{
+                    pool.FreeStack.Push(newAction);
+                }}
+            }}
+        }}
+
+        public static async UniTask<BaseOrigintScenarioRoleAction> CreateRoleActionAsync(BaseScenarioRoleData data, CancellationToken ct = default) {{
             if (data == null) return null;
-            switch (data.RoleID) {
+            var pool = GetOrCreatePool(data.RoleID);
 
-                default:
-                    return null;
-            }
-        }
-    }
-}
+            BaseOrigintScenarioRoleAction action;
+
+            if (pool.FreeStack.Count > 0) {{
+                action = pool.FreeStack.Pop();
+            }} else {{
+                action = CreateNewRoleAction(data);
+                if (action == null) return null;
+            }}
+
+            action.Reset();
+
+            try {{
+                // キャンセルトークンを紐付けて非同期リセットを実行
+                await action.ResetAsync().WithCancellation(ct);
+            }} catch (System.OperationCanceledException) {{
+                // 万が一キャンセルされた場合は、プールからポップしたアクションを再度スタックに戻すか、
+                // もし新規生成したものであれば破棄・未使用に戻すなどの配慮が必要です
+                pool.FreeStack.Push(action);
+                throw;
+            }}
+
+            pool.ActiveSet.Add(action);
+            return action;
+        }}
+
+        public static void ReleaseRoleAction(ScenarioRoleID id, BaseOrigintScenarioRoleAction action) {{
+            if (action == null) return;
+            if (!actionPool.TryGetValue(id, out var pool)) return;
+
+            // O(1) でアクティブセットから外し、未使用スタックに戻す
+            if (pool.ActiveSet.Remove(action)) {{
+                pool.FreeStack.Push(action);
+            }}
+        }}
+
+        public static void AllClear() {{
+            actionPool.Clear();
+        }}
+    }}
+}}
+
 """
         with open(os.path.join(parent_path, SCENARIO_ROLE, "ScenarioRoleFactory.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
@@ -312,6 +494,7 @@ namespace GameCore.Scenario {
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioMasterExecuteAction.cs")):
         # Generate ScenarioMasterExecuteAction class
         factory_content = """
+
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
@@ -378,7 +561,7 @@ public class ScenarioMasterExecuteAction
         await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 
-    public async UniTask OnFinalizeAsync(CancellationTokenSource ct)
+    public async UniTask OnFinalizeAsync(bool is_event_change,bool is_event_group_change,bool is_event_sub_group_change,CancellationTokenSource ct)
     {
         if (IsMaxReached()) return;
 
@@ -387,24 +570,27 @@ public class ScenarioMasterExecuteAction
         var tasks = subFind.Select(action => action.OnFinalizeAsync(executeData, ct)).ToArray();
         await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
 
-        executeSubGroupID++;
-        var currentGroup = scenarioActionList.Find(data => data.GroupID == executeGroupID);
-        if (currentGroup != null)
+        if(!is_event_change || !is_event_group_change || !is_event_sub_group_change)
         {
-            var subGroupCount = currentGroup.FindSubGroupActionList(executeSubGroupID);
-            if (subGroupCount == null || !subGroupCount.Any())
+            executeSubGroupID++;
+            var currentGroup = scenarioActionList.Find(data => data.GroupID == executeGroupID);
+            if (currentGroup != null)
             {
-                executeGroupID++;
-                executeSubGroupID = 1;
-                if(executeGroupID >= scenarioActionList.Count)
+                var subGroupCount = currentGroup.FindSubGroupActionList(executeSubGroupID);
+                if (subGroupCount == null || !subGroupCount.Any())
                 {
-                    IsExecuteFinish = true;
+                    executeGroupID++;
+                    executeSubGroupID = 1;
+                    if(executeGroupID >= scenarioActionList.Count)
+                    {
+                        IsExecuteFinish = true;
+                    }
                 }
             }
-        }
-        else
-        {
-            IsExecuteFinish = true;
+            else
+            {
+                IsExecuteFinish = true;
+            }
         }
     }
     
@@ -412,8 +598,10 @@ public class ScenarioMasterExecuteAction
     {
         executeGroupID = executeSubGroupID = 1;
         scenarioActionList.Clear();
+        ScenarioRoleFactory.AllClear();
     }
 }
+
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioMasterExecuteAction.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
@@ -425,6 +613,7 @@ public class ScenarioMasterExecuteAction
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 
 public class ScenarioGroupExecuteAction
@@ -479,6 +668,7 @@ public class ScenarioGroupExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioExecuteAction.cs")):
         # Generate ScenarioExecuteAction class
         factory_content = """
+
 using Cysharp.Threading.Tasks;
 using GameCore.Scenario;
 using System.IO;
@@ -491,21 +681,35 @@ public class ScenarioExecuteAction
     private BaseOrigintScenarioRoleAction action;
 
 
-    public bool IsStartUp => action != null && action.IsStartUp;
-    public bool IsRelease => action != null && action.IsRelease;
-    public bool IsCompleted => action != null && action.IsCompleted && action.IsStartUp;
-    public bool IsOneCompleted => action != null && action.IsOneExecute && action.IsStartUp;
+    // 旧IsStartUp/IsCompleted/IsOneExecute/IsReleaseは廃止。
+    // 同期・非同期それぞれ専用のフラグ(両方trueで「そのフェーズ完了」)から算出する。
+    public bool IsStartUp => action != null && action.IsEnter && action.IsEnterAsync;
+    public bool IsRelease => action != null && action.IsFinish && action.IsFinishAsync;
+    public bool IsCompleted => action != null && action.IsUpdate && action.IsUpdateAsync;
+    public bool IsOneCompleted => action != null && action.IsOneUpdate && action.IsOneUpdateAsync;
 
     public void SetUp(ScenarioRoleID id, BinaryReader reader)
     {
         roleData = ScenarioRoleFactory.CreateRoleData(id);
         roleData.ReadBinary(reader);
-        action = ScenarioRoleFactory.CreateRoleAction(roleData);
     }
+
+    // 使い終わったRoleActionをプールへ返却する(項目3: 再利用)。
+    // 自動では呼ばれないため、シナリオ完了時など呼び出し側で明示的に呼ぶ。
+    public void Release()
+    {
+        if (action == null || roleData == null) return;
+        ScenarioRoleFactory.ReleaseRoleAction(roleData.RoleID, action);
+        action = null;
+    }
+
+
+    
 
 
     public async UniTask OnInitializeAsync(ScenarioExecuteData executeData,CancellationTokenSource ct)
     {
+        action = await ScenarioRoleFactory.CreateRoleActionAsync(roleData, cts.Token);
         if (IsStartUp)
         {
             await UniTask.Yield(ct.Token);
@@ -513,7 +717,7 @@ public class ScenarioExecuteAction
         }
         await action.OnInitializeAsync(executeData,ct);
         action.OnInitialize(executeData, ct);
-        await UniTask.Yield(ct.Token);
+        
     }
 
 
@@ -526,7 +730,7 @@ public class ScenarioExecuteAction
         }
         await action.OnOneExecuteAsync(executeData,ct);
         action.OnOneExecute(executeData, ct);
-        await UniTask.Yield(ct.Token);
+        
     }
 
 
@@ -539,7 +743,6 @@ public class ScenarioExecuteAction
         }
         await action.OnExecuteAsync(executeData,ct);
         action.OnExecute(executeData, ct);
-        await UniTask.Yield(ct.Token);
     }
 
     public async UniTask OnFinalizeAsync(ScenarioExecuteData executeData,CancellationTokenSource ct)
@@ -551,9 +754,11 @@ public class ScenarioExecuteAction
         }
         await action.OnFinalizeAsync(executeData,ct);
         action.OnFinalize(executeData, ct);
-        await UniTask.Yield(ct.Token);
+        Release();
+        
     }
 }
+
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioExecuteAction.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
@@ -562,6 +767,7 @@ public class ScenarioExecuteAction
     if not os.path.exists(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioSubGroupExecuteAction.cs")):
         # Generate ScenarioSubGroupExecuteAction class
         factory_content = """
+
 using Cysharp.Threading.Tasks;
 using GameCore.Scenario;
 using System.Collections.Generic;
@@ -608,7 +814,7 @@ public class ScenarioSubGroupExecuteAction
                 .Select(action => action.OnExecuteAsync(executeData,ct))
                 .ToArray();
             await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
-            await UniTask.Yield(ct.Token);
+            await UniTask.Yield(PlayerLoopTiming.Update,ct.Token);
         }
     }
 
@@ -618,6 +824,7 @@ public class ScenarioSubGroupExecuteAction
         await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
     }
 }
+
 """
         with open(os.path.join(parent_path, SCENARIO_DATA, "script", "ScenarioSubGroupExecuteAction.cs"), 'w', encoding='utf-8') as f:
             f.write(factory_content)
@@ -934,6 +1141,7 @@ public class ScenarioExecuteData
     
     if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioManagerCore.cs")):
         code_str = """
+
 using Cysharp.Threading.Tasks;
 using GameCore;
 using GameCore.Scenario;
@@ -955,6 +1163,8 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
     private string event_play_name = "";
     private string event_sub_name = "";
     private bool is_event_change = false;
+    private bool is_event_group_change = false;
+    private bool is_event_sub_group_change = false;
 
     public override void AwakeSingleton()
     {
@@ -965,9 +1175,17 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         }, addressable: SupportFiles.ADDRESSABLE_CHECK).Forget();
     }
 
-    public void SetExecuteGroupID(int value) => master?.SetExecuteGroupID(value);
-    public void SetExecuteSubGroupID(int value) => master?.SetExecuteSubGroupID(value);
-
+    public void SetExecuteGroupID(int value)
+    {
+        master?.SetExecuteGroupID(value);
+        master?.SetExecuteSubGroupID(1);
+        is_event_group_change = true;
+    }
+    public void SetExecuteSubGroupID(int value)
+    {
+        master?.SetExecuteSubGroupID(value);
+        is_event_sub_group_change = true;
+    }
     public void SetEventName(string value_event_name, string value_event_sub_name)
     {
         event_play_name = value_event_name;
@@ -1006,14 +1224,20 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
 
         event_play_name = eventName;
         event_sub_name = eventSubName;
-        is_event_change = true;
+        is_event_change = is_event_group_change = is_event_sub_group_change = false;
+
+
+        while(IsHeaderLoad == false)
+        {
+            await UniTask.Yield(cts.Token);
+        }
 
         try
         {
-            while (!master.IsExecuteFinish && !linkedCts.IsCancellationRequested && is_event_change)
+            while ((!master.IsExecuteFinish || (is_event_change || is_event_group_change)) && !linkedCts.IsCancellationRequested)
             {
                 master.AllRelease();
-                is_event_change = false;
+                is_event_change = is_event_group_change = is_event_sub_group_change = false;
 
                 var seekPos = ScenarioEventBinaryHeader.GetEventSeekPos(event_play_name, event_sub_name);
 
@@ -1038,7 +1262,7 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         {
             action?.Invoke(master.ExecuteData);
             master.AllRelease();
-            is_event_change = false;
+            is_event_change = is_event_group_change = is_event_sub_group_change = false;
             await UniTask.Yield(PlayerLoopTiming.Update, linkedCts.Token);
         }
     }
@@ -1094,12 +1318,17 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         {
             await master.OnInitializeAsync(token);   // CancellationToken対応を推奨
             await master.OnExecuteAsync(token);
-            await master.OnFinalizeAsync(token);
+            await master.OnFinalizeAsync(is_event_change,is_event_group_change,is_event_sub_group_change,token);
+
+            if(is_event_change || is_event_group_change) break;
 
             await UniTask.Yield(PlayerLoopTiming.Update, token.Token);
         }
     }
 }
+
+
+        
 
 
         """
@@ -1752,10 +1981,12 @@ def class_id_generate():
             return
 
         # ScenarioEvent.jsonのデータ構造を初期化
+        # 以前はeventID/subIDにそれぞれ生の名前を入れていたが、
+        # Scenario_{親}_{サブ}(class_data_id側のScenarioタグ配下エントリ)と
+        # 紐付く形の単一カラムに変更した(項目6)。
         add_data = {
             "columns": [
-                {"name": "eventID", "type": "string"},
-                {"name": "subID", "type": "string"}
+                {"name": "scenario", "type": "string"},
             ],
             "rows": []
         }
@@ -1767,13 +1998,13 @@ def class_id_generate():
                 print(f"警告: {item.get('name', '不明')} にsubEventsがありません。スキップします。")
                 continue
             for details in item["subEvents"]:
+                scenario_value = f"Scenario_{item.get('name', '')}_{details.get('name', '')}"
                 add_id_data = {
                     "id": count,
                     "enum_property": f"{item.get('name', '')}_{details.get('name', '')}",
                     "description": f"{item.get('description', '')}_{details.get('name', '')}",
                     "data": {
-                        "eventID": {"value": str(item.get("id", "")), "type": "string"},
-                        "subID": {"value": str(details.get("name", "")), "type": "string"}
+                        "scenario": {"value": scenario_value, "type": "string"},
                     }
                 }
                 add_data["rows"].append(add_id_data)
@@ -1784,6 +2015,11 @@ def class_id_generate():
         with open(scenario_event_path, "w", encoding="utf-8") as fw:
             json.dump(add_data, fw, ensure_ascii=False, indent=2)
         print(f"{scenario_event_path} にデータを保存しました。")
+
+        # 項目7・11: Scenario_{親}() 開始関数・ScenarioExecuteUpdateオーバーロードは
+        # class_data_id.py 側の sync_scenario_parent_enum_files() で
+        # Scenario_{親}ID enum(assets.py方式)を使って正式に生成される
+        # (app.pyのイベント追加・削除・リネーム時に自動で呼ばれる)。
 
     except Exception as e:
         print(f"予期しないエラーが発生しました: {e}")
