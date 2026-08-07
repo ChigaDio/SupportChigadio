@@ -136,6 +136,10 @@ namespace GameCore.Scenario
 
 
 
+
+
+
+
 using System;
 using System.Collections;
 using UnityEngine;
@@ -168,36 +172,44 @@ namespace GameCore.Scenario
         }
         public virtual void OnInitialize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
+            IsEnter = true;
         }
         public virtual void OnOneExecute(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement action logic here
+            IsOneUpdate = true;
         }
         public virtual void OnExecute(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement action logic here
+            IsUpdate = true;
         }
         public virtual void OnFinalize(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
             // Implement cleanup logic here
+            IsFinish = true;
         }
         
         public virtual async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
+            IsEnterAsync = true;
             await UniTask.CompletedTask;
         }
         public virtual async UniTask OnOneExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
+            IsOneUpdateAsync = true;
             // Implement action logic here
             await UniTask.CompletedTask;
         }
         public virtual async UniTask OnExecuteAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
+            IsOneUpdateAsync = true;
             // Implement action logic here
             await UniTask.CompletedTask;
         }
         public virtual async UniTask OnFinalizeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
         {
+            IsFinishAsync = true;
             await UniTask.CompletedTask;
         }
 
@@ -232,6 +244,9 @@ namespace GameCore.Scenario
         }
     }
 }
+
+
+
 
 
 """
@@ -388,6 +403,7 @@ namespace GameCore.Scenario {
         factory_content = f"""
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 
 namespace GameCore.Scenario {{
@@ -456,7 +472,7 @@ namespace GameCore.Scenario {{
 
             try {{
                 // キャンセルトークンを紐付けて非同期リセットを実行
-                await action.ResetAsync().WithCancellation(ct);
+                await action.ResetAsync().AttachExternalCancellation(ct);
             }} catch (System.OperationCanceledException) {{
                 // 万が一キャンセルされた場合は、プールからポップしたアクションを再度スタックに戻すか、
                 // もし新規生成したものであれば破棄・未使用に戻すなどの配慮が必要です
@@ -712,7 +728,7 @@ public class ScenarioExecuteAction
 
     public async UniTask OnInitializeAsync(ScenarioExecuteData executeData,CancellationTokenSource ct)
     {
-        action = await ScenarioRoleFactory.CreateRoleActionAsync(roleData, cts.Token);
+        action = await ScenarioRoleFactory.CreateRoleActionAsync(roleData, ct.Token);
         if (IsStartUp)
         {
             await UniTask.Yield(ct.Token);
@@ -1780,7 +1796,9 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
     offsets = {}
     event_offset_positions = []
     
-    # 2. Event headers
+ # 2. Event + SubEvent headers（C#側がSeekせず直列に読むため、subEvent情報もheaderにインラインで書く）
+    sub_offset_positions_by_event = {}  # event_id -> [(sub_id, pos_in_header), ...]
+
     for event in events:
         event_id = event.get('id', '')
         id_encoded = event_id.encode('utf-8')
@@ -1790,11 +1808,29 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
         header.extend(struct.pack('i', len(name_encoded)))
         header.extend(name_encoded)
         offset_pos = len(header)
-        header.extend(struct.pack('q', 0))
+        header.extend(struct.pack('q', 0))  # event offset placeholder
         event_offset_positions.append((event_id, offset_pos))
         logger.debug(f"Event header: ID={event_id}, Name={event.get('name', '')}, OffsetPos={offset_pos}")
-    
-    # 3. Load role schemas (name/type だけでなく arraySize・options も保持する)
+
+        subEvents = event.get('subEvents', [])
+        header.extend(struct.pack('i', len(subEvents)))  # SubEvent count
+        logger.debug(f"Writing subEvent count for {event_id}: {len(subEvents)}")
+
+        sub_positions = []
+        for sub_data in subEvents:
+            sub_id = str(sub_data.get('subId', 0))
+            sub_name_encoded = sub_data.get('name', '').encode('utf-8')
+            header.extend(struct.pack('i', int(sub_id)))
+            header.extend(struct.pack('i', len(sub_name_encoded)))
+            header.extend(sub_name_encoded)
+            sub_offset_pos = len(header)
+            header.extend(struct.pack('q', 0))  # subEvent offset placeholder
+            sub_positions.append((sub_id, sub_offset_pos))
+            logger.debug(f"SubEvent header: ID={sub_id}, Name={sub_data.get('name', '')}, OffsetPos={sub_offset_pos}")
+
+        sub_offset_positions_by_event[event_id] = sub_positions
+
+    # 3. Load role schemas（変更なし。以下は元のコードのまま）
     role_schemas = {
         'TalkText': [
             {'name': 'text', 'type': 'string', 'arraySize': 0, 'options': {}},
@@ -1828,44 +1864,25 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
             field = fields[field_idx]
             schema_field = schema_fields[field_idx]
             field_type = schema_field['type']
-            # arraySizeは実データ側(fieldの編集結果)を優先し、無ければスキーマ側にフォールバックする
             array_size = field.get('arraySize', schema_field.get('arraySize', 0))
             options = field.get('options', schema_field.get('options', {}))
             write_field_value(sub_section, field.get('value', ''), field_type, array_size, options, type_info)
 
-    # 4. Data section generation
+    # 4. Data section generation（役割/グループ実データのみ。ランタイムのSeek対象。headerには含めない）
+    sub_offsets = {}  # (event_id, sub_id) -> absolute offset
+
     for event in events:
         event_id = event.get('id', '')
         event_offset = len(header) + len(data_sections)
         offsets[event_id] = event_offset
         logger.debug(f"Event {event_id} data at offset: {event_offset}")
 
-        section = bytearray()
         subEvents = event.get('subEvents', [])
-        section.extend(struct.pack('i', len(subEvents)))  # SubEvent count
-        logger.debug(f"Writing subEvent count for {event_id}: {len(subEvents)}")
-
-        sub_offsets = {}
-        sub_offset_positions = []
-
-        # 4.1 SubEvent placeholders
         for sub_data in subEvents:
             sub_id = str(sub_data.get('subId', 0))
-            name_encoded = sub_data.get('name', '').encode('utf-8')
-            section.extend(struct.pack('i', int(sub_id)))
-            section.extend(struct.pack('i', len(name_encoded)))
-            section.extend(name_encoded)
-            pos_in_section = len(section)
-            section.extend(struct.pack('q', 0))
-            sub_offset_positions.append((sub_id, pos_in_section))
-            logger.debug(f"SubEvent header: ID={sub_id}, Name={sub_data.get('name', '')}, OffsetPos={pos_in_section}")
-
-        # 4.2 SubEvent data
-        for sub_data in subEvents:
-            sub_id = str(sub_data.get('subId', 0))
-            sub_offset = len(header) + len(data_sections) + len(section)
-            sub_offsets[sub_id] = sub_offset
-            logger.debug(f"SubEvent {sub_id} data at offset: {sub_offset}")
+            sub_offset = len(header) + len(data_sections)
+            sub_offsets[(event_id, sub_id)] = sub_offset
+            logger.debug(f"SubEvent {event_id}/{sub_id} data at offset: {sub_offset}")
 
             sub_section = bytearray()
             subgroups = event.get('subgroups', {}).get(sub_id, {})
@@ -1894,7 +1911,6 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                         sub_section.extend(struct.pack('i', role_id))
                         logger.debug(f"Role ID: {role_id}")
                         schema_fields = role_schemas.get(role.get('name', ''), [])
-                        # arraySize(-1=可変長リスト等)を含め、inner_rolesと同じロジックで書き込む
                         write_role_fields(sub_section, role, schema_fields)
 
                 for inner_sub_id, inner_sub in inner_subgroups.items():
@@ -1913,17 +1929,20 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                             inner_schema_fields = role_schemas.get(inner_role.get('name', ''), [])
                             write_role_fields(sub_section, inner_role, inner_schema_fields)
 
-            section.extend(sub_section)
+            data_sections.extend(sub_section)
 
-        for sub_id, pos_in_section in sub_offset_positions:
-            logger.debug(f"Patching SubEvent {sub_id} offset: {sub_offsets[sub_id]} at position {pos_in_section}")
-            section[pos_in_section:pos_in_section+8] = struct.pack('q', sub_offsets[sub_id])
-
-        data_sections.extend(section)
-    
+    # Event offset のパッチ
     for event_id, pos in event_offset_positions:
         logger.debug(f"Patching Event {event_id} offset: {offsets[event_id]} at position {pos}")
         header[pos:pos+8] = struct.pack('q', offsets[event_id])
+
+    # SubEvent offset のパッチ（headerに直接パッチする点に注意）
+    for event in events:
+        event_id = event.get('id', '')
+        for sub_id, pos_in_header in sub_offset_positions_by_event[event_id]:
+            offset_value = sub_offsets[(event_id, sub_id)]
+            logger.debug(f"Patching SubEvent {event_id}/{sub_id} offset: {offset_value} at position {pos_in_header}")
+            header[pos_in_header:pos_in_header+8] = struct.pack('q', offset_value)
     
     try:
         with open(all_bin_path, 'wb') as f:

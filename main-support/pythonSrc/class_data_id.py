@@ -269,11 +269,11 @@ def generate_class_data_id_cs_core(name, columns, rows):
                     var_name = col['name']
                     if is_arr_type:
                         ref_lines.append(
-                            f"            foreach (var v in {var_name}) {{ if (v != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int)v)); }}"
+                            f"            foreach (var v in {var_name}) {{ if (v != {base_type}TableID.None) refs.Add((GameCore.Enums.TableID.{base_type}, (int)v)); }}"
                         )
                     else:
                         ref_lines.append(
-                            f"            if ({var_name} != {base_type}TableID.None) refs.Add((TableID.{base_type}, (int){var_name}));"
+                            f"            if ({var_name} != {base_type}TableID.None) refs.Add((GameCore.Enums.TableID.{base_type}, (int){var_name}));"
                         )
 
             # --- Read Method ---
@@ -1391,15 +1391,15 @@ def generate_tags_load_script():
             add()
 
             # 同期アンロード(新規)
-            add(f"public static void Unload{suffix}(Action action = null)")
-            add("{")
-            indent += 1
-            for item_name in item_names:
-                add(f"ClassDataIDCore.Instance.UnloadClassData(GameCore.Enums.TableID.{item_name});")
-            add("action?.Invoke();")
-            indent -= 1
-            add("}")
-            add()
+            #add(f"public static void Unload{suffix}(Action action = null)")
+            #add("{")
+            #indent += 1
+            #for item_name in item_names:
+            #    add(f"ClassDataIDCore.Instance.UnloadClassData(GameCore.Enums.TableID.{item_name});")
+            #add("action?.Invoke();")
+            #indent -= 1
+            #add("}")
+            #add()
 
             return lines
 

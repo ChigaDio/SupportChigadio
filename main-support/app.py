@@ -1169,7 +1169,11 @@ namespace GameCore.Scenario {
         f.write(enum_content)
 
     # Generate ScenarioRoleFactory class
-    factory_content = """using System;
+    factory_content = """
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 
 namespace GameCore.Scenario {
     public static class ScenarioRoleFactory {
@@ -1248,7 +1252,7 @@ namespace GameCore.Scenario {
 
             try {
                 // キャンセルトークンを紐付けて非同期リセットを実行
-                await action.ResetAsync().WithCancellation(ct);
+                await action.ResetAsync().AttachExternalCancellation(ct);
             } catch (System.OperationCanceledException) {
                 // 万が一キャンセルされた場合は、プールからポップしたアクションを再度スタックに戻すか、
                 // もし新規生成したものであれば破棄・未使用に戻すなどの配慮が必要です
