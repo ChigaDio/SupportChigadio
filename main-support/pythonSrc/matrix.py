@@ -1779,10 +1779,7 @@ def generate_base(data_dir):
                 if (cell == null || idHeader == null || idReader == null) return;
                 foreach (var reference in cell.GetReferencedIds())
                 {
-                    if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
-                    {
-                        loader(reference.RefId, idHeader, idReader, true, false, visited);
-                    }
+                    ClassDataReferenceDispatcher.Load(reference.TableId, reference.RefId, idHeader, idReader, true, false, visited);
                 }
             }
 
