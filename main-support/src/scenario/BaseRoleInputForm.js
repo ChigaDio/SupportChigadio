@@ -398,7 +398,21 @@ function DictionaryScalarEditor({ type, value, options, onChange, enumValues, cl
   if (['float', 'double', 'decimal'].includes(lower)) {
     return <NumericInput label="" value={value ?? 0} onChange={onChange} isFloat sx={{ width: 100 }} />;
   }
-  if (lower === 'string' || lower === 'char') {
+  if (lower === 'string') {
+    // 改行を含む文字列を入力できるようにmultiline化(仕様書項目4: 以前はEnterで改行されなかった)
+    return (
+      <TextField
+        size="small"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        multiline
+        minRows={1}
+        maxRows={8}
+        sx={{ minWidth: 160 }}
+      />
+    );
+  }
+  if (lower === 'char') {
     return <TextField size="small" value={value ?? ''} onChange={(e) => onChange(e.target.value)} sx={{ minWidth: 160 }} />;
   }
   if (VECTOR_AXIS_LABELS[lower]) {
@@ -881,8 +895,24 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
 
       const typeLower = field.type.toLowerCase();
 
-      // String / Char
-      if (typeLower === 'string' || typeLower === 'char') {
+      // String
+      if (typeLower === 'string') {
+        return (
+          <TextField
+            key={key}
+            label={field.label || field.name}
+            value={value ?? ''}
+            onChange={e => onValueChange(e.target.value)}
+            fullWidth
+            size="small"
+            multiline
+            minRows={1}
+            maxRows={8}
+          />
+        );
+      }
+      // Char (1文字想定のため単一行のまま)
+      if (typeLower === 'char') {
         return (
           <TextField
             key={key}

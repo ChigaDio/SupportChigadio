@@ -421,6 +421,14 @@ namespace GameCore.Scenario {{
                     return null;
             }}
         }}
+        
+        public static void SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {{
+            if (data == null) return;
+            switch (data.RoleID) {{
+                default:
+                    return;
+            }}
+        }}
 
         // 役職ごとのプール構造：
         // freePool: 未使用インスタンスを O(1) で出し入れする Stack
@@ -463,6 +471,7 @@ namespace GameCore.Scenario {{
 
             if (pool.FreeStack.Count > 0) {{
                 action = pool.FreeStack.Pop();
+                SetData(action,data);
             }} else {{
                 action = CreateNewRoleAction(data);
                 if (action == null) return null;
@@ -1524,6 +1533,219 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
     return schema
 
 
+# ============================================================
+# 仕様書項目5(追記分): scenario_role / scenario_transaction 側のプリフィル同期。
+# class_data_id.py・matrix.pyと同じ規約(options.prefillSourceName / keyType+prefillKeys)を
+# ロールのフィールドデータ(イベントJSON内 node.data.roles[].data)に対して適用する。
+# ============================================================
+def _default_value_for_prefill_sync_scenario(field_type):
+    t = (field_type or '').replace('[]', '')
+    if t in ('int', 'uint'):
+        return 0
+    if t in ('float', 'double'):
+        return 0.0
+    if t == 'bool':
+        return False
+    if t == 'string':
+        return ''
+    return None
+
+
+def _resolve_prefill_members(source_name):
+    """source_name(Enum名 or ClassDataIDテーブル名)の現在のメンバー名一覧を、対応するJSONから直接解決する。
+    fix_all_events()からの安全網呼び出し用(呼び出し元がcurrent_membersを持っていない場合に使う)。"""
+    # Enumとして探す
+    enum_path = os.path.join(DATA_DIR, 'enum', source_name, f"{source_name}.json")
+    if os.path.exists(enum_path):
+        try:
+            with open(enum_path, 'r', encoding='utf-8') as f:
+                items = json.load(f)
+            return [item.get('property') for item in items if isinstance(item, dict) and item.get('property')]
+        except Exception:
+            pass
+    # ClassDataIDテーブルとして探す
+    class_id_path = os.path.join(DATA_DIR, CLASS_DATA_ID, source_name.replace("ID", ""), f"{source_name}.json")
+    if os.path.exists(class_id_path):
+        try:
+            with open(class_id_path, 'r', encoding='utf-8') as f:
+                table_data = json.load(f)
+            return [r.get('enum_property') for r in table_data.get('rows', []) if r.get('enum_property')]
+        except Exception:
+            pass
+    return None  # 解決できない場合は同期しない(誤って空扱いで消さないため)
+
+
+def _load_role_field_meta():
+    """role名 -> {field_name: {'type':..., 'options':...}} のマップを構築する"""
+    role_field_meta = {}
+    role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
+    for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
+        role_name = os.path.basename(os.path.dirname(role_file))
+        try:
+            with open(role_file, 'r', encoding='utf-8') as f:
+                schema_data = json.load(f)
+            fields = schema_data.get('data', [])
+            role_field_meta[role_name] = {
+                field['name']: {'type': field.get('type', ''), 'options': field.get('options') or {}}
+                for field in fields if isinstance(field, dict) and field.get('name')
+            }
+        except Exception:
+            continue
+    return role_field_meta
+
+
+def _sync_prefill_role_list(roles, role_field_meta, class_schemas, source_name, current_members):
+    """rolesリスト内のprefill対象フィールドをsource_name+current_membersに同期する。
+    class_data_id.pyの共有再帰ロジックを使うため、ネストしたClassData型フィールドの中まで
+    自動的に辿ってprefillを同期できる。戻り値: 変更有無。"""
+    changed = False
+    for role in roles:
+        role_name = role.get('name')
+        field_meta = role_field_meta.get(role_name, {})
+        for field in role.get('data', []):
+            meta = field_meta.get(field.get('name'))
+            if not meta:
+                continue
+            field_changed, new_val = class_data_id_api.fix_prefill_in_raw_value(
+                field.get('value'), meta.get('type') or '', meta.get('options') or {},
+                class_schemas, source_name, current_members
+            )
+            if field_changed:
+                field['value'] = new_val
+                changed = True
+    return changed
+
+
+def _collect_prefill_sources(role_field_meta, class_schemas):
+    """role_field_meta(トップレベル)から使われているprefillソース名の集合を集める。
+    ネストしたClassData型フィールドの中まで再帰して収集する(安全網同期で、どのソースを
+    解決すればよいかを事前に洗い出すために使う)。"""
+    sources = set()
+    visited_types = set()
+
+    def walk_type(field_type, options):
+        ft = field_type or ''
+        opts = options or {}
+        if ft.endswith('[]'):
+            base_type = ft[:-2]
+            if opts.get('prefillSourceName'):
+                sources.add(opts['prefillSourceName'])
+            walk_type(base_type, None)
+        elif ft == 'dictionary':
+            if opts.get('keyType') and opts.get('prefillKeys'):
+                sources.add(opts['keyType'])
+            value_type = opts.get('valueType')
+            if value_type:
+                value_array_size = opts.get('valueArraySize', 0)
+                walk_type(f"{value_type}[]" if value_array_size else value_type, opts.get('valueOptions'))
+        elif ft in class_schemas and ft not in visited_types:
+            visited_types.add(ft)
+            for f in class_schemas[ft]:
+                sub_arraysize = f.get('arraySize', 0) or 0
+                sub_type = f.get('type', '')
+                full = f"{sub_type}[]" if sub_arraysize != 0 else sub_type
+                walk_type(full, f.get('options'))
+
+    for role_name, fields in role_field_meta.items():
+        for fname, meta in fields.items():
+            walk_type(meta.get('type'), meta.get('options'))
+
+    return sources
+
+
+def _walk_event_roles(event_data, visit_fn):
+    """イベントJSON内の全roles(ネストしたsubgroups含む)を辿ってvisit_fn(roles)を呼び、
+    1つでもTrueを返せばchangedとする。fix_all_eventsと同じtraversal。"""
+    changed = False
+    subgroups = event_data.get('subgroups', {})
+    if not isinstance(subgroups, dict):
+        return changed
+    for sub_group in subgroups.values():
+        if not isinstance(sub_group, dict):
+            continue
+        for node in sub_group.get('nodes', []):
+            roles = node.get('data', {}).get('roles', [])
+            changed = visit_fn(roles) or changed
+
+            inner_subgroups = node.get('data', {}).get('subgroups', {})
+            if not isinstance(inner_subgroups, dict):
+                continue
+            for inner_sub in inner_subgroups.values():
+                inner_nodes = inner_sub.get('nodes', []) if isinstance(inner_sub, dict) else []
+                for inner_node in inner_nodes:
+                    inner_roles = inner_node.get('data', {}).get('roles', [])
+                    changed = visit_fn(inner_roles) or changed
+    return changed
+
+
+def sync_prefill_dependents_scenario(source_name, current_members):
+    """class_data_id.py / class_data.py からカスケード呼び出しされる即時同期。
+    source_name(Enum名 or ClassDataIDテーブル名)のメンバー構成(current_members)が変わった際、
+    それをprefillSourceName / (keyType+prefillKeys)として参照している全イベントJSON内の
+    ロールフィールドデータを同期する。ネストしたClassData型フィールドの中まで再帰対応。"""
+    try:
+        role_field_meta = _load_role_field_meta()
+        class_schemas = class_data_id_api.load_class_schemas()
+        event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
+        for event_file in glob.glob(os.path.join(event_dir, '*', '*.json')):
+            try:
+                with open(event_file, 'r', encoding='utf-8') as f:
+                    event_data = json.load(f)
+            except Exception:
+                continue
+
+            changed = _walk_event_roles(
+                event_data,
+                lambda roles: _sync_prefill_role_list(roles, role_field_meta, class_schemas, source_name, current_members)
+            )
+
+            if changed:
+                with open(event_file, 'w', encoding='utf-8') as f:
+                    json.dump(event_data, f, ensure_ascii=False, indent=2)
+                logger.info(f"prefill同期(scenario): {os.path.basename(event_file)} を {source_name} のメンバー変更に追従させました")
+    except Exception as e:
+        logger.error(f"prefill同期処理エラー(scenario, source={source_name}): {str(e)}")
+
+
+def sync_all_prefill_scenario_safety_net():
+    """安全網: 個別のカスケード通知に頼らず、既存のfix_all_events()と同じタイミング
+    (バイナリ生成前)で全イベント×全roleフィールドのprefill設定を都度その場で解決して同期する。
+    ネストしたClassData型フィールドも含め、実際に使われている参照元(Enum/ClassDataID)を
+    事前に洗い出し、参照元ごとに全イベントを1パスずつ同期する(参照元が複数あっても正しく解決するため)。
+    これにより、何らかの理由でカスケード通知が漏れた場合でも、バイナリ生成前には必ず
+    最新のメンバー構成に揃った状態になる。"""
+    try:
+        role_field_meta = _load_role_field_meta()
+        class_schemas = class_data_id_api.load_class_schemas()
+        sources = _collect_prefill_sources(role_field_meta, class_schemas)
+        if not sources:
+            return
+        event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
+        event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))
+
+        for source_name in sources:
+            members = _resolve_prefill_members(source_name)
+            if members is None:
+                continue
+            for event_file in event_files:
+                try:
+                    with open(event_file, 'r', encoding='utf-8') as f:
+                        event_data = json.load(f)
+                except Exception:
+                    continue
+
+                changed = _walk_event_roles(
+                    event_data,
+                    lambda roles: _sync_prefill_role_list(roles, role_field_meta, class_schemas, source_name, members)
+                )
+
+                if changed:
+                    with open(event_file, 'w', encoding='utf-8') as f:
+                        json.dump(event_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"prefill安全網同期処理エラー: {str(e)}")
+
+
 # ユーティリティ: イベントJSONの読み書き
 def read_event_data(eventId):
     event_path = os.path.join(DATA_DIR, SCENARIO_EVENT,f"{eventId}", f"{eventId}.json")
@@ -1610,6 +1832,11 @@ def fix_all_events():
         if updated:
             with open(event_file, 'w', encoding='utf-8') as f:
                 json.dump(event_data, f, ensure_ascii=False, indent=2)
+
+    # 仕様書項目5(追記分)の安全網: prefill設定を持つ全フィールドを、その場で参照元の
+    # 最新メンバー構成に合わせて同期する。fix_all_events()は既にバイナリ生成前に必ず
+    # 呼ばれているため、個別のカスケード通知に漏れがあってもここで最終的に整合する。
+    sync_all_prefill_scenario_safety_net()
 
 def fix_roles(roles, role_schemas):
     updated = False

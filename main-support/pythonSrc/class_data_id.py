@@ -172,6 +172,204 @@ def manage_class_data_id():
             return jsonify({"error": f"削除エラー: {str(e)}"}), 500
 
 # ClassDataID詳細データ（GET追加）
+# ============================================================
+# 仕様書項目5: 配列(List)/Dictionaryの「Enum・ClassDataIDメンバー数ぶんデフォルト事前追加」機能の
+# バックエンド同期処理。あるClassDataIDテーブル(source_table_name)のメンバー構成(行のenum_property一覧)
+# が変わった際、それを prefillSourceName / (keyType+prefillKeys) として参照している
+# 他のClassDataIDテーブル(自テーブルも含む)の該当フィールドのデータを、現在のメンバー構成に追従させる。
+# ・List: 個数だけをメンバー数に合わせる(既存値は位置で保持、増えた分はデフォルト値、減った分は切り詰め)
+# ・Dictionary: メンバー名をキーとして、無くなったメンバーのエントリを削除、増えたメンバーのエントリを
+#   デフォルト値で追加する(値は既存キーが残っていればそのまま保持)
+# class_data.py / matrix.py / scenario.py(role・transaction) も同じJSON構造・同じoptions規約を使う場合は
+# 同様のロジックを移植すること(このsync関数はclass_data_id.py内のテーブル群のみを対象にしている)。
+# ============================================================
+def _iter_all_class_data_id_names():
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        return [item['name'] for item in items if item.get('name')]
+    except Exception:
+        return []
+
+
+def _default_value_for_prefill_sync(field_type):
+    t = (field_type or '').replace('[]', '')
+    if t in ('int', 'uint'):
+        return 0
+    if t in ('float', 'double'):
+        return 0.0
+    if t == 'bool':
+        return False
+    if t == 'string':
+        return ''
+    return None  # 複雑な型(class等)は既存値を極力保持する方針のためNoneのままにしない呼び出し側で担保
+
+
+def load_class_schemas():
+    """ClassData(class_data.py)の全スキーマを {className: [field,...]} で返す。
+    matrix.py / scenario.py からも呼ばれる共有ユーティリティ(ネストしたClassData型の
+    prefillフィールドを解決するために必要)。"""
+    schemas = {}
+    class_list_path = os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')
+    try:
+        with open(class_list_path, 'r', encoding='utf-8') as f:
+            class_list = json.load(f)
+        names = [item['name'] for item in class_list if item.get('name')]
+    except Exception:
+        names = []
+    for cname in names:
+        file_path = os.path.join(DATA_DIR, CLASS_DATA, cname, f"{cname}.class.json")
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                schemas[cname] = json.load(f)
+        except Exception:
+            continue
+    return schemas
+
+
+def fix_prefill_in_raw_value(value, field_type, field_options, class_schemas, source_name, current_members):
+    """value(ラップされていない生の値)をfield_typeに応じてprefill同期する共有ロジック。
+    class_data_id/matrix/scenario 全てで共通利用する。ネストしたClassData型のフィールド
+    (仕様書のフォローアップ: ClassData内部のList/Dictionaryフィールドにも対応)にも再帰的に潜る。
+    戻り値: (changed: bool, new_value)"""
+    ft = field_type or ''
+    opts = field_options or {}
+    changed = False
+
+    if ft.endswith('[]'):
+        base_type = ft[:-2]
+        arr = list(value) if isinstance(value, list) else []
+        if opts.get('prefillSourceName') == source_name:
+            target_len = len(current_members)
+            if len(arr) != target_len:
+                default_val = {} if base_type in class_schemas else _default_value_for_prefill_sync(base_type)
+                new_arr = list(arr[:target_len])
+                while len(new_arr) < target_len:
+                    new_arr.append(default_val)
+                arr = new_arr
+                changed = True
+        # 要素自体がClassData型ならさらに各要素の中まで再帰する
+        if base_type in class_schemas:
+            new_arr = []
+            for el in arr:
+                el_changed, new_el = fix_prefill_in_raw_value(el, base_type, None, class_schemas, source_name, current_members)
+                new_arr.append(new_el)
+                changed = changed or el_changed
+            arr = new_arr
+        return changed, arr
+
+    if ft == 'dictionary':
+        entries = (value or {}).get('entries') if isinstance(value, dict) else None
+        if not isinstance(entries, list):
+            entries = []
+        entries = list(entries)
+        if opts.get('keyType') == source_name and opts.get('prefillKeys'):
+            wanted_keys = [f"{source_name}ID.{m}" for m in current_members]
+            current_by_key = {e.get('key'): e for e in entries if isinstance(e, dict)}
+            if [e.get('key') for e in entries] != wanted_keys:
+                value_type = opts.get('valueType', 'int')
+                value_array_size = opts.get('valueArraySize', 0)
+                default_val = [] if value_array_size != 0 else ({} if value_type in class_schemas else _default_value_for_prefill_sync(value_type))
+                entries = [current_by_key.get(k) or {"key": k, "value": default_val} for k in wanted_keys]
+                changed = True
+        # 値自体がClassData型ならさらに各エントリの中まで再帰する
+        value_type = opts.get('valueType')
+        if value_type in class_schemas:
+            new_entries = []
+            for e in entries:
+                if isinstance(e, dict):
+                    el_changed, new_val = fix_prefill_in_raw_value(e.get('value'), value_type, None, class_schemas, source_name, current_members)
+                    e = {**e, 'value': new_val}
+                    changed = changed or el_changed
+                new_entries.append(e)
+            entries = new_entries
+        return changed, {"entries": entries}
+
+    if ft in class_schemas:
+        # ClassData型: そのスキーマの各フィールドについて再帰的に同期する。
+        # ネスト値は{fieldName: 生の値}のフラットな形(row.dataのような{value,type}ラップは無い)。
+        schema = class_schemas.get(ft, [])
+        obj = dict(value) if isinstance(value, dict) else {}
+        obj_changed = False
+        for field in schema:
+            fname = field.get('name')
+            if fname is None or fname not in obj:
+                continue
+            farraysize = field.get('arraySize', 0) or 0
+            sub_type = field.get('type', '')
+            full_type = f"{sub_type}[]" if farraysize != 0 else sub_type
+            el_changed, new_val = fix_prefill_in_raw_value(obj[fname], full_type, field.get('options'), class_schemas, source_name, current_members)
+            if el_changed:
+                obj[fname] = new_val
+                obj_changed = True
+        return obj_changed, obj
+
+    return False, value
+
+
+def sync_prefill_dependents(source_table_name, current_members):
+    """source_table_name(ClassDataIDテーブル名、またはEnum名)のメンバー一覧(current_members)が
+    確定した直後に呼ぶ。このテーブルをprefill元として参照している全テーブルのList/Dictionaryフィールドを
+    現在のメンバー構成に追従させ、変更があったテーブルはファイルに保存し直す。
+    class_data_id自身のテーブル群に加え、matrix.py / scenario.py 側の同名関数へもカスケードして
+    呼び出す(class_data / class_data_id / matrix / scenario_role / scenario_transaction 全対応)。
+    matrix.py・scenario.pyをここで直接importすると起動時の循環import(scenario.py→class_data_id.py)に
+    抵触する可能性があるため、関数内でのみ遅延importする(リクエスト処理時には両モジュールとも
+    読み込み済みのため問題なく解決できる)。"""
+    try:
+        class_schemas = load_class_schemas()
+        for table_name in _iter_all_class_data_id_names():
+            file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, table_name.replace("ID", ""), f"{table_name}.json")
+            if not os.path.exists(file_path):
+                continue
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+            except Exception:
+                continue
+
+            columns = table_data.get('columns', [])
+            rows = table_data.get('rows', [])
+            changed = False
+
+            for col in columns:
+                col_type = (col.get('type') or '')
+                col_name = col.get('name')
+                options = col.get('options') or {}
+
+                for row in rows:
+                    cell = (row.get('data') or {}).get(col_name)
+                    if not cell:
+                        continue
+                    cell_changed, new_val = fix_prefill_in_raw_value(
+                        cell.get('value'), col_type, options, class_schemas, source_table_name, current_members
+                    )
+                    if cell_changed:
+                        cell['value'] = new_val
+                        changed = True
+
+            if changed:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(table_data, f, ensure_ascii=False, indent=2)
+                logger.info(f"prefill同期: {table_name} を {source_table_name} のメンバー変更に追従させました")
+    except Exception as e:
+        logger.error(f"prefill同期処理エラー(source={source_table_name}): {str(e)}")
+
+    # --- matrix.py / scenario.py へのカスケード(遅延import) ---
+    try:
+        import pythonSrc.matrix as matrix_api
+        matrix_api.sync_prefill_dependents_matrix(source_table_name, current_members)
+    except Exception as e:
+        logger.error(f"prefill同期カスケードエラー(matrix, source={source_table_name}): {str(e)}")
+    try:
+        import pythonSrc.scenario as scenario_api
+        if hasattr(scenario_api, 'sync_prefill_dependents_scenario'):
+            scenario_api.sync_prefill_dependents_scenario(source_table_name, current_members)
+    except Exception as e:
+        logger.error(f"prefill同期カスケードエラー(scenario, source={source_table_name}): {str(e)}")
+
+
 @bp.route('/api/class-data-id/<name>', methods=['GET', 'POST', 'DELETE'])
 def class_data_id_detail(name):
     file_path = os.path.join(DATA_DIR, CLASS_DATA_ID, name.replace("ID",""), f"{name}.json")
@@ -199,6 +397,13 @@ def class_data_id_detail(name):
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(new_data, f, ensure_ascii=False, indent=2)
             logger.info(f"Saved class-data-id: {name}")
+
+            # このテーブル(name)のメンバー構成(enum_property一覧)が変わった可能性があるため、
+            # それを参照している他テーブル(および自テーブル)のprefillフィールドを同期する。
+            if isinstance(new_data, dict) and isinstance(new_data.get('rows'), list):
+                current_members = [r.get('enum_property') for r in new_data['rows'] if r.get('enum_property')]
+                sync_prefill_dependents(name, current_members)
+
             return jsonify({"message": f"Data for {name} saved"})
         except Exception as e:
             logger.error(f"Error saving class-data-id {name}: {str(e)}")
@@ -305,7 +510,7 @@ def generate_class_data_id_cs_core(name, columns, rows):
         # --- Main Table File ---
         cs_path = os.path.join(table_dir, f"{name}Table.cs")
         with open(cs_path, 'w', encoding='utf-8') as f:
-            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\n\n")
+            f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing Cysharp.Threading.Tasks;\n\n")
             f.write("namespace GameCore.Tables\n{\n")
             f.write(f"    public class {name}Table : BaseClassDataID<{enum_name}, {name}Row>\n    {{\n")
             #f.write(f"        public static Dictionary<{enum_name}, {name}Row> Table = new Dictionary<{enum_name}, {name}Row>();\n\n")
@@ -314,7 +519,8 @@ def generate_class_data_id_cs_core(name, columns, rows):
             f.write(f"        static {name}Table()\n        {{\n")
             f.write(f"            RowIndex = new {name}RowIndex();\n")
             f.write(f"            TableId = TableID.{name};\n")
-            f.write("            RegisterReferenceLoader(); // 依存先プリロード用に自分自身を登録\n")
+            f.write("            // 参照先プリロード/テーブル単体Load・Unloadは ClassDataReferenceDispatcher / TableIdUtils 側の\n")
+            f.write("            // 事前生成switchから直接呼び出す。ランタイムのデリゲート登録(レジストリ)はもう行わない。\n")
             f.write("        }\n\n")
 
             # --- Table Constructor（全件ロード。行インデックスも同時にキャッシュされるため、部分ロードAPIと併用しても再読み込みは走らない） ---
@@ -337,6 +543,56 @@ def generate_class_data_id_cs_core(name, columns, rows):
             f.write("                row.Read(r + 1,reader);\n")  # ← Readでまとめる
             f.write("                Table[enumVal] = row;\n")
             f.write("            }\n")
+            f.write("        }\n\n")
+
+            # --- 行単位(ID単位)のシングルロード/アンロードUtil ---
+            # テーブル丸ごとではなく、指定したTableID(行)だけをシークして読み込む/解放する。
+            # 内部ではBaseClassDataID<T,E>のReadOne/ReadMany/UnloadOne/UnloadManyを利用し、
+            # ClassDataIDCore経由でheader/readerを自動取得するため呼び出し側はidを渡すだけでよい。
+            f.write(f"        /// <summary>指定した1件のIDだけをシークして読み込む（preloadReferences=trueで参照先も連鎖ロード）</summary>\n")
+            f.write(f"        public static async UniTask LoadSingleAsync({enum_name} id, bool preloadReferences = false, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n")
+            f.write("            {\n")
+            f.write("                ReadOne(id, header, reader, preloadReferences);\n")
+            f.write("                action?.Invoke();\n")
+            f.write("                await UniTask.CompletedTask;\n")
+            f.write("            });\n")
+            f.write("        }\n\n")
+
+            f.write(f"        public static void LoadSingle({enum_name} id, bool preloadReferences = false, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            UniTask.Action(async () => { await LoadSingleAsync(id, preloadReferences, action); }).Invoke();\n")
+            f.write("        }\n\n")
+
+            f.write(f"        /// <summary>指定した複数のIDだけをシークして読み込む(配列対応)</summary>\n")
+            f.write(f"        public static async UniTask LoadSingleAsync(IEnumerable<{enum_name}> ids, bool preloadReferences = false, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n")
+            f.write("            {\n")
+            f.write("                ReadMany(ids, header, reader, preloadReferences);\n")
+            f.write("                action?.Invoke();\n")
+            f.write("                await UniTask.CompletedTask;\n")
+            f.write("            });\n")
+            f.write("        }\n\n")
+
+            f.write(f"        public static void LoadSingle(IEnumerable<{enum_name}> ids, bool preloadReferences = false, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            UniTask.Action(async () => { await LoadSingleAsync(ids, preloadReferences, action); }).Invoke();\n")
+            f.write("        }\n\n")
+
+            f.write(f"        /// <summary>指定した1件のIDだけをTableから解放する（テーブル全体は解放しない）</summary>\n")
+            f.write(f"        public static void UnloadSingle({enum_name} id, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            UnloadOne(id);\n")
+            f.write("            action?.Invoke();\n")
+            f.write("        }\n\n")
+
+            f.write(f"        /// <summary>指定した複数のIDだけをTableから解放する(配列対応)</summary>\n")
+            f.write(f"        public static void UnloadSingle(IEnumerable<{enum_name}> ids, Action action = null)\n")
+            f.write("        {\n")
+            f.write("            UnloadMany(ids);\n")
+            f.write("            action?.Invoke();\n")
             f.write("        }\n")
             f.write("    }\n}\n")
 
@@ -453,6 +709,8 @@ namespace GameCore.Tables
         js_enum_path = os.path.join(table_dir, f"{name}TableID.js")
         with open(js_enum_path, 'w', encoding='utf-8') as f:
             f.write(generators.generate_enum_js(f"{name}TableID", enum_data))
+            
+
 
         return {"message": f"C# files generated: {cs_path}, {enum_cs_path}", "cs_path": cs_path, "enum_cs_path": enum_cs_path}
 
@@ -766,9 +1024,11 @@ def set_class_data_id_tag(name):
                 if not any(t['name'] == tag for t in tag_list):
                     return jsonify({"error": f"タグ {tag} が見つかりません"}), 404
  
+        old_tag = target.get('tag')
         target['tag'] = tag
         # タグを変更した場合、サブグループはそのタグに属さなくなるのでクリアする
-        if target.get('subgroup') and target.get('tag') != tag:
+        # (旧タグと新タグを比較する。代入後のtargetと比較すると常にFalseになるので注意)
+        if target.get('subgroup') and old_tag != tag:
             target['subgroup'] = None
         with open(list_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1423,12 +1683,16 @@ def generate_tags_load_script():
                 all_blocks += build_bulk_block(f"{tag_name}_{sub_name}", sub_items)
 
         # ------------------------------------------------------------
-        # シングルロード/アンロード(項目: シングルロード・アンロード)。
-        # ClassDataID 1件のみのオーバーロードに加え、配列引数で複数件を
-        # 一括ロード/アンロードできるオーバーロードも生成する。
-        # 各テーブルはgenerate_binaryで書き込んだ行オフセットテーブルを使い、
-        # 該当行だけシークして読み込む想定(ClassDataIDCore側でTableID→
-        # ファイルパス解決とシーク読み込みを行う)。
+        # シングルロード/アンロード。
+        #
+        # ・ID単位(行単位): テーブルごとに {Name}TableID を引数に取るオーバーロードを生成する。
+        #   generate_binary側が書き込み済みの行オフセット(RowIndex)をそのまま使って該当行だけを
+        #   シークして読み込む {Name}Table.LoadSingleAsync(id, ...) に直接委譲するだけ。
+        #   ランタイムのデリゲートレジストリは一切経由しない(コンパイル時に確定した直接呼び出し)。
+        #
+        # ・テーブル単位(TableID全体): こちらも実体はコンパイル時switchで、該当テーブルの
+        #   header.GetData<T>() / Table.Clear() を直接呼ぶ。ClassDataTableRegistryのような
+        #   ランタイム登録レジストリは使わない。
         # ------------------------------------------------------------
         single_lines = []
         indent = 0
@@ -1436,22 +1700,125 @@ def generate_tags_load_script():
         def add_single(text=""):
             single_lines.append("    " * indent + text)
 
-        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID id, Action action = null)")
+        all_names = [item['name'] for item in class_data_id_list if item.get('name')]
+
+        # --- ID単位(行単位): テーブルごとに専用メソッド名(LoadSingle{Name}/UnloadSingle{Name})で生成する。
+        #     テーブル単位の LoadSingleAsync(TableID)/UnloadSingle(TableID)(Table全体をロード/Clearする方)とは
+        #     意図的に名前を分け、「1行だけ」と「テーブル全体」を呼び出し側が取り違えないようにしている。
+        #     単体ID・配列(複数ID)の両方に対応する。
+        for item_name in all_names:
+            id_type = f"GameCore.Tables.ID.{item_name}TableID"
+
+            # --- 単体ID ---
+            add_single(f"/// <summary>{item_name}: 指定した1件のIDだけを、事前記録済みのシーク位置で直接読み込む(テーブル全体はロードしない)</summary>")
+            add_single(f"public static async UniTask LoadSingleAsync{item_name}({id_type} id, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"await GameCore.Tables.{item_name}Table.LoadSingleAsync(id, false, action);")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"public static void LoadSingle{item_name}({id_type} id, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"UniTask.Action(async () => {{ await LoadSingleAsync{item_name}(id, action); }}).Invoke();")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"/// <summary>{item_name}: 指定した1件のIDだけをTableから解放する(テーブル全体は解放しない)</summary>")
+            add_single(f"public static void UnloadSingle{item_name}({id_type} id, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"GameCore.Tables.{item_name}Table.UnloadSingle(id, action);")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"public static async UniTask UnloadSingleAsync{item_name}({id_type} id, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"UnloadSingle{item_name}(id, action);")
+            add_single("await UniTask.CompletedTask;")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            # --- 配列(複数ID)対応 ---
+            add_single(f"/// <summary>{item_name}: 指定した複数件のIDだけを、事前記録済みのシーク位置で直接読み込む(配列対応。テーブル全体はロードしない)</summary>")
+            add_single(f"public static async UniTask LoadSingleAsync{item_name}({id_type}[] ids, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"await GameCore.Tables.{item_name}Table.LoadSingleAsync(ids, false, action);")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"public static void LoadSingle{item_name}({id_type}[] ids, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"UniTask.Action(async () => {{ await LoadSingleAsync{item_name}(ids, action); }}).Invoke();")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"/// <summary>{item_name}: 指定した複数件のIDだけをTableから解放する(配列対応。テーブル全体は解放しない)</summary>")
+            add_single(f"public static void UnloadSingle{item_name}({id_type}[] ids, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"GameCore.Tables.{item_name}Table.UnloadSingle(ids, action);")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+            add_single(f"public static async UniTask UnloadSingleAsync{item_name}({id_type}[] ids, Action action = null)")
+            add_single("{")
+            indent += 1
+            add_single(f"UnloadSingle{item_name}(ids, action);")
+            add_single("await UniTask.CompletedTask;")
+            indent -= 1
+            add_single("}")
+            add_single()
+
+        # --- テーブル単位(TableID全体): コンパイル時switchで直接ディスパッチ ---
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID tableId, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("await ClassDataIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("await ClassDataIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
+        add_single("{")
+        indent += 1
+        add_single("switch (tableId)")
+        add_single("{")
+        indent += 1
+        for item_name in all_names:
+            add_single(f"case GameCore.Enums.TableID.{item_name}:")
+            indent += 1
+            add_single(f"header.GetData<GameCore.Tables.{item_name}Table>(GameCore.Enums.TableID.{item_name}, reader);")
+            add_single("break;")
+            indent -= 1
+        add_single("default:")
+        indent += 1
+        add_single("UnityEngine.Debug.LogWarning($\"TableIdUtils.LoadSingleAsync: 未対応のTableIDです: {tableId}\");")
+        add_single("break;")
+        indent -= 1
+        indent -= 1
+        add_single("}")
         add_single("action?.Invoke();")
+        add_single("await UniTask.CompletedTask;")
+        indent -= 1
+        add_single("});")
         indent -= 1
         add_single("}")
         add_single()
 
-        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Enums.TableID[] tableIds, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("foreach (var id in ids)")
+        add_single("foreach (var tableId in tableIds)")
         add_single("{")
         indent += 1
-        add_single("await ClassDataIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("await LoadSingleAsync(tableId);")
         add_single("await UniTask.Yield();")
         indent -= 1
         add_single("}")
@@ -1460,66 +1827,127 @@ def generate_tags_load_script():
         add_single("}")
         add_single()
 
-        add_single("public static void LoadSingle(GameCore.Enums.TableID id, Action action = null)")
+        add_single("public static void LoadSingle(GameCore.Enums.TableID tableId, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("UniTask.Action(async () => { await LoadSingleAsync(id, action); }).Invoke();")
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(tableId, action); }).Invoke();")
         indent -= 1
         add_single("}")
         add_single()
 
-        add_single("public static void LoadSingle(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("public static void LoadSingle(GameCore.Enums.TableID[] tableIds, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("UniTask.Action(async () => { await LoadSingleAsync(ids, action); }).Invoke();")
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(tableIds, action); }).Invoke();")
         indent -= 1
         add_single("}")
         add_single()
 
-        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID id, Action action = null)")
+        add_single("public static void UnloadSingle(GameCore.Enums.TableID tableId, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("switch (tableId)")
+        add_single("{")
+        indent += 1
+        for item_name in all_names:
+            add_single(f"case GameCore.Enums.TableID.{item_name}: GameCore.Tables.{item_name}Table.Table.Clear(); break;")
+        add_single("default:")
+        indent += 1
+        add_single("UnityEngine.Debug.LogWarning($\"TableIdUtils.UnloadSingle: 未対応のTableIDです: {tableId}\");")
+        add_single("break;")
+        indent -= 1
+        indent -= 1
+        add_single("}")
         add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void UnloadSingle(GameCore.Enums.TableID[] tableIds, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var tableId in tableIds) UnloadSingle(tableId);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID tableId, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("UnloadSingle(tableId);")
         add_single("await UniTask.CompletedTask;")
         indent -= 1
         add_single("}")
         add_single()
 
-        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID[] ids, Action action = null)")
+        add_single("public static async UniTask UnloadSingleAsync(GameCore.Enums.TableID[] tableIds, Action action = null)")
         add_single("{")
         indent += 1
-        add_single("foreach (var id in ids)")
+        add_single("foreach (var tableId in tableIds)")
         add_single("{")
         indent += 1
-        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
+        add_single("UnloadSingle(tableId);")
         add_single("await UniTask.Yield();")
         indent -= 1
         add_single("}")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
-
-        add_single("public static void UnloadSingle(GameCore.Enums.TableID id, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("ClassDataIDCore.Instance.UnloadClassData(id);")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
-
-        add_single("public static void UnloadSingle(GameCore.Enums.TableID[] ids, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("foreach (var id in ids) ClassDataIDCore.Instance.UnloadClassData(id);")
         add_single("action?.Invoke();")
         indent -= 1
         add_single("}")
         add_single()
 
         all_blocks += single_lines
+
+        # ------------------------------------------------------------
+        # ClassDataReferenceDispatcher.cs
+        # 行が参照している他テーブルの行(参照先id)をプリロードする際のディスパッチ。
+        # テーブル名は生成時点で確定しているため、ランタイムのデリゲート登録(旧ClassDataReferenceLoader)
+        # は使わず、ここでコンパイル時switchとして直接生成する。
+        # ------------------------------------------------------------
+        dispatcher_lines = []
+        dindent = 2
+
+        def dadd(text=""):
+            dispatcher_lines.append("    " * dindent + text)
+
+        dadd("switch (tableId)")
+        dadd("{")
+        dindent += 1
+        for item_name in all_names:
+            dadd(f"case GameCore.Enums.TableID.{item_name}:")
+            dindent += 1
+            dadd(f"GameCore.Tables.{item_name}Table.ReadOneRaw(refId, header, reader, preloadReferences, forceReloadIndex, visited);")
+            dadd("break;")
+            dindent -= 1
+        dadd("default:")
+        dindent += 1
+        dadd("break;")
+        dindent -= 1
+        dindent -= 1
+        dadd("}")
+
+        dispatcher_code = "using System.IO;\n"
+        dispatcher_code += "using System;\n"
+        dispatcher_code += "using System.Collections.Generic;\n"
+        dispatcher_code += "using GameCore.Enums;\n\n"
+        dispatcher_code += "namespace GameCore.Tables\n"
+        dispatcher_code += "{\n"
+        dispatcher_code += "    /// <summary>\n"
+        dispatcher_code += "    /// 行が参照している他テーブルの行(参照先id)をプリロードする際のディスパッチ。\n"
+        dispatcher_code += "    /// テーブル名は生成時点で確定しているため、ランタイムのデリゲート登録は行わず、\n"
+        dispatcher_code += "    /// コンパイル時switchとして直接生成する(自動生成ファイル。手動編集しないこと)。\n"
+        dispatcher_code += "    /// </summary>\n"
+        dispatcher_code += "    public static class ClassDataReferenceDispatcher\n"
+        dispatcher_code += "    {\n"
+        dispatcher_code += "        public static void Load(TableID tableId, int refId, ClassDataHeader header, BinaryReader reader, bool preloadReferences, bool forceReloadIndex, HashSet<(TableID, int)> visited)\n"
+        dispatcher_code += "        {\n"
+        dispatcher_code += "\n".join(dispatcher_lines) + "\n"
+        dispatcher_code += "        }\n"
+        dispatcher_code += "    }\n"
+        dispatcher_code += "}\n"
+
+        with open(os.path.join(DATA_DIR, CLASS_DATA_ID, "ClassDataReferenceDispatcher.cs"), 'w', encoding='utf-8') as f:
+            f.write(dispatcher_code)
 
         append_str = "\n".join(all_blocks)
         
@@ -1569,7 +1997,8 @@ def generate_base(data_dir):
     """
     ClassDataID 用のボイラープレート生成（初回起動時のみ）。
     - class_data_id_list.json の初期化
-    - BaseClassDataRow / BaseClassDataRowIndex / ClassDataReferenceLoader / BaseClassDataID / BaseTable (.cs/.py/.js)
+    - BaseClassDataRow / BaseClassDataRowIndex / BaseClassDataID / BaseTable (.cs/.py/.js)
+    - ClassDataReferenceDispatcher.cs はここでは生成しない(テーブル名一覧が必要なため generate_tags_load_script側で生成)
     - ClassDataIDCore.cs
     - TableID.cs
     """
@@ -1645,30 +2074,16 @@ def generate_base(data_dir):
         with open(os.path.join(data_dir, CLASS_DATA_ID, "BaseClassDataRowIndex.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str.strip() + "\n")
 
-    # ClassDataReferenceLoader.cs を生成
-    # 依存先(参照先)プリロード用の自己登録レジストリ。
-    # 各{Name}Tableの静的コンストラクタが自分自身のTableIdに対するローダーをここへ登録する。
-    # ID側もMatrix側も、行(またはセル)が持つ「参照先id」を実際にロードする際にこのレジストリを経由する。
-    if not os.path.exists(os.path.join(data_dir, CLASS_DATA_ID, "ClassDataReferenceLoader.cs")):
-        code_str = """
-    using System.IO;
-    using System;
-    using System.Collections.Generic;
-    using GameCore.Enums;
-
-    namespace GameCore.Tables
-    {
-        public static class ClassDataReferenceLoader
-        {
-            // (参照先id, header, reader, preloadReferences, forceReloadIndex, 循環参照防止用visited)
-            public delegate void LoadOneDelegate(int refId, ClassDataHeader header, BinaryReader reader, bool preloadReferences, bool forceReloadIndex, HashSet<(TableID, int)> visited);
-
-            public static readonly Dictionary<TableID, LoadOneDelegate> Loaders = new Dictionary<TableID, LoadOneDelegate>();
-        }
-    }
-    """
-        with open(os.path.join(data_dir, CLASS_DATA_ID, "ClassDataReferenceLoader.cs"), 'w', encoding='utf-8') as f:
-            f.write(code_str.strip() + "\n")
+    # 旧 ClassDataReferenceLoader.cs (ランタイムのデリゲートレジストリ方式)は廃止。
+    # 参照先プリロード/テーブル単体Load・Unloadのディスパッチは、テーブル名が確定した時点で
+    # コンパイル時switchとして ClassDataReferenceDispatcher.cs (generate_tags_load_script内)に
+    # 生成し直す方式に一本化した。過去に生成された同ファイルが残っていれば掃除しておく。
+    stale_reference_loader = os.path.join(data_dir, CLASS_DATA_ID, "ClassDataReferenceLoader.cs")
+    if os.path.exists(stale_reference_loader):
+        try:
+            os.remove(stale_reference_loader)
+        except OSError:
+            pass
 
     # BaseClassDataID.cs を生成
     if not os.path.exists(os.path.join(data_dir, CLASS_DATA_ID, "BaseClassDataID.cs")):
@@ -1695,15 +2110,13 @@ def generate_base(data_dir):
             }
 
             /// <summary>
-            /// 依存先プリロードのレジストリに自分自身を登録する。各テーブルの静的コンストラクタから呼ぶこと。
+            /// int型のid(型消去済み)から直接1行だけ読み込む。ClassDataReferenceDispatcher(コンパイル時生成のswitch)が
+            /// 参照先プリロード時にここへ直接ディスパッチする。ランタイムのデリゲート登録・レジストリ検索は行わない。
             /// </summary>
-            protected static void RegisterReferenceLoader()
+            public static void ReadOneRaw(int id, ClassDataHeader header, BinaryReader reader, bool preloadReferences, bool forceReloadIndex, HashSet<(TableID, int)> visited)
             {
-                ClassDataReferenceLoader.Loaders[TableId] = (refId, header, reader, preloadReferences, forceReloadIndex, visited) =>
-                {
-                    T typedId = (T)Enum.ToObject(typeof(T), refId);
-                    ReadOneInternal(typedId, header, reader, preloadReferences, forceReloadIndex, visited);
-                };
+                T typedId = (T)Enum.ToObject(typeof(T), id);
+                ReadOneInternal(typedId, header, reader, preloadReferences, forceReloadIndex, visited);
             }
 
             /// <summary>
@@ -1753,10 +2166,7 @@ def generate_base(data_dir):
                 {
                     foreach (var reference in row.GetReferencedIds())
                     {
-                        if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
-                        {
-                            loader(reference.RefId, header, reader, true, forceReloadIndex, visited);
-                        }
+                        ClassDataReferenceDispatcher.Load(reference.TableId, reference.RefId, header, reader, true, forceReloadIndex, visited);
                     }
                 }
             }
@@ -1774,13 +2184,17 @@ def generate_base(data_dir):
             /// <summary>
             /// 指定した複数のid(行)だけをロードする。テーブル全体はロードしない。
             /// preloadReferences=trueの場合、バッチ全体で1つのvisitedセットを共有するため、同じ参照先の二重ロードを避けられる。
+            /// forceReloadIndexは最初の1件目でのみ適用する(2件目以降まで毎回行インデックス全体を再読込すると
+            /// バッチが大きいほど無駄なディスクI/Oが積み重なるため)。
             /// </summary>
             public static void ReadMany(IEnumerable<T> ids, ClassDataHeader header, BinaryReader reader, bool preloadReferences = false, bool forceReloadIndex = false)
             {
                 var visited = new HashSet<(TableID, int)>();
+                bool first = true;
                 foreach (var id in ids)
                 {
-                    ReadOneInternal(id, header, reader, preloadReferences, forceReloadIndex, visited);
+                    ReadOneInternal(id, header, reader, preloadReferences, forceReloadIndex && first, visited);
+                    first = false;
                 }
             }
 
@@ -1800,10 +2214,7 @@ def generate_base(data_dir):
                 {
                     foreach (var reference in row.GetReferencedIds())
                     {
-                        if (ClassDataReferenceLoader.Loaders.TryGetValue(reference.TableId, out var loader))
-                        {
-                            loader(reference.RefId, header, reader, true, false, visited);
-                        }
+                        ClassDataReferenceDispatcher.Load(reference.TableId, reference.RefId, header, reader, true, false, visited);
                     }
                 }
             }
@@ -1900,7 +2311,10 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
     public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataHeader, UniTask> onLoaded, bool addressable = false)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
-        if (isLoaded) return;
+        // 注意: 以前はここで「if (isLoaded) return;」となっており、2回目以降の呼び出しで
+        // onLoadedコールバックが一切実行されない致命的なバグがあった(LoadSingle/タグ一括ロード等、
+        // 初回のフルロード以降に呼ばれるものが全て無反応になっていた)。
+        // ヘッダー(m_classDataTables)はキャッシュ済みなら再パースしない一方、onLoadedは毎回必ず実行する。
 
         string path = addressable == true ?  SupportFiles.ID_BIN_FILE  :  SupportFiles.ALL_ID_BIN;
 
@@ -1956,6 +2370,22 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
         {
             Debug.LogError($"読み込み中にエラーが発生: {ex}");
         }
+    }
+
+    /// <summary>
+    /// 指定したTableID 1件だけをロードする（テーブル丸ごと）。
+    /// 実体は GameCore.Enums.TableIdUtils.LoadSingleAsync(TableID) 側で、テーブル名確定時に生成した
+    /// switch文から直接 header.GetData&lt;T&gt;() を呼ぶ実装に一本化されている（本メソッドは委譲するだけ）。
+    /// </summary>
+    public async UniTask LoadClassDataSingleAsync(GameCore.Enums.TableID id, Action action = null, bool addressable = false)
+    {
+        await GameCore.Enums.TableIdUtils.LoadSingleAsync(id, action);
+    }
+
+    /// <summary>指定したTableID 1件だけをアンロードする（テーブル丸ごとTable.Clear()）。GameCore.Enums.TableIdUtils.UnloadSingleへ委譲する。</summary>
+    public void UnloadClassData(GameCore.Enums.TableID id)
+    {
+        GameCore.Enums.TableIdUtils.UnloadSingle(id);
     }
 
     private async UniTask ExecuteOnThreadPoolAndReturn(

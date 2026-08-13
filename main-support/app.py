@@ -1202,6 +1202,20 @@ namespace GameCore.Scenario {
             }
         }
         
+        public static BaseOrigintScenarioRoleAction SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {s
+            if (data == null) return null;
+            switch (data.RoleID) {
+"""
+    for role in roles:
+        factory_content += f"""                case ScenarioRoleID.{role['name']}:
+                    (action as {role['name']}RoleAction).SetRoleData(data as {role['name']}RoleData));
+                    break;
+"""
+    factory_content += """                default:
+                    return;
+            }
+        }
+        
         // 役職ごとのプール構造：
         // freePool: 未使用インスタンスを O(1) で出し入れする Stack
         // activeSet: 解放時に正しいアクションか確認、あるいは線形探索を避けるための管理

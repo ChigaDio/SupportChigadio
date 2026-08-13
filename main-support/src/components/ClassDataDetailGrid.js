@@ -219,6 +219,25 @@ function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeO
         キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）です。値はどの型でも指定できます。
       </Typography>
 
+      {keyType !== 'int' && (
+        <Box sx={{ mt: 1 }}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={!!options.prefillKeys}
+                onChange={(e) => onChange({ ...options, prefillKeys: e.target.checked })}
+              />
+            }
+            label={`${keyType} の全メンバーをキーとしてデフォルトで事前追加する`}
+          />
+          {options.prefillKeys && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              有効化するとキーの手動追加・削除はできなくなり、{keyType}の全メンバー分のエントリが常に維持されます。
+            </Typography>
+          )}
+        </Box>
+      )}
+
       {(valueIsNumeric || valueType === 'bit' || valueType === 'bezier') && (
         <Box sx={{ mt: 1.5, p: 1, border: '1px dashed #ccc', borderRadius: 1 }}>
           <Typography variant="caption" color="text.secondary">値の型オプション</Typography>
@@ -234,6 +253,44 @@ function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeO
           )}
           {valueType === 'bezier' && <BezierOptionsEditor options={valueOptions} onChange={setValueOptions} />}
         </Box>
+      )}
+    </Box>
+  );
+}
+
+// ============================================================
+// オプション編集: 配列(arraySize=-1の可変長List)向けprefill設定(仕様書項目5)
+// ============================================================
+function ArrayOptionsEditor({ options, onChange, enumNames, classDataIdNames, customClassDataIdNames }) {
+  const sourceNames = [...enumNames, ...classDataIdNames, ...customClassDataIdNames];
+  const enabled = !!options.prefillSourceName;
+
+  return (
+    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={enabled}
+            onChange={(e) => onChange({ ...options, prefillSourceName: e.target.checked ? (options.prefillSourceName || sourceNames[0] || null) : null })}
+          />
+        }
+        label="Enum/ClassDataIDのメンバー数ぶんデフォルトを事前追加する"
+      />
+      {enabled && (
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: 220 }}
+          options={sourceNames}
+          value={options.prefillSourceName || null}
+          onChange={(e, v) => onChange({ ...options, prefillSourceName: v })}
+          renderInput={(params) => <TextField {...params} label="参照元(Enum/ClassDataID)" />}
+        />
+      )}
+      {enabled && (
+        <Typography variant="caption" color="text.secondary" sx={{ width: '100%' }}>
+          有効化すると要素数は参照元のメンバー数に固定され、参照元の増減/リネームに追従します
+          （実データはClassDataID/ClassDataMatrixID/ScenarioRole側の各レコードで保持・同期されます）。
+        </Typography>
       )}
     </Box>
   );
@@ -263,7 +320,11 @@ function optionsSummary(field) {
   if (t === 'bezier') return `ベジェ(${o.valueType || 'float'}) [${o.min ?? 0}, ${o.max ?? 1}]`;
   if (t === 'dictionary') {
     const valueLabel = `${o.valueType || 'int'}${o.valueArraySize ? '[]' : ''}`;
-    return `Dictionary<${o.keyType || 'int'}, ${valueLabel}>`;
+    const keyLabel = o.prefillKeys ? `${o.keyType || 'int'}(全メンバー事前追加)` : (o.keyType || 'int');
+    return `Dictionary<${keyLabel}, ${valueLabel}>`;
+  }
+  if (field.arraySize === -1 && o.prefillSourceName) {
+    return `${o.prefillSourceName}の全メンバーを事前追加`;
   }
   return '-';
 }
@@ -506,11 +567,20 @@ function ClassDataDetailGrid() {
           <TextField label="説明" margin="dense" fullWidth value={formDescription} onChange={(e) => setFormDescription(e.target.value)} />
           <TextField label="配列サイズ" margin="dense" fullWidth type="number" value={formArraySize} onChange={(e) => setFormArraySize(e.target.value)} />
 
-          {(isNumeric || CUSTOM_TYPES.includes(formType)) && (
+          {(isNumeric || CUSTOM_TYPES.includes(formType) || parseInt(formArraySize, 10) === -1) && (
             <>
               <Divider sx={{ my: 2 }} />
               <Typography variant="subtitle2">型オプション</Typography>
               {isNumeric && <NumericOptionsEditor options={formOptions} onChange={setFormOptions} />}
+              {parseInt(formArraySize, 10) === -1 && (
+                <ArrayOptionsEditor
+                  options={formOptions}
+                  onChange={setFormOptions}
+                  enumNames={typeInfo.enum_list}
+                  classDataIdNames={typeInfo.class_data_id_list}
+                  customClassDataIdNames={typeInfo.custom_class_id_list}
+                />
+              )}
               {formType === 'bit' && (
                 <BitOptionsEditor
                   options={formOptions}
