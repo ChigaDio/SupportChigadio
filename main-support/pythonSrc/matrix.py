@@ -23,6 +23,7 @@ from math import isnan, isfinite
 from flask import Blueprint, jsonify, request
 
 import pythonSrc.customclassdata
+import pythonSrc.class_data_id as class_data_id_api
 from pythonSrc.constants import CLASS_DATA_MATRIX_ID
 from pythonSrc.data_utils import (
     get_type_lists,
@@ -107,6 +108,79 @@ def manage_matrix_id():
         except FileNotFoundError:
             return jsonify({"error": "List file not found"}), 404
 
+def _iter_all_matrix_table_names():
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        return [item['name'] for item in items if item.get('name')]
+    except Exception:
+        return []
+
+
+def _default_value_for_prefill_sync(field_type):
+    t = (field_type or '').replace('[]', '')
+    if t in ('int', 'uint'):
+        return 0
+    if t in ('float', 'double'):
+        return 0.0
+    if t == 'bool':
+        return False
+    if t == 'string':
+        return ''
+    return None
+
+
+def sync_prefill_dependents_matrix(source_name, current_members):
+    """仕様書項目5(追記分含む)。あるEnum/ClassDataID(source_name)のメンバー構成(current_members)が
+    変わった際、それをprefillSourceName / (keyType+prefillKeys)として参照している全MatrixTableの
+    セルデータ(data[row][col][field])を現在のメンバー構成に追従させる。class_data_id.pyの
+    sync_prefill_dependentsとロジックは同一だが、行/列グリッド構造(data[rk][ck])を走査する点が異なる。"""
+    try:
+        class_schemas = class_data_id_api.load_class_schemas()
+        for table_name in _iter_all_matrix_table_names():
+            file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, table_name, f"{table_name}.json")
+            if not os.path.exists(file_path):
+                continue
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    table_data = json.load(f)
+            except Exception:
+                continue
+
+            fields = table_data.get('fields', [])
+            data_grid = table_data.get('data', {})
+            changed = False
+
+            for field in fields:
+                field_type = (field.get('type') or '')
+                field_name = field.get('name')
+                options = field.get('options') or {}
+
+                for rk, row_dict in data_grid.items():
+                    if not isinstance(row_dict, dict):
+                        continue
+                    for ck, cell in row_dict.items():
+                        if not isinstance(cell, dict):
+                            continue
+                        field_cell = cell.get(field_name)
+                        if not field_cell:
+                            continue
+                        cell_changed, new_val = class_data_id_api.fix_prefill_in_raw_value(
+                            field_cell.get('value'), field_type, options, class_schemas, source_name, current_members
+                        )
+                        if cell_changed:
+                            field_cell['value'] = new_val
+                            changed = True
+
+            if changed:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(table_data, f, ensure_ascii=False, indent=2)
+                logger.info(f"prefill同期(matrix): {table_name} を {source_name} のメンバー変更に追従させました")
+    except Exception as e:
+        logger.error(f"prefill同期処理エラー(matrix, source={source_name}): {str(e)}")
+
+
 @bp.route('/api/class-data-matrix-id/<name>', methods=['GET', 'POST', 'DELETE'])
 def handle_matrix_data(name):
     file_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, name, f'{name}.json')
@@ -161,9 +235,18 @@ def generate_cs_matrix(name):
             col_id += "Table"    
 
         # {name}MatrixRow.cs
-        row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\nusing GameCore.Enums;\n\n"
+        row_cs = f"using System.IO;\nusing System;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing GameCore.Enums;\nusing GameCore.Tables.ID;\n\n"
         row_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixRow : BaseClassDataMatrixRow {{\n"
-        read_code = "        public override void Read(BinaryReader reader) {\n"
+        # 自分がどのRow/Colに属するセルかを自動保持する(仕様書: RowDataにrowID,colIDを追加してそのTableIDのIDを設定)
+        row_cs += "        [SerializeField]\n"
+        row_cs += f"        protected {row_id}ID rowId_;\n"
+        row_cs += f"        public {row_id}ID RowId {{ get => rowId_; }}\n"
+        row_cs += "        [SerializeField]\n"
+        row_cs += f"        protected {col_id}ID colId_;\n"
+        row_cs += f"        public {col_id}ID ColId {{ get => colId_; }}\n\n"
+        read_code = f"        public override void Read(int rowId, int colId, BinaryReader reader) {{\n"
+        read_code += f"            rowId_ = ({row_id}ID)rowId;\n"
+        read_code += f"            colId_ = ({col_id}ID)colId;\n"
         ref_lines = []  # 依存先プリロード用: 他のclass_data_idを参照しているフィールド
         for field in fields:
             # ★ Matrixのフィールドは "int[]" のような配列サフィックス表記を使うため、
@@ -213,11 +296,13 @@ def generate_cs_matrix(name):
             f.write(row_index_cs)
 
         # {name}MatrixID.cs
-        matrix_cs = f"using System.IO;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing System;\nusing System.Collections.Generic;\n\n"
+        matrix_cs = f"using System.IO;\nusing GameCore.Tables.ID;\nusing GameCore.Enums;\nusing System;\nusing System.Collections.Generic;\nusing Cysharp.Threading.Tasks;\n\n"
         matrix_cs += f"namespace GameCore.Tables {{\n    public class {name}MatrixTable : BaseClassDataMatrixID<{row_id}ID, {col_id}ID, {name}MatrixRow> {{\n"
         matrix_cs += f"        static {name}MatrixTable()\n        {{\n"
         matrix_cs += f"            RowIndex = new {name}MatrixRowIndex();\n"
         matrix_cs += f"            TableId = MatrixTableID.{name};\n"
+        matrix_cs += f"            MatrixTableRegistry.Loaders[TableId] = (header, reader) => header.GetData<{name}MatrixTable>(MatrixTableID.{name}, reader);\n"
+        matrix_cs += f"            MatrixTableRegistry.Unloaders[TableId] = () => {{ Table.Clear(); s_cellIndexCache.Clear(); }};\n"
         matrix_cs += "        }\n\n"
         matrix_cs += "        public override void Read(BinaryReader reader) {\n"
         matrix_cs += f"            {name}MatrixTable.Table.Clear();\n"
@@ -238,9 +323,193 @@ def generate_cs_matrix(name):
         matrix_cs += "                    cellIndex[cid] = (off, sz);\n"
         matrix_cs += "                }\n"
         matrix_cs += "                s_cellIndexCache[rk] = cellIndex; // 行インデックスブロックはここでキャッシュしておく（列/セル単位の後読みに使う）\n"
-        matrix_cs += f"                foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(reader); Table[rk][ck] = row; }}\n"
+        matrix_cs += f"                foreach(var ck in colKeys) {{ var row = new {name}MatrixRow(); row.Read(Convert.ToInt32(rk), Convert.ToInt32(ck), reader); Table[rk][ck] = row; }}\n"
         matrix_cs += "            }\n"
-        matrix_cs += "        }\n    }\n}\n"
+        matrix_cs += "        }\n\n"
+
+        # --- セル/行/列単位のシングルロード・アンロードUtil ---
+        # (仕様書: グループ/サブグループ/Single対応。Singleはセル=rowID×colIDを指定する)
+        matrix_cs += f"        /// <summary>指定した1セル(rowId×colId)だけをシークして読み込む</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadSingleAsync({row_id}ID rowId, {col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                ReadOneCell(rowId, colId, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static void LoadSingle({row_id}ID rowId, {col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadSingleAsync(rowId, colId, preloadReferences, action); }).Invoke();\n\n"
+
+        matrix_cs += f"        /// <summary>指定した複数セル(rowId,colIdの組)だけをシークして読み込む(配列対応)</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadSingleAsync(IEnumerable<({row_id}ID Row, {col_id}ID Col)> cells, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                ReadManyCells(cells, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static void LoadSingle(IEnumerable<({row_id}ID Row, {col_id}ID Col)> cells, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadSingleAsync(cells, preloadReferences, action); }).Invoke();\n\n"
+
+        matrix_cs += f"        /// <summary>指定した1セルだけをTableから解放する(テーブル全体は解放しない)</summary>\n"
+        matrix_cs += f"        public static void UnloadSingle({row_id}ID rowId, {col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            UnloadOneCell(rowId, colId);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static async UniTask UnloadSingleAsync({row_id}ID rowId, {col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadSingle(rowId, colId, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        matrix_cs += f"        /// <summary>指定した複数セルだけをTableから解放する(配列対応)</summary>\n"
+        matrix_cs += f"        public static void UnloadSingle(IEnumerable<({row_id}ID Row, {col_id}ID Col)> cells, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            UnloadManyCells(cells);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static async UniTask UnloadSingleAsync(IEnumerable<({row_id}ID Row, {col_id}ID Col)> cells, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadSingle(cells, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- セル: 複数行 × 単一列(row[], col) ---
+        matrix_cs += f"        /// <summary>複数行 × 単一列のセルだけをシークして読み込む(row[], col)</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadSingleAsync(IEnumerable<{row_id}ID> rowIds, {col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += f"                var cells = new List<({row_id}ID Row, {col_id}ID Col)>();\n"
+        matrix_cs += "                foreach (var rowId in rowIds) cells.Add((rowId, colId));\n"
+        matrix_cs += "                ReadManyCells(cells, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static void LoadSingle(IEnumerable<{row_id}ID> rowIds, {col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadSingleAsync(rowIds, colId, preloadReferences, action); }).Invoke();\n\n"
+
+        matrix_cs += f"        /// <summary>複数行 × 単一列のセルだけをTableから解放する(row[], col。テーブル全体は解放しない)</summary>\n"
+        matrix_cs += f"        public static void UnloadSingle(IEnumerable<{row_id}ID> rowIds, {col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            foreach (var rowId in rowIds) UnloadOneCell(rowId, colId);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static async UniTask UnloadSingleAsync(IEnumerable<{row_id}ID> rowIds, {col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadSingle(rowIds, colId, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- セル: 単一行 × 複数列(row, col[]) ---
+        matrix_cs += f"        /// <summary>単一行 × 複数列のセルだけをシークして読み込む(row, col[])</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadSingleAsync({row_id}ID rowId, IEnumerable<{col_id}ID> colIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += f"                var cells = new List<({row_id}ID Row, {col_id}ID Col)>();\n"
+        matrix_cs += "                foreach (var colId in colIds) cells.Add((rowId, colId));\n"
+        matrix_cs += "                ReadManyCells(cells, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static void LoadSingle({row_id}ID rowId, IEnumerable<{col_id}ID> colIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadSingleAsync(rowId, colIds, preloadReferences, action); }).Invoke();\n\n"
+
+        matrix_cs += f"        /// <summary>単一行 × 複数列のセルだけをTableから解放する(row, col[]。テーブル全体は解放しない)</summary>\n"
+        matrix_cs += f"        public static void UnloadSingle({row_id}ID rowId, IEnumerable<{col_id}ID> colIds, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            foreach (var colId in colIds) UnloadOneCell(rowId, colId);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+
+        matrix_cs += f"        public static async UniTask UnloadSingleAsync({row_id}ID rowId, IEnumerable<{col_id}ID> colIds, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadSingle(rowId, colIds, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- 行単位(rowだけ・全列) ---
+        matrix_cs += f"        public static async UniTask LoadRowAsync({row_id}ID rowId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                ReadOneRow(rowId, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static void LoadRow({row_id}ID rowId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadRowAsync(rowId, preloadReferences, action); }).Invoke();\n\n"
+        matrix_cs += f"        public static void UnloadRow({row_id}ID rowId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadOneRow(rowId);\n            action?.Invoke();\n        }\n\n"
+        matrix_cs += f"        public static async UniTask UnloadRowAsync({row_id}ID rowId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadRow(rowId, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- 行単位(複数行・配列対応 row[]) ---
+        matrix_cs += f"        /// <summary>複数行(全列)だけをまとめてシークして読み込む(row[])</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadRowAsync(IEnumerable<{row_id}ID> rowIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                foreach (var rowId in rowIds) ReadOneRow(rowId, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static void LoadRow(IEnumerable<{row_id}ID> rowIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadRowAsync(rowIds, preloadReferences, action); }).Invoke();\n\n"
+        matrix_cs += f"        /// <summary>複数行だけをまとめてTableから解放する(row[]。テーブル全体は解放しない)</summary>\n"
+        matrix_cs += f"        public static void UnloadRow(IEnumerable<{row_id}ID> rowIds, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            foreach (var rowId in rowIds) UnloadOneRow(rowId);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static async UniTask UnloadRowAsync(IEnumerable<{row_id}ID> rowIds, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadRow(rowIds, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- 列単位(colだけ・全行) ---
+        matrix_cs += f"        public static async UniTask LoadColumnAsync({col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                ReadOneColumn(colId, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static void LoadColumn({col_id}ID colId, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadColumnAsync(colId, preloadReferences, action); }).Invoke();\n\n"
+        matrix_cs += f"        public static void UnloadColumn({col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadOneColumn(colId);\n            action?.Invoke();\n        }\n\n"
+        matrix_cs += f"        public static async UniTask UnloadColumnAsync({col_id}ID colId, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadColumn(colId, action);\n            await UniTask.CompletedTask;\n        }\n\n"
+
+        # --- 列単位(複数列・配列対応 col[]) ---
+        matrix_cs += f"        /// <summary>複数列(全行)だけをまとめてシークして読み込む(col[])</summary>\n"
+        matrix_cs += f"        public static async UniTask LoadColumnAsync(IEnumerable<{col_id}ID> colIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>\n"
+        matrix_cs += "            {\n"
+        matrix_cs += "                foreach (var colId in colIds) ReadOneColumn(colId, header, reader, preloadReferences);\n"
+        matrix_cs += "                action?.Invoke();\n"
+        matrix_cs += "                await UniTask.CompletedTask;\n"
+        matrix_cs += "            });\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static void LoadColumn(IEnumerable<{col_id}ID> colIds, bool preloadReferences = false, Action action = null)\n"
+        matrix_cs += "            => UniTask.Action(async () => { await LoadColumnAsync(colIds, preloadReferences, action); }).Invoke();\n\n"
+        matrix_cs += f"        /// <summary>複数列だけをまとめてTableから解放する(col[]。テーブル全体は解放しない)</summary>\n"
+        matrix_cs += f"        public static void UnloadColumn(IEnumerable<{col_id}ID> colIds, Action action = null)\n"
+        matrix_cs += "        {\n"
+        matrix_cs += "            foreach (var colId in colIds) UnloadOneColumn(colId);\n"
+        matrix_cs += "            action?.Invoke();\n"
+        matrix_cs += "        }\n\n"
+        matrix_cs += f"        public static async UniTask UnloadColumnAsync(IEnumerable<{col_id}ID> colIds, Action action = null)\n"
+        matrix_cs += "        {\n            UnloadColumn(colIds, action);\n            await UniTask.CompletedTask;\n        }\n"
+
+        matrix_cs += "    }\n}\n"
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixTable.cs"), 'w', encoding='utf-8') as f:
             f.write(matrix_cs)
         return jsonify({"message": f"C# generated for {name}"})
@@ -1043,7 +1312,12 @@ def set_class_data_matrix_id_tag(name):
                 if not any(t['name'] == tag for t in tag_list):
                     return jsonify({"error": f"タグ {tag} が見つかりません"}), 404
 
+        old_tag = target.get('tag')
         target['tag'] = tag
+        # タグを変更した場合、サブグループはそのタグに属さなくなるのでクリアする
+        # (旧タグと新タグを比較する。代入後のtargetと比較すると常にFalseになるので注意)
+        if target.get('subgroup') and old_tag != tag:
+            target['subgroup'] = None
         with open(list_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -1055,8 +1329,122 @@ def set_class_data_matrix_id_tag(name):
         return jsonify({"error": str(e)}), 500
 
 
+# ============================================================
+# ClassDataMatrixID サブグループ機能(タグ配下の第2階層)。class_data_idと同じ設計。
+# tags.json の各タグエントリに "subgroups": [名前, ...] を持たせる。
+# class_data_matrix_id_list.json の各エントリは "subgroup": 名前|null を持つ。
+# ============================================================
+@bp.route('/api/class-data-matrix-id-tags/<int:tag_id>/subgroups', methods=['GET', 'POST'])
+def manage_class_data_matrix_id_subgroups(tag_id):
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+
+    target = next((t for t in data if t['id'] == tag_id), None)
+    if not target:
+        return jsonify({"error": "指定されたタグが見つかりません"}), 404
+    target.setdefault('subgroups', [])
+
+    if request.method == 'GET':
+        return jsonify(target['subgroups']), 200
+
+    try:
+        sub_name = (request.get_json() or {}).get('name')
+        if not sub_name:
+            return jsonify({"error": "サブグループ名は必須です"}), 400
+        if sub_name in target['subgroups']:
+            return jsonify({"error": f"サブグループ {sub_name} はすでに存在します"}), 400
+
+        target['subgroups'].append(sub_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({"message": f"サブグループ {sub_name} を作成しました", "data": target['subgroups']}), 201
+    except Exception as e:
+        logger.error(f"Matrixサブグループ作成エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route('/api/class-data-matrix-id-tags/<int:tag_id>/subgroups/<path:sub_name>', methods=['DELETE'])
+def delete_class_data_matrix_id_subgroup(tag_id, sub_name):
+    """サブグループを削除する。所属していたエントリはタグ直下(subgroup=null)へ戻す"""
+    tags_dir = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    file_path = os.path.join(tags_dir, 'tags.json')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        target = next((t for t in data if t['id'] == tag_id), None)
+        if not target:
+            return jsonify({"error": "指定されたタグが見つかりません"}), 404
+        target.setdefault('subgroups', [])
+        if sub_name not in target['subgroups']:
+            return jsonify({"error": f"サブグループ {sub_name} が見つかりません"}), 404
+        target['subgroups'].remove(sub_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        list_path = os.path.join(tags_dir, 'class_data_matrix_id_list.json')
+        if os.path.exists(list_path):
+            with open(list_path, 'r', encoding='utf-8') as f:
+                list_data = json.load(f)
+            changed = False
+            for item in list_data:
+                if item.get('tag') == target['name'] and item.get('subgroup') == sub_name:
+                    item['subgroup'] = None
+                    changed = True
+            if changed:
+                with open(list_path, 'w', encoding='utf-8') as f:
+                    json.dump(list_data, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"message": f"サブグループ {sub_name} を削除しました"}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "tags.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"Matrixサブグループ削除エラー: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route('/api/class-data-matrix-id/<name>/subgroup', methods=['PUT'])
+def set_class_data_matrix_id_subgroup(name):
+    """特定のClassDataMatrixIDエントリにサブグループを割り当てる(subgroup=nullで解除)"""
+    list_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'class_data_matrix_id_list.json')
+    try:
+        subgroup = request.get_json().get('subgroup')
+
+        with open(list_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        target = next((item for item in data if item['name'] == name), None)
+        if not target:
+            return jsonify({"error": f"ClassDataMatrixID {name} が見つかりません"}), 404
+
+        if subgroup is not None:
+            if not target.get('tag'):
+                return jsonify({"error": "サブグループを設定するには先にタグを設定してください"}), 400
+            tags_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'tags.json')
+            with open(tags_path, 'r', encoding='utf-8') as f:
+                tag_list = json.load(f)
+            tag_entry = next((t for t in tag_list if t['name'] == target['tag']), None)
+            if not tag_entry or subgroup not in tag_entry.get('subgroups', []):
+                return jsonify({"error": f"サブグループ {subgroup} はタグ {target['tag']} に登録されていません"}), 404
+
+        target['subgroup'] = subgroup
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({"message": f"{name} にサブグループを設定しました", "data": target}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "class_data_matrix_id_list.jsonが見つかりません"}), 404
+    except Exception as e:
+        logger.error(f"Matrixサブグループ割り当てエラー {name}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 def generate_matrix_tags_load_script():
-    """tags.json をロードしてタグ名ごとにMatrixをロードするC#スクリプトを生成（ClassDataIDのTableIdUtilsと同等）"""
+    """tags.json / class_data_matrix_id_list.json をもとに、タグ単位・サブグループ単位の
+    一括ロード/アンロードutilと、MatrixTableID単体(複数まとめても可)のシングル
+    ロード/アンロードutilをまとめて MatrixTableIdUtils.cs に生成する（class_data_idのTableIdUtilsと同等）"""
     tags_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'tags.json')
     try:
         tags = []
@@ -1072,81 +1460,161 @@ def generate_matrix_tags_load_script():
             with open(list_path, 'r', encoding='utf-8') as f:
                 matrix_list = json.load(f)
 
-        dict_tags_load_write_script = {}
-
-        for tag in tags:
-            tag_name = tag["name"]
-            tagged_items = [
-                item["name"] for item in matrix_list
-                if item.get("tag") == tag_name
-            ]
-
+        # ------------------------------------------------------------
+        # タグ単位・サブグループ単位、共通の一括ロード/アンロードブロック生成ヘルパー
+        # (class_data_idのgenerate_tags_load_scriptのbuild_bulk_blockと同じ考え方)
+        # ------------------------------------------------------------
+        def build_bulk_block(suffix, item_names):
             lines = []
             indent = 0
 
             def add(text=""):
                 lines.append("    " * indent + text)
 
-            # -------------------------
-            # 非同期
-            # -------------------------
-            add(f"public static async UniTask LoadAsync{tag_name}(Action action = null)")
+            add(f"public static async UniTask LoadAsync{suffix}(Action action = null)")
             add("{")
             indent += 1
-
             add("await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
-
-            for item_name in tagged_items:
+            for item_name in item_names:
                 add(f"header.GetData<GameCore.Tables.{item_name}MatrixTable>(GameCore.Tables.MatrixTableID.{item_name}, reader);")
                 add("await UniTask.Yield();")
-
             add("action?.Invoke();")
             add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
-
             indent -= 1
             add("}")
             add()
 
-            # -------------------------
-            # 同期
-            # -------------------------
-            add(f"public static void Load{tag_name}(Action action = null)")
+            add(f"public static void Load{suffix}(Action action = null)")
             add("{")
             indent += 1
-
             add("UniTask.Action(async () =>")
             add("{")
             indent += 1
-
             add("await ClassDataMatrixIDCore.Instance.LoadClassDataAsync(async (reader, header) =>")
             add("{")
             indent += 1
-
-            for item_name in tagged_items:
+            for item_name in item_names:
                 add(f"header.GetData<GameCore.Tables.{item_name}MatrixTable>(GameCore.Tables.MatrixTableID.{item_name}, reader);")
-
             add("action?.Invoke();")
             add("await UniTask.CompletedTask;")
             indent -= 1
             add("});")
-
             indent -= 1
             add("}).Invoke();")
-
             indent -= 1
             add("}")
             add()
 
-            dict_tags_load_write_script[tag_name] = lines
+            # アンロード(タグ/サブグループ全体をまとめて解放)
+            add(f"public static void Unload{suffix}(Action action = null)")
+            add("{")
+            indent += 1
+            for item_name in item_names:
+                add(f"ClassDataMatrixIDCore.Instance.UnloadClassData(GameCore.Tables.MatrixTableID.{item_name});")
+            add("action?.Invoke();")
+            indent -= 1
+            add("}")
+            add()
 
-        append_str = "\n".join(
-            "\n".join(lines)
-            for lines in dict_tags_load_write_script.values()
-        )
+            return lines
+
+        all_blocks = []
+
+        for tag in tags:
+            tag_name = tag["name"]
+            tag_items = [
+                item["name"] for item in matrix_list
+                if item.get("tag") == tag_name
+            ]
+            # タグ全体(サブグループ問わず全部)
+            all_blocks += build_bulk_block(tag_name, tag_items)
+
+            # サブグループ単位
+            for sub_name in tag.get('subgroups', []):
+                sub_items = [
+                    item["name"] for item in matrix_list
+                    if item.get("tag") == tag_name and item.get("subgroup") == sub_name
+                ]
+                all_blocks += build_bulk_block(f"{tag_name}_{sub_name}", sub_items)
+
+        # ------------------------------------------------------------
+        # テーブル単体(MatrixTableID)のシングルロード/アンロード(配列対応)。
+        # テーブル丸ごとのロード/アンロードで、ClassDataMatrixIDCore.LoadClassDataSingleAsync/
+        # UnloadClassDataがMatrixTableRegistry経由でディスパッチする。
+        # (行・列・セル単位のシングルロードは各{Name}MatrixTable.cs側にLoadSingle/LoadRow/
+        #  LoadColumn等として個別に生成される)
+        # ------------------------------------------------------------
+        single_lines = []
+        indent = 0
+
+        def add_single(text=""):
+            single_lines.append("    " * indent + text)
+
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Tables.MatrixTableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("await ClassDataMatrixIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static async UniTask LoadSingleAsync(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var id in ids)")
+        add_single("{")
+        indent += 1
+        add_single("await ClassDataMatrixIDCore.Instance.LoadClassDataSingleAsync(id);")
+        add_single("await UniTask.Yield();")
+        indent -= 1
+        add_single("}")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void LoadSingle(GameCore.Tables.MatrixTableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(id, action); }).Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void LoadSingle(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("UniTask.Action(async () => { await LoadSingleAsync(ids, action); }).Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void UnloadSingle(GameCore.Tables.MatrixTableID id, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("ClassDataMatrixIDCore.Instance.UnloadClassData(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        add_single("public static void UnloadSingle(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
+        add_single("{")
+        indent += 1
+        add_single("foreach (var id in ids) ClassDataMatrixIDCore.Instance.UnloadClassData(id);")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+
+        all_blocks += single_lines
+
+        append_str = "\n".join(all_blocks)
 
         code_str = f"""
 using System;
@@ -1184,7 +1652,28 @@ def generate_base(data_dir):
         os.makedirs(os.path.join(data_dir, CLASS_DATA_MATRIX_ID))
     
     
-    # BaseTable.cs を生成
+    # MatrixTableRegistry.cs 生成
+    # MatrixTableID単位で「テーブル丸ごとのLoad/Unload」を行うためのディスパッチレジストリ。
+    # 各{name}MatrixTableの静的コンストラクタが自分自身を登録する。
+    if not os.path.exists(os.path.join(data_dir, CLASS_DATA_MATRIX_ID, "MatrixTableRegistry.cs")):
+        code_str = """
+    using System;
+    using System.IO;
+    using System.Collections.Generic;
+
+    namespace GameCore.Tables
+    {
+        public static class MatrixTableRegistry
+        {
+            public static readonly Dictionary<MatrixTableID, Action<ClassDataMatrixHeader, BinaryReader>> Loaders = new Dictionary<MatrixTableID, Action<ClassDataMatrixHeader, BinaryReader>>();
+            public static readonly Dictionary<MatrixTableID, Action> Unloaders = new Dictionary<MatrixTableID, Action>();
+        }
+    }
+    """
+        with open(os.path.join(data_dir, CLASS_DATA_MATRIX_ID, "MatrixTableRegistry.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str.strip() + "\n")
+
+    # BaseTableMatrix.cs を生成
     if not os.path.exists(os.path.join(data_dir, CLASS_DATA_MATRIX_ID, "BaseTableMatrix.cs")):
         code_str = """
     using System.IO;
@@ -1303,7 +1792,7 @@ def generate_base(data_dir):
                 if (cellIndex == null || !cellIndex.TryGetValue(colId, out var cellEntry)) return;
                 reader.BaseStream.Seek(tableBaseOffset + rowOffset + cellEntry.Offset, SeekOrigin.Begin);
                 var cell = new E();
-                cell.Read(reader);
+                cell.Read(Convert.ToInt32(rowId), Convert.ToInt32(colId), reader);
                 if (!Table.TryGetValue(rowId, out var rowDict))
                 {
                     rowDict = new Dictionary<TCol, E>();
@@ -1336,10 +1825,16 @@ def generate_base(data_dir):
                 }
             }
 
-            /// <summary>指定した複数のrowKey(行)だけをロードする。テーブル全体はロードしない。</summary>
+            /// <summary>指定した複数のrowKey(行)だけをロードする。テーブル全体はロードしない。
+            /// forceReloadIndexは最初の1件目でのみ適用する(2件目以降まで毎回全体を再読込しない)。</summary>
             public static void ReadManyRows(IEnumerable<TRow> rowIds, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
             {
-                foreach (var rowId in rowIds) ReadOneRow(rowId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+                bool first = true;
+                foreach (var rowId in rowIds)
+                {
+                    ReadOneRow(rowId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex && first);
+                    first = false;
+                }
             }
 
             /// <summary>指定した1つのrowKey(行全体)だけをアンロードする（テーブル全体は消さない）</summary>
@@ -1389,7 +1884,12 @@ def generate_base(data_dir):
             /// <summary>指定した複数のcolKey(列)だけをロードする。テーブル全体はロードしない。</summary>
             public static void ReadManyColumns(IEnumerable<TCol> colIds, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
             {
-                foreach (var colId in colIds) ReadOneColumn(colId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+                bool first = true;
+                foreach (var colId in colIds)
+                {
+                    ReadOneColumn(colId, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex && first);
+                    first = false;
+                }
             }
 
             /// <summary>指定した1つのcolKey(列全体)だけをアンロードする（テーブル全体は消さない）</summary>
@@ -1434,7 +1934,12 @@ def generate_base(data_dir):
             /// <summary>指定した複数のセル(rowKey×colKeyの組)だけをロードする。</summary>
             public static void ReadManyCells(IEnumerable<(TRow Row, TCol Col)> cells, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
             {
-                foreach (var cell in cells) ReadOneCell(cell.Row, cell.Col, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex);
+                bool first = true;
+                foreach (var cell in cells)
+                {
+                    ReadOneCell(cell.Row, cell.Col, header, reader, preloadReferences, idHeader, idReader, forceReloadIndex && first);
+                    first = false;
+                }
             }
 
             /// <summary>指定した1つのセルだけをアンロードする</summary>
@@ -1499,7 +2004,10 @@ def generate_base(data_dir):
         [System.Serializable]
         public abstract class BaseClassDataMatrixRow
         {
-            public abstract void Read(BinaryReader reader);
+            // rowId/colIdは列挙値をintにキャストした生の値。生成される{Name}MatrixRowでは
+            // これを使って型付きのRowId/ColIdプロパティ(TRowID/TColID)をReadの先頭でセットする
+            // (class_data_idのRow.Read(int id, reader)でtable_idを自動セットしているのと同じ考え方)。
+            public abstract void Read(int rowId, int colId, BinaryReader reader);
 
             /// <summary>
             /// このセルが参照している他のclass_data_idの(TableID, 参照先id)一覧。
@@ -1556,7 +2064,10 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
     public async UniTask LoadClassDataAsync(Func<BinaryReader, ClassDataMatrixHeader, UniTask> onLoaded, bool addressable = false)
     {
         if (cts == null) cts = this.GetCancellationTokenOnDestroy();
-        if (isLoaded) return;
+        // 注意: 以前はここに「if (isLoaded) return;」があり、2回目以降の呼び出しでonLoadedが
+        // 一切実行されない致命的なバグがあった(タグ一括ロード・行/列/セル単位のシングルロード等、
+        // 初回ロード以降に呼ばれるものが全て無反応になっていた)。ヘッダーはキャッシュ済みなら
+        // 再パースしないが、onLoadedは呼び出しごとに毎回必ず実行する。
 
         string path = addressable == true ? SupportFiles.MATRIX_ID_BIN_FILE : SupportFiles.ALL_MATRIX_ID_BIN;
 
@@ -1611,6 +2122,33 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
         catch (Exception ex)
         {
             Debug.LogError($"読み込み中にエラーが発生: {ex}");
+        }
+    }
+
+    /// <summary>指定したMatrixTableID 1件だけをロードする（テーブル丸ごと）。MatrixTableRegistry経由でディスパッチする。</summary>
+    public async UniTask LoadClassDataSingleAsync(MatrixTableID id, Action action = null, bool addressable = false)
+    {
+        await LoadClassDataAsync(async (reader, header) =>
+        {
+            if (MatrixTableRegistry.Loaders.TryGetValue(id, out var loader))
+            {
+                loader(header, reader);
+            }
+            else
+            {
+                Debug.LogWarning($"MatrixTableRegistryに{id}のローダーが登録されていません。");
+            }
+            action?.Invoke();
+            await UniTask.CompletedTask;
+        }, addressable);
+    }
+
+    /// <summary>指定したMatrixTableID 1件だけをアンロードする（テーブル丸ごと）。</summary>
+    public void UnloadClassData(MatrixTableID id)
+    {
+        if (MatrixTableRegistry.Unloaders.TryGetValue(id, out var unloader))
+        {
+            unloader();
         }
     }
 

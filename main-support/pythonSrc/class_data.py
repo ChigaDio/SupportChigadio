@@ -27,6 +27,7 @@ from pythonSrc.data_utils import (
     write_binary_field,
 )
 import pythonSrc.generators as generators
+import pythonSrc.class_data_id as class_data_id
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('class_data', __name__)
@@ -128,6 +129,16 @@ def manage_enum_detail(name):
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             logger.info(f"Saved enum data for {name}")
+
+            # 仕様書項目5(追記分): このEnumをprefill元として参照しているList/Dictionaryフィールドを
+            # 現在のメンバー構成に追従させる(class_data_id.py側でmatrix/scenarioへもカスケードする)。
+            try:
+                import pythonSrc.class_data_id as class_data_id_api
+                current_members = [item.get('property') for item in (data or []) if isinstance(item, dict) and item.get('property')]
+                class_data_id_api.sync_prefill_dependents(name, current_members)
+            except Exception as sync_err:
+                logger.error(f"prefill同期カスケードエラー(enum={name}): {str(sync_err)}")
+
             return jsonify({"message": f"{name}.json saved successfully"})
         except Exception as e:
             logger.error(f"Error saving enum {name}: {str(e)}")
@@ -144,6 +155,11 @@ def manage_enum_detail(name):
                 with open(enum_list_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 logger.info(f"Deleted enum: {name}")
+                try:
+                    import pythonSrc.class_data_id as class_data_id_api
+                    class_data_id_api.sync_prefill_dependents(name, [])
+                except Exception as sync_err:
+                    logger.error(f"prefill同期カスケードエラー(enum削除={name}): {str(sync_err)}")
                 return jsonify({"message": f"{name}.json deleted successfully"})
             return jsonify({"error": f"{name}.json not found"}), 404
         except Exception as e:
@@ -697,6 +713,7 @@ namespace GameCore.Tables
     }
 }
 """
+        class_data_id.generate_tags_load_script()
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(cs_content)
         return jsonify({"message": "C# header generated successfully"})

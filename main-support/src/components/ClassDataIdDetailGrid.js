@@ -101,7 +101,7 @@ export function NumericTextField({ value, onChange, allowDecimal = false, readOn
  *   ことで、親側の反映タイミングに関わらずタイピングの見た目は
  *   常に即座に追従する。
  */
-export function StringTextField({ value, onChange, readOnly, ...props }) {
+export function StringTextField({ value, onChange, readOnly, multiline = true, ...props }) {
   const [text, setText] = useState(() => value ?? '');
   const focusedRef = React.useRef(false);
 
@@ -116,6 +116,11 @@ export function StringTextField({ value, onChange, readOnly, ...props }) {
     <TextField
       {...props}
       value={text}
+      // multiline未指定時はデフォルトでtrueにする。以前はEnterで\nを手動挿入していても
+      // 単一行の<input>ではそもそも改行を表示できないバグがあった(仕様書項目4と同種)。
+      multiline={multiline}
+      minRows={props.minRows ?? 1}
+      maxRows={props.maxRows ?? 8}
       inputProps={{ readOnly, ...(props.inputProps || {}) }}
       onFocus={(e) => { focusedRef.current = true; if (props.onFocus) props.onFocus(e); }}
       onChange={(e) => {
@@ -223,7 +228,7 @@ function formatDictKey(key, keyType) {
 // ============================================================
 const OPTIONS_NUMERIC_TYPES = ['int', 'float', 'double', 'byte', 'short', 'long', 'decimal', 'uint'];
 
-function NumericOptionsEditor({ options, onChange }) {
+export function NumericOptionsEditor({ options, onChange }) {
   return (
     <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
       <TextField
@@ -240,7 +245,7 @@ function NumericOptionsEditor({ options, onChange }) {
   );
 }
 
-function BitOptionsEditor({ options, onChange, enumNames, classDataIdNames, customClassDataIdNames }) {
+export function BitOptionsEditor({ options, onChange, enumNames, classDataIdNames, customClassDataIdNames }) {
   const sizeMode = options.sizeMode || 'manual';
   const sourceNames = sizeMode === 'enum' ? enumNames
     : sizeMode === 'classDataId' ? classDataIdNames
@@ -373,7 +378,45 @@ function BezierOptionsEditor({ options, onChange }) {
   );
 }
 
-function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeOptions, enumNames, classDataIdNames, customClassDataIdNames }) {
+export function ArrayOptionsEditor({ options, onChange, enumNames, classDataIdNames, customClassDataIdNames }) {
+  // 仕様書項目5: List(-1)型カラムに「Enum/ClassDataIDのメンバー数ぶんデフォルトを事前追加する」オプション。
+  // 有効化すると要素数はソース側のメンバー数に自動追従し(手動追加削除は不可)、
+  // 各要素の編集時にどのIDに対応する要素かをラベル表示する。
+  const sourceNames = [...enumNames, ...classDataIdNames, ...customClassDataIdNames];
+  const enabled = !!options.prefillSourceName;
+
+  return (
+    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={enabled}
+            onChange={(e) => onChange({ ...options, prefillSourceName: e.target.checked ? (options.prefillSourceName || sourceNames[0] || null) : null })}
+          />
+        }
+        label="Enum/ClassDataIDのメンバー数ぶんデフォルトを事前追加する"
+      />
+      {enabled && (
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: 220 }}
+          options={sourceNames}
+          value={options.prefillSourceName || null}
+          onChange={(e, v) => onChange({ ...options, prefillSourceName: v })}
+          renderInput={(params) => <TextField {...params} label="参照元(Enum/ClassDataID)" />}
+        />
+      )}
+      {enabled && (
+        <Typography variant="caption" color="text.secondary" sx={{ width: '100%' }}>
+          有効化すると要素数は参照元のメンバー数に固定され、手動での追加・削除はできなくなります。
+          参照元にメンバーが追加/削除/リネームされた場合、既存レコードのデータも保存時に自動で追従します。
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+export function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeOptions, enumNames, classDataIdNames, customClassDataIdNames }) {
   const keyType = options.keyType || 'int';
   const valueType = options.valueType || 'int';
   const valueArraySize = options.valueArraySize ?? 0;
@@ -414,6 +457,26 @@ function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeO
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
         キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）です。値はどの型でも指定できます。
       </Typography>
+
+      {keyType !== 'int' && (
+        <Box sx={{ mt: 1 }}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={!!options.prefillKeys}
+                onChange={(e) => onChange({ ...options, prefillKeys: e.target.checked })}
+              />
+            }
+            label={`${keyType} の全メンバーをキーとしてデフォルトで事前追加する`}
+          />
+          {options.prefillKeys && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              有効化するとキーの手動追加・削除はできなくなり、{keyType}の全メンバー分のエントリが常に維持されます。
+              {keyType}にメンバーが追加/削除/リネームされた場合、既存レコードのデータも保存時に自動で追従します。
+            </Typography>
+          )}
+        </Box>
+      )}
 
       {(valueIsNumeric || valueType === 'bit' || valueType === 'bezier') && (
         <Box sx={{ mt: 1.5, p: 1, border: '1px dashed #ccc', borderRadius: 1 }}>
@@ -662,9 +725,30 @@ export function renderMiniPreviewTable(value, type, classSchemas, options) {
 // ============================================================
 export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, options, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
   const arr = Array.isArray(value) ? value : [];
-  // isDynamic(arraySize=-1): 自由に追加削除可
-  // arraySize>0: 固定長（追加削除ボタン非表示、長さ固定）
-  const isFixed = !isDynamic && arraySize > 0;
+
+  // 仕様書項目5: prefillSourceNameが設定されている場合、要素数と各要素のラベルを
+  // 参照元(Enum/ClassDataID)のメンバーから決定する。ソース側の増減/リネームには
+  // useEffectで自動追従する(class_data_idと同様、保存前に常に最新のメンバー構成へ揃える)。
+  const prefillSourceName = options?.prefillSourceName || null;
+  const prefillMembers = prefillSourceName
+    ? (enumValues[prefillSourceName] || []).map(v => v['property'] || v['enum_property'] || v)
+    : null;
+  const isPrefilled = !!prefillMembers;
+
+  // isDynamic(arraySize=-1)でprefillが無効な場合のみ自由に追加削除可
+  const isFixed = isPrefilled || (!isDynamic && arraySize > 0);
+
+  // prefill有効時: 現在の値配列の長さを参照元メンバー数に自動的に揃える(位置対応)。
+  // 個数が一致していれば何もしない(既存の入力値を保持する)。個数が変わった時だけ
+  // 末尾を切り詰める/デフォルト値で埋める。リネーム時の値の追従(同じメンバーの値を
+  // 保持する)はバックエンド側(保存時の同期処理)で安定キーを使って行う。
+  useEffect(() => {
+    if (!isPrefilled || readOnly) return;
+    if (arr.length === prefillMembers.length) return;
+    const next = Array.from({ length: prefillMembers.length }, (_, i) => (i < arr.length ? arr[i] : getDefaultValueForType(baseType, enumValues, classSchemas)));
+    onChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPrefilled, prefillSourceName, prefillMembers ? prefillMembers.length : 0]);
 
   const handleAdd = () => {
     if (readOnly || isFixed) return;
@@ -687,26 +771,34 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
     onChange(next);
   };
 
-  // 固定長の場合、表示する要素数を arraySize に合わせる
+  // 固定長(prefillもしくは固定配列)の場合、表示する要素数を合わせる
+  const effectiveSize = isPrefilled ? prefillMembers.length : arraySize;
   const displayArr = isFixed
-    ? Array.from({ length: arraySize }, (_, i) => arr[i] ?? getDefaultValueForType(baseType, enumValues, classSchemas))
+    ? Array.from({ length: effectiveSize }, (_, i) => arr[i] ?? getDefaultValueForType(baseType, enumValues, classSchemas))
     : arr;
 
   return (
     <Box sx={{ width: '100%' }}>
-      {isFixed && (
+      {isPrefilled && (
+        <Typography variant="caption" color="primary" sx={{ mb: 0.5, display: 'block' }}>
+          {prefillSourceName} のメンバーから自動生成 [{effectiveSize}件]（手動追加削除不可）
+        </Typography>
+      )}
+      {!isPrefilled && !isDynamic && arraySize > 0 && (
         <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>
           固定配列 [{arraySize}]
         </Typography>
       )}
-      {!isFixed && isDynamic && (
+      {!isPrefilled && !isFixed && isDynamic && (
         <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>
           動的配列 (List) [{arr.length}件]
         </Typography>
       )}
       {displayArr.map((item, index) => (
-        <Box key={index} sx={{ display: 'flex', alignItems: 'center', mb: 0.5, gap: 1 }}>
-          <Typography variant="caption" sx={{ minWidth: 20, color: 'text.secondary' }}>[{index}]</Typography>
+        <Box key={isPrefilled ? prefillMembers[index] : index} sx={{ display: 'flex', alignItems: 'center', mb: 0.5, gap: 1 }}>
+          <Typography variant="caption" sx={{ minWidth: isPrefilled ? 90 : 20, color: 'text.secondary' }}>
+            {isPrefilled ? prefillMembers[index] : `[${index}]`}
+          </Typography>
           <Box sx={{ flex: 1 }}>
             <SingleValueEditor
               value={item}
@@ -1172,6 +1264,39 @@ function BezierFieldEditor({ value, options, onChange, readOnly }) {
 // キーは数値のみ（int / Enum / ClassDataID / CustomClassDataID）、値は任意の型
 // 値データ形式: { entries: [{ key, value }, ...] }
 // ============================================================
+// ============================================================
+// SearchableEnumSelect: Enum/ClassDataID等、選択肢が多くなりがちな値の
+// ドロップダウンを文字検索付きにするための共通コンポーネント(仕様書項目3)。
+// MUIのAutocompleteをベースに、既存のSelect+MenuItemと同じ
+// value/onChange(選択されたvalue文字列を渡す)のインターフェースを維持する。
+// ============================================================
+function SearchableEnumSelect({ value, options, onChange, readOnly, size = 'small', fullWidth, sx, label, minWidth }) {
+  const selected = options.find(o => o.value === value) || null;
+  return (
+    <Autocomplete
+      size={size}
+      fullWidth={fullWidth}
+      sx={{ minWidth, ...sx }}
+      options={options}
+      disabled={readOnly}
+      value={selected}
+      onChange={(e, newVal) => {
+        if (readOnly) return;
+        onChange(newVal ? newVal.value : (options[0]?.value ?? ''));
+      }}
+      getOptionLabel={(opt) => (opt && opt.label) || ''}
+      isOptionEqualToValue={(opt, val) => opt?.value === val?.value}
+      renderInput={(params) => <TextField {...params} label={label} size={size} />}
+      // 選択肢は数が多くなりがちなので、入力途中の文字列で部分一致フィルタする
+      filterOptions={(opts, state) => {
+        const input = state.inputValue.trim().toLowerCase();
+        if (!input) return opts;
+        return opts.filter(o => o.label.toLowerCase().includes(input));
+      }}
+    />
+  );
+}
+
 function DictionaryKeyEditor({ keyValue, keyType, enumValues, onChange, readOnly }) {
   if ((keyType || 'int').toLowerCase() === 'int') {
     return (
@@ -1185,22 +1310,23 @@ function DictionaryKeyEditor({ keyValue, keyType, enumValues, onChange, readOnly
       />
     );
   }
-  // enum / classDataID / customClassDataID キー: "Type.Value" 形式のセレクト
+  // enum / classDataID / customClassDataID キー: "Type.Value" 形式のセレクト（文字検索対応）
   const opts = (enumValues && enumValues[keyType]) || [];
+  const options = [
+    { value: `${keyType}ID.None`, label: 'None' },
+    ...opts.map(v => {
+      const k = v['property'] || v['enum_property'] || v;
+      return { value: `${keyType}ID.${k}`, label: k };
+    })
+  ];
   return (
-    <FormControl size="small" sx={{ minWidth: 160 }}>
-      <Select
-        value={keyValue ?? `${keyType}ID.None`}
-        onChange={(e) => !readOnly && onChange(e.target.value)}
-        inputProps={{ readOnly }}
-      >
-        <MenuItem value={`${keyType}ID.None`}>None</MenuItem>
-        {opts.map(v => {
-          const k = v['property'] || v['enum_property'] || v;
-          return <MenuItem key={k} value={`${keyType}ID.${k}`}>{k}</MenuItem>;
-        })}
-      </Select>
-    </FormControl>
+    <SearchableEnumSelect
+      value={keyValue ?? `${keyType}ID.None`}
+      options={options}
+      onChange={onChange}
+      readOnly={readOnly}
+      minWidth={160}
+    />
   );
 }
 
@@ -1213,6 +1339,10 @@ function DictionaryFieldEditor({ value, options, enumValues, classSchemas, onCha
   const valueOptions = options?.valueOptions || {};
   const entries = Array.isArray(value?.entries) ? value.entries : [];
 
+  // 仕様書追記項目: キーがEnum/ClassDataIDの場合、全メンバー分のエントリを自動で事前追加するオプション
+  const prefillKeys = !!options?.prefillKeys && keyType !== 'int';
+  const keyMembers = prefillKeys ? (enumValues[keyType] || []).map(v => v['property'] || v['enum_property'] || v) : null;
+
   const updateEntries = (next) => { if (!readOnly) onChange({ entries: next }); };
   const updateKey = (index, newKey) => updateEntries(entries.map((e, i) => (i === index ? { ...e, key: newKey } : e)));
   const updateValue = (index, newVal) => updateEntries(entries.map((e, i) => (i === index ? { ...e, value: newVal } : e)));
@@ -1223,13 +1353,37 @@ function DictionaryFieldEditor({ value, options, enumValues, classSchemas, onCha
     updateEntries([...entries, { key: defaultKey, value: defaultVal }]);
   };
 
+  // prefillKeys有効時: キーMemberの構成に合わせてエントリ集合を自動的に揃える。
+  // 既存エントリはキー文字列("TypeID.Member")で対応付けて値を保持し、
+  // 増えたメンバーはデフォルト値で新規追加、消えたメンバーのエントリは除去する。
+  useEffect(() => {
+    if (!prefillKeys || readOnly) return;
+    const wantedKeys = keyMembers.map(m => `${keyType}ID.${m}`);
+    const currentByKey = {};
+    entries.forEach(e => { currentByKey[e.key] = e; });
+    const currentKeySet = new Set(entries.map(e => e.key));
+    const wantedKeySet = new Set(wantedKeys);
+    const sameSet = currentKeySet.size === wantedKeySet.size && [...wantedKeySet].every(k => currentKeySet.has(k));
+    const sameOrder = sameSet && entries.every((e, i) => e.key === wantedKeys[i]);
+    if (sameOrder) return;
+    const next = wantedKeys.map(k => currentByKey[k] || {
+      key: k,
+      value: valueIsArray ? [] : getDefaultValueForType(valueType, enumValues, classSchemas),
+    });
+    updateEntries(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillKeys, keyType, keyMembers ? keyMembers.join(',') : '']);
+
   return (
     <Box sx={{ border: '1px solid #e0e0e0', borderRadius: 1, p: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color={prefillKeys ? 'primary' : 'text.secondary'}>
           {entries.length}件 / Dictionary&lt;{keyType}, {valueType}{valueIsArray ? '[]' : ''}&gt;
+          {prefillKeys && `（${keyType}の全メンバーから自動生成・手動追加削除不可）`}
         </Typography>
-        <Button size="small" startIcon={<AddIcon />} onClick={addEntry} disabled={readOnly}>エントリを追加</Button>
+        {!prefillKeys && (
+          <Button size="small" startIcon={<AddIcon />} onClick={addEntry} disabled={readOnly}>エントリを追加</Button>
+        )}
       </Box>
       {entries.length === 0 && (
         <Typography variant="caption" color="text.disabled" sx={{ display: 'block', py: 1, textAlign: 'center' }}>
@@ -1245,7 +1399,7 @@ function DictionaryFieldEditor({ value, options, enumValues, classSchemas, onCha
                 keyType={keyType}
                 enumValues={enumValues}
                 onChange={(v) => updateKey(i, v)}
-                readOnly={readOnly}
+                readOnly={readOnly || prefillKeys}
               />
             </Box>
             <Typography variant="caption" sx={{ pt: 1 }}>:</Typography>
@@ -1274,9 +1428,11 @@ function DictionaryFieldEditor({ value, options, enumValues, classSchemas, onCha
                 />
               )}
             </Box>
-            <IconButton size="small" color="error" disabled={readOnly} onClick={() => removeEntry(i)}>
-              <DeleteIcon fontSize="small" />
-            </IconButton>
+            {!prefillKeys && (
+              <IconButton size="small" color="error" disabled={readOnly} onClick={() => removeEntry(i)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            )}
           </Box>
         ))}
       </Box>
@@ -1440,7 +1596,7 @@ export function SingleValueEditor({ value, type, enumValues, classSchemas, optio
     );
   }
 
-  // enum / classDataID型（セレクトボックス）
+  // enum / classDataID型（文字検索付きセレクト）
   if (enumValues && enumValues[type]) {
     const options = [
       { value: `${type}ID.None`, label: 'None' },
@@ -1450,17 +1606,13 @@ export function SingleValueEditor({ value, type, enumValues, classSchemas, optio
       })
     ];
     return (
-      <FormControl size="small" fullWidth>
-        <Select
-          value={value ?? `${type}ID.None`}
-          onChange={(e) => !readOnly && onChange(e.target.value)}
-          inputProps={{ readOnly }}
-        >
-          {options.map(opt => (
-            <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <SearchableEnumSelect
+        value={value ?? `${type}ID.None`}
+        options={options}
+        onChange={onChange}
+        readOnly={readOnly}
+        fullWidth
+      />
     );
   }
 
@@ -2233,6 +2385,7 @@ function ClassDataIdDetailGrid() {
 
   // ★「新しいカラムを追加」ダイアログの型オプション用
   const isNewColNumeric = OPTIONS_NUMERIC_TYPES.includes(newColType);
+  const isNewColArray = newColType.endsWith('[]');
   const newColKeyTypeOptions = ['int', ...enumNames, ...classDataIdNames, ...customClassDataIdNames];
   const newColValueTypeOptions = typeOptions.filter(t => t !== 'dictionary' && !t.endsWith('[]'));
   const handleNewColTypeChange = (t) => {
@@ -2364,11 +2517,20 @@ function ClassDataIdDetailGrid() {
             onChange={(e) => setNewColDescription(e.target.value)}
           />
 
-          {(isNewColNumeric || ['bit', 'color', 'bezier', 'dictionary'].includes(newColType)) && (
+          {(isNewColNumeric || isNewColArray || ['bit', 'color', 'bezier', 'dictionary'].includes(newColType)) && (
             <>
               <Box sx={{ borderTop: '1px solid #eee', mt: 2, pt: 1 }}>
                 <Typography variant="subtitle2">型オプション</Typography>
                 {isNewColNumeric && <NumericOptionsEditor options={newColOptions} onChange={setNewColOptions} />}
+                {isNewColArray && (
+                  <ArrayOptionsEditor
+                    options={newColOptions}
+                    onChange={setNewColOptions}
+                    enumNames={enumNames}
+                    classDataIdNames={classDataIdNames}
+                    customClassDataIdNames={customClassDataIdNames}
+                  />
+                )}
                 {newColType === 'bit' && (
                   <BitOptionsEditor
                     options={newColOptions}

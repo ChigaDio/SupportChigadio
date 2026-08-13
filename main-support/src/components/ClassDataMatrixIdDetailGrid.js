@@ -21,6 +21,10 @@ import {
   ArrayFieldEditor,
   ClassFieldEditor,
   formatPreviewValue,
+  NumericOptionsEditor,
+  BitOptionsEditor,
+  ArrayOptionsEditor,
+  DictionaryOptionsEditor,
 } from './ClassDataIdDetailGrid';
 
 const theme = createTheme({
@@ -107,6 +111,9 @@ function ClassDataMatrixIdDetailGrid() {
   // ★ 追加: classDataのスキーマを保持（ネスト入力・配列対応のため）
   const [classSchemas, setClassSchemas] = useState({});
   const [classList, setClassList] = useState([]);
+  const [enumNames, setEnumNames] = useState([]);
+  const [classDataIdNames, setClassDataIdNames] = useState([]);
+  const [customClassDataIdNames, setCustomClassDataIdNames] = useState([]);
   // ★ 追加: タグ表示用（一覧側で管理、ここでは読み取りのみ）
   const [currentTag, setCurrentTag] = useState(null);
   const [rowKeys, setRowKeys] = useState([]);
@@ -117,6 +124,7 @@ function ClassDataMatrixIdDetailGrid() {
   const [newFieldType, setNewFieldType] = useState('');
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldDescription, setNewFieldDescription] = useState('');
+  const [newFieldOptions, setNewFieldOptions] = useState({});
   const [fieldToDelete, setFieldToDelete] = useState('');
   const [openImportCsv, setOpenImportCsv] = useState(false);
   const [openCellEditor, setOpenCellEditor] = useState(false);
@@ -297,6 +305,10 @@ function ClassDataMatrixIdDetailGrid() {
 
       // ★ classDataの一覧を保持（配列型判定・ネスト編集に使う）
       setClassList(classTypes);
+      // ★ prefillオプション等のソース選択用に名前一覧を保持
+      setEnumNames(enumTypes);
+      setClassDataIdNames(classIdTypes);
+      setCustomClassDataIdNames(customClassIdTypes);
 
       // ★ 配列型のオプションを追加（"int[]" のような表記で動的配列を選べるように）
       const allBaseTypes = [...basicTypes, ...unityTypes, ...customTypes, ...enumTypes, ...classTypes, ...classIdTypes, ...customClassTypes, ...customClassIdTypes];
@@ -395,7 +407,7 @@ function ClassDataMatrixIdDetailGrid() {
   const handleAddField = () => {
     if (!newFieldType || !newFieldName) return alert('型と名前は必須です');
     if (data.fields.some(f => f.name === newFieldName)) return alert('名前がすでに存在します');
-    const newFields = [...data.fields, { type: newFieldType, name: newFieldName, description: newFieldDescription }];
+    const newFields = [...data.fields, { type: newFieldType, name: newFieldName, description: newFieldDescription, options: newFieldOptions }];
     const newData = { ...data.data };
     rowKeys.forEach(rk => {
       colKeys.forEach(ck => {
@@ -407,6 +419,7 @@ function ClassDataMatrixIdDetailGrid() {
     setNewFieldType('');
     setNewFieldName('');
     setNewFieldDescription('');
+    setNewFieldOptions({});
     setOpenAddField(false);
   };
 
@@ -791,7 +804,7 @@ function ClassDataMatrixIdDetailGrid() {
             <Autocomplete
               options={typeOptions}
               value={newFieldType}
-              onChange={(e, newValue) => setNewFieldType(newValue || '')}
+              onChange={(e, newValue) => { setNewFieldType(newValue || ''); setNewFieldOptions({}); }}
               renderInput={(params) => <TextField {...params} label="型" margin="dense" fullWidth variant="outlined" />}
             />
             <TextField
@@ -810,6 +823,46 @@ function ClassDataMatrixIdDetailGrid() {
               onChange={(e) => setNewFieldDescription(e.target.value)}
               variant="outlined"
             />
+            {(() => {
+              const isNumeric = ['int', 'uint', 'float', 'double'].includes(newFieldType);
+              const isArray = newFieldType.endsWith('[]');
+              if (!(isNumeric || isArray || newFieldType === 'bit' || newFieldType === 'dictionary')) return null;
+              return (
+                <Box sx={{ borderTop: '1px solid #eee', mt: 2, pt: 1 }}>
+                  <Typography variant="subtitle2">型オプション</Typography>
+                  {isNumeric && <NumericOptionsEditor options={newFieldOptions} onChange={setNewFieldOptions} />}
+                  {isArray && (
+                    <ArrayOptionsEditor
+                      options={newFieldOptions}
+                      onChange={setNewFieldOptions}
+                      enumNames={enumNames}
+                      classDataIdNames={classDataIdNames}
+                      customClassDataIdNames={customClassDataIdNames}
+                    />
+                  )}
+                  {newFieldType === 'bit' && (
+                    <BitOptionsEditor
+                      options={newFieldOptions}
+                      onChange={setNewFieldOptions}
+                      enumNames={enumNames}
+                      classDataIdNames={classDataIdNames}
+                      customClassDataIdNames={customClassDataIdNames}
+                    />
+                  )}
+                  {newFieldType === 'dictionary' && (
+                    <DictionaryOptionsEditor
+                      options={newFieldOptions}
+                      onChange={setNewFieldOptions}
+                      keyTypeOptions={['int', ...enumNames, ...classDataIdNames, ...customClassDataIdNames]}
+                      valueTypeOptions={typeOptions}
+                      enumNames={enumNames}
+                      classDataIdNames={classDataIdNames}
+                      customClassDataIdNames={customClassDataIdNames}
+                    />
+                  )}
+                </Box>
+              );
+            })()}
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setOpenAddField(false)} color="secondary">キャンセル</Button>
