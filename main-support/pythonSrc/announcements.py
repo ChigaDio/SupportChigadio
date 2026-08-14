@@ -41,9 +41,27 @@ def _read(ann_id):
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     if content.startswith(META_MARK):
-        end = content.index(META_MARK_END) + len(META_MARK_END)
-        meta = json.loads(content[len(META_MARK):end - len(META_MARK_END)])
-        body = content[end:].lstrip("\n")
+        # メタ情報は常に1行目のみに書き込まれる（_write参照）。
+        # 以前は「本文全体から最初に見つかった META_MARK_END("-->") まで」を
+        # メタ情報として扱っていたため、タイトルなどメタの値自体に "-->" と
+        # いう文字列（矢印表記などでありがち）が含まれると、そこで誤って
+        # JSON文字列が途中で打ち切られ、JSONDecodeErrorでお知らせ自体が
+        # 読み込めなくなる不具合があった。
+        # メタ行は必ず1行目にあり、末尾は必ず META_MARK_END で終わる
+        # （_writeが常にその形式で書き込むため）。よって「本文中を検索する」
+        # のではなく「1行目の末尾から固定長で切り取る」方式にすることで、
+        # メタの値に "-->" が何度含まれても安全にパースできるようにする。
+        first_newline = content.find("\n")
+        meta_line = content if first_newline == -1 else content[:first_newline]
+        body = "" if first_newline == -1 else content[first_newline + 1:]
+        if meta_line.endswith(META_MARK_END):
+            meta_json = meta_line[len(META_MARK):-len(META_MARK_END)]
+            try:
+                meta = json.loads(meta_json)
+            except json.JSONDecodeError:
+                meta = {"id": ann_id, "title": ann_id}
+        else:
+            meta = {"id": ann_id, "title": ann_id}
     else:
         meta = {"id": ann_id, "title": ann_id}
         body = content

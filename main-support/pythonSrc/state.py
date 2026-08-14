@@ -5,7 +5,8 @@ pythonSrc/state.py
 State（ステートマシン）管理API。
 - /api/state-data, /api/state-data/<name>, /api/generate-state/<name>
 - ステート/ブランチ/コントロールクラスのC#生成ヘルパー群
-- /api/open-code/<state_name>/<node_label>（VSCode/Visual Studioでコードを開く）
+- /api/open-code/<state_name>/<node_label>（対応する.csファイルの絶対パスを返す。
+  実際にVSCode/Visual Studioで開く処理はクライアント側で行う）
 
 app.py から `pythonSrc.state.register(app, DATA_DIR)` を呼び出して有効化する。
 """
@@ -13,10 +14,8 @@ import json
 import logging
 import os
 import re
-import subprocess
 from math import isnan, isfinite
 
-import psutil
 from flask import Blueprint, jsonify, request
 
 from pythonSrc.constants import STATE_DATA, TYPE_MAP
@@ -2578,61 +2577,20 @@ def generate_control_classes_javascript(file_path, name, json_data):
 
 @bp.route('/api/open-code/<state_name>/<node_label>', methods=['GET'])
 def open_code(state_name, node_label):
+    """指定ノードに対応する State クラスの.csファイルパスを返す。
+
+    以前はここでサーバー側 subprocess.Popen により VSCode/Visual Studio を
+    直接起動していたが、Flaskサーバーとブラウザを操作しているPCが別マシンの
+    場合にエディタが開けない（サーバー側の画面に開いてしまう）問題があった。
+    そのため、パス解決のみを行い、実際にエディタを開く処理はクライアント側
+    （ブラウザ）で行う方式に変更した。フロントエンドはこのパスを使って
+    vscode://file/ のカスタムURLスキームで開くか、Visual Studio用に
+    パスをコピーする。
+    """
     cs_path = os.path.join(DATA_DIR, STATE_DATA, state_name, "States", f"{state_name}{node_label}State.cs")
     if not os.path.exists(cs_path):
         return jsonify({"error": "File not found"}), 404
-
-    # ==================== VSCode優先 ====================
-    vs_code_running = False
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'] and proc.info['name'].lower() in ('code.exe', 'code'):
-            vs_code_running = True
-            break
-
-    if vs_code_running:
-        try:
-            # `code` コマンドがPATHにある前提（インストール時に「Add to PATH」を推奨）
-            subprocess.Popen(['code', cs_path], shell=True)
-            return jsonify({"message": "Opened in VS Code"})
-        except FileNotFoundError:
-            # codeコマンドが見つからない場合はVSにフォールバック
-            pass
-        except Exception as e:
-            return jsonify({"error": f"VSCode error: {str(e)}"}), 500
-
-    # ==================== Visual Studio 2022 フォールバック ====================
-    possible_vs_paths = [
-        r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
-        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
-        r"C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
-        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\Common7\IDE\devenv.exe",
-        r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
-        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe"
-    ]
-
-    vs_path = None
-    for path in possible_vs_paths:
-        if os.path.exists(path):
-            vs_path = path
-            break
-
-    if not vs_path:
-        return jsonify({"error": "Visual Studio 2022 not found on system"}), 404
-
-    # VSが起動しているかチェック（任意）
-    vs_running = any(
-        proc.info['name'] and proc.info['name'].lower() == 'devenv.exe'
-        for proc in psutil.process_iter(['name'])
-    )
-
-    if not vs_running:
-        return jsonify({"error": "Visual Studio 2022 is not currently running"}), 400
-
-    try:
-        subprocess.Popen([vs_path, "/edit", cs_path], shell=True)
-        return jsonify({"message": "Opened in Visual Studio"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"csPath": cs_path})
 # =================================================
 
 

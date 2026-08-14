@@ -34,6 +34,9 @@ import BehaviorDetailGrid from './components/BehaviorDetailGrid';
 import AnimatorGrid from './components/AnimatorDataGrid'
 import AnimatorDataDetailGrid from './components/AnimatorDataDetailGrid';
 import SaveDataGrid from './components/SaveDataGrid';
+import CsprojSyncGrid from './components/CsprojSyncGrid';
+import ActivityLogGrid from './components/ActivityLogGrid';
+import WorkspaceUploadGrid from './components/WorkspaceUploadGrid';
 
 import Sound from './assets/sound';
 import Texture from './assets/texture';
@@ -120,6 +123,9 @@ function AppContent() {
           break;
         case 'save-data':
           navigate('/save-data');
+          break;
+        case 'csproj-sync':
+          navigate('/csproj-sync');
           break;
         default:
           navigate('/enum-id'); // GenerateTool default
@@ -237,12 +243,15 @@ function AppContent() {
             <Route path="/animator/:name" element={<AnimatorDataDetailGrid />} />
             <Route path="/scene" element={<Scene />} />
             <Route path="/save-data" element={<SaveDataGrid />} />
+            <Route path="/csproj-sync" element={<CsprojSyncGrid />} />
             <Route path="/log" element={<DbgLog />} />
             <Route path="/command" element={<DbgCommand />} />
 
             {/* --- 追加ページ --- */}
             <Route path="/mypage" element={<MyPage />} />
             <Route path="/workspace" element={<Workspace />} />
+            <Route path="/activity-log" element={<ActivityLogGrid />} />
+            <Route path="/workspace/upload" element={<WorkspaceUploadGrid />} />
             <Route path="/announcements" element={<AnnouncementList />} />
             <Route path="/announcements/new" element={<AnnouncementEditor />} />
             <Route path="/announcements/:id" element={<AnnouncementDetail />} />

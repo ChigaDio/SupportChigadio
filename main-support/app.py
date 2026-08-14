@@ -60,6 +60,9 @@ import pythonSrc.versioning as versioning
 import pythonSrc.announcements as announcements
 import pythonSrc.workspace_routes as workspace_routes
 import pythonSrc.download as download_module
+import pythonSrc.csproj_sync as csproj_sync
+import pythonSrc.file_locator as file_locator
+import pythonSrc.upload as upload_module
 
 # `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
 # 引数なしの通常起動では、これまで通り誰でも編集可能。
@@ -3147,6 +3150,9 @@ if __name__ == '__main__':
     announcements.register(app, META_DIR)
     workspace_routes.register(app, DATA_DIR, SERVER_MODE)
     download_module.register(app, DATA_DIR)
+    csproj_sync.register(app, DATA_DIR)
+    file_locator.register(app, DATA_DIR)
+    upload_module.register(app, DATA_DIR)
 
     # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）
     versioning.register(app, DATA_DIR, BASE_DIR, SERVER_MODE)

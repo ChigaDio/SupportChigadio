@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 const NO_TAG = '__none__';
 
@@ -218,6 +219,16 @@ function CustomClassDataIdGrid() {
             ))}
           </Select>
         </FormControl>
+      ),
+    },
+    {
+      field: 'openInEditor',
+      headerName: 'エディタ',
+      width: 80,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="custom_class_data_id" name={params.row.name} />
       ),
     },
     {

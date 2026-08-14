@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 function StateGrid() {
   const navigate = useNavigate();
@@ -101,6 +102,16 @@ function StateGrid() {
           </a>
         );
       },
+    },
+    {
+      field: 'openInEditor',
+      headerName: 'エディタ',
+      width: 80,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="state_data" name={params.row.name} />
+      ),
     },
     {
       field: 'actions',

@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 function AnimatorDataGrid() {
   const [animData, setAnimData] = useState([]);
@@ -57,6 +58,12 @@ function AnimatorDataGrid() {
       )
     },
     { field: 'id', headerName: 'ID', width: 90 },
+    {
+      field: 'openInEditor', headerName: 'エディタ', width: 80, sortable: false, filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="animator_data" name={params.row.name} />
+      ),
+    },
     { field: 'actions', headerName: '操作', width: 120,
       renderCell: (params) => (
         <Button variant="contained" color="error" size="small"

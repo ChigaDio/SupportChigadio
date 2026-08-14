@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 function BehaviorGrid() {
   const navigate = useNavigate();
@@ -100,6 +101,16 @@ function BehaviorGrid() {
           </a>
         );
       },
+    },
+    {
+      field: 'openInEditor',
+      headerName: 'エディタ',
+      width: 80,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="behavior_data" name={params.row.name} />
+      ),
     },
     {
       field: 'actions',

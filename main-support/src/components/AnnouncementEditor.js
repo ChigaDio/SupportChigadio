@@ -49,6 +49,9 @@ function AnnouncementEditor() {
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            記法例: # 見出し1 / ## 見出し2 / **太字** / *斜体* / `コード` / - 箇条書き / 1. 番号付き（#やーの直後にスペースがなくても認識されます）
+          </Typography>
           <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
             <Button variant="contained" onClick={handleSave}>保存</Button>
             <Button onClick={() => navigate(-1)}>キャンセル</Button>
