@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 function ClassDataGrid() {
   const navigate = useNavigate();
@@ -114,6 +115,16 @@ function ClassDataGrid() {
         >
           {params.value}
         </Button>
+      ),
+    },
+    {
+      field: 'openInEditor',
+      headerName: 'エディタ',
+      width: 80,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="class_data" name={params.row.name} />
       ),
     },
     {

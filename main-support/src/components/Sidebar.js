@@ -22,7 +22,8 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         //{ name: 'Custom Class Data ID', key: 'custom-class-data-id' },
         { name: 'State', key: 'state' },
         { name: 'Behavior', key: 'behavior' },
-        { name: 'Save Data', key: 'save-data' }
+        { name: 'Save Data', key: 'save-data' },
+        { name: 'CSプロジェクト同期', key: 'csproj-sync' }
       ],
     },
     {

@@ -178,6 +178,7 @@ function Workspace() {
           <Paper sx={{ p: 2, mb: 2 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="h6">直近の編集ログ（最新7日間）</Typography>
+              <Button size="small" onClick={() => navigate('/activity-log')}>全体ログを見る</Button>
             </Box>
             <Table size="small">
               <TableHead>
@@ -248,6 +249,17 @@ function Workspace() {
             )}
             <Button variant="contained" onClick={startDownload} disabled={downloading}>
               {downloading ? '準備中...' : 'ダウンロード'}
+            </Button>
+          </Paper>
+
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="h6" sx={{ mb: 1 }}>アップロード</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              ローカルフォルダの内容をdataフォルダへ反映します。差分をgit diff風に
+              確認しながら、チェックボックスで選択したファイルだけをアップロードできます。
+            </Typography>
+            <Button variant="contained" onClick={() => navigate('/workspace/upload')}>
+              アップロード画面を開く
             </Button>
           </Paper>
 

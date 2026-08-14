@@ -6,13 +6,13 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
 import SaveIcon from '@mui/icons-material/Save';
-import CodeIcon from '@mui/icons-material/Code';
 import TuneIcon from '@mui/icons-material/Tune';
 import BoltIcon from '@mui/icons-material/Bolt';
 import SyncIcon from '@mui/icons-material/Sync';
 import { styled } from '@mui/material/styles';
 import { ReactFlow, Background, Controls, MiniMap, useReactFlow, addEdge, Handle, Position, applyNodeChanges } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 // Enter/Update/Exit それぞれの 同期/非同期 使用設定のデフォルト（同期のみ）。
 // StateControlのCombined API（同期・非同期を両方動かすモード）が、
@@ -45,26 +45,6 @@ const CustomNode = ({ data, id }) => {
   const handleDelete = (e) => {
     e.stopPropagation();
     window.dispatchEvent(new CustomEvent('deleteNode', { detail: id }));
-  };
-
-  const handleShowCode = (e) => {
-    e.stopPropagation();
-    fetch(`/api/open-code/${data.stateName}/${data.label}`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-    })
-      .then(response => response.json())
-      .then(result => {
-        if (result.error) {
-          alert(`エラー: ${result.error}`);
-        } else {
-          alert(result.message);
-        }
-      })
-      .catch(error => {
-        console.error('コードを開く際のエラー:', error);
-        alert('コードを開く際にエラーが発生しました');
-      });
   };
 
   const handleAddSubNode = (e) => {
@@ -105,11 +85,15 @@ const CustomNode = ({ data, id }) => {
             <TuneIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        <Tooltip title="コードを開く">
-          <IconButton size="small" onClick={handleShowCode} style={{ color: '#e5e7eb' }}>
-            <CodeIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <OpenFileMenuButton
+          fetchUrl={`/api/open-code/${data.stateName}/${data.label}`}
+          resolveCsFiles={(res) => ({
+            jsonPath: null,
+            csFiles: res.csPath ? [{ label: `${data.stateName}${data.label}State.cs`, path: res.csPath }] : [],
+          })}
+          iconColor="#e5e7eb"
+          tooltipLabel="コードを開く"
+        />
         <Tooltip title="サブノードを追加">
           <IconButton size="small" onClick={handleAddSubNode} style={{ color: '#86efac' }}>
             <AddIcon fontSize="small" />

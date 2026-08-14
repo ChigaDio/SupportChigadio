@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import OpenFileMenuButton from './OpenFileMenuButton';
 
 function ScenarioRoleGrid() {
   const navigate = useNavigate();
@@ -124,6 +125,16 @@ function ScenarioRoleGrid() {
     },
     { field: 'description', headerName: '説明', width: 300 },
     { field: 'branchType', headerName: 'タイプ', width: 150 },
+    {
+      field: 'openInEditor',
+      headerName: 'エディタ',
+      width: 80,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <OpenFileMenuButton category="scenario_role" name={params.row.name} />
+      ),
+    },
     {
       field: 'actions',
       headerName: 'アクション',

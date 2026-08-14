@@ -71,7 +71,12 @@ function SimpleMarkdown({ source }) {
       continue;
     }
 
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    // 見出し記法: 本家Markdownは「#」の直後に半角スペースが必須だが、
+    // 日本語入力では「#タイトル」のようにスペースなしで書かれることが多く、
+    // その場合に見出しとして認識されず「#タイトル」がそのまま本文表示されて
+    // しまう不具合があったため、スペースの有無を問わず見出しとして扱う。
+    // （全角スペース・タブが続く場合も許容する）
+    const headingMatch = line.match(/^(#{1,6})[ \t　]*(.*)$/);
     if (headingMatch) {
       flushList();
       const level = headingMatch[1].length;
@@ -85,8 +90,9 @@ function SimpleMarkdown({ source }) {
       continue;
     }
 
-    const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
-    const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    // 箇条書き記法も同様に、記号直後のスペース有無を問わず認識する。
+    const ulMatch = line.match(/^\s*[-*][ \t　]*(.+)$/);
+    const olMatch = line.match(/^\s*\d+\.[ \t　]*(.+)$/);
     if (ulMatch) {
       if (listType && listType !== 'ul') flushList();
       listType = 'ul';
