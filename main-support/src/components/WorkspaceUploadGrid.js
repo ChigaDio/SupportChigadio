@@ -20,13 +20,19 @@ const STATUS_LABEL = {
 // pythonSrc/download.py（data/ をローカルへダウンロード）の逆方向。
 // ローカルフォルダをスキャンし、data/ 内の対応ファイルとの差分を
 // git diff 風に確認しながら、選択したファイルだけをアップロードするページ。
+//
+// 注意: @mui/x-data-grid v8 以降、rowSelectionModel は配列ではなく
+// { type: 'include' | 'exclude', ids: Set<GridRowId> } というオブジェクト形式になった。
+// そのため selectionModel の初期値・更新・参照はすべてこの形式に合わせている。
+const EMPTY_SELECTION = { type: 'include', ids: new Set() };
+
 function WorkspaceUploadGrid() {
   const navigate = useNavigate();
 
   const [sourceDir, setSourceDir] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null); // {sourceDir, files}
-  const [selectionModel, setSelectionModel] = useState([]);
+  const [selectionModel, setSelectionModel] = useState(EMPTY_SELECTION);
   const [quickFilter, setQuickFilter] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -58,7 +64,7 @@ function WorkspaceUploadGrid() {
     setErrorMsg('');
     setScanning(true);
     setScanResult(null);
-    setSelectionModel([]);
+    setSelectionModel(EMPTY_SELECTION);
     try {
       const res = await fetch('/api/workspace/upload/preview', {
         method: 'POST',
@@ -69,9 +75,12 @@ function WorkspaceUploadGrid() {
       if (!res.ok) throw new Error(data.error);
       setScanResult(data);
       // new / modified はデフォルトでチェック、unchanged は外す
-      setSelectionModel(
-        (data.files || []).filter((f) => f.status !== 'unchanged').map((f) => f.relativePath)
-      );
+      setSelectionModel({
+        type: 'include',
+        ids: new Set(
+          (data.files || []).filter((f) => f.status !== 'unchanged').map((f) => f.relativePath)
+        ),
+      });
     } catch (e) {
       setErrorMsg('スキャンエラー: ' + e.message);
     } finally {
@@ -86,6 +95,8 @@ function WorkspaceUploadGrid() {
       : files;
     return filtered.map((f) => ({ id: f.relativePath, ...f }));
   }, [scanResult, quickFilter]);
+
+  const selectedPaths = useMemo(() => Array.from(selectionModel.ids), [selectionModel]);
 
   const handleShowDiff = async (relativePath) => {
     setDiffTarget(relativePath);
@@ -109,11 +120,11 @@ function WorkspaceUploadGrid() {
   };
 
   const handleUpload = async () => {
-    if (selectionModel.length === 0) {
+    if (selectedPaths.length === 0) {
       alert('アップロードするファイルを選択してください');
       return;
     }
-    if (!window.confirm(`${selectionModel.length}件のファイルをサーバーのdataフォルダへアップロード（上書き）します。よろしいですか？`)) {
+    if (!window.confirm(`${selectedPaths.length}件のファイルをサーバーのdataフォルダへアップロード（上書き）します。よろしいですか？`)) {
       return;
     }
     setUploading(true);
@@ -121,7 +132,7 @@ function WorkspaceUploadGrid() {
       const res = await fetch('/api/workspace/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: scanResult.sourceDir, selectedFiles: selectionModel }),
+        body: JSON.stringify({ path: scanResult.sourceDir, selectedFiles: selectedPaths }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -199,7 +210,7 @@ function WorkspaceUploadGrid() {
         <Paper sx={{ p: 2 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              走査したファイル: {scanResult.files.length}件 / 選択中: {selectionModel.length}件
+              走査したファイル: {scanResult.files.length}件 / 選択中: {selectedPaths.length}件
             </Typography>
             <TextField
               size="small"
@@ -229,9 +240,9 @@ function WorkspaceUploadGrid() {
               color="success"
               startIcon={uploading ? <CircularProgress size={16} color="inherit" /> : <UploadIcon />}
               onClick={handleUpload}
-              disabled={uploading || selectionModel.length === 0}
+              disabled={uploading || selectedPaths.length === 0}
             >
-              選択した{selectionModel.length}件をアップロード
+              選択した{selectedPaths.length}件をアップロード
             </Button>
           </Box>
         </Paper>

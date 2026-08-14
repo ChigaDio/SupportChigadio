@@ -11,13 +11,19 @@ import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
 // csprojファイルに未登録の.csファイルを再帰的に探し、選択したものだけを
 // <Compile Include="..."> として追記するページ。
 // 親フォルダ名が"Editor"のファイルは対象外（バックエンド側で除外済み）。
+//
+// 注意: @mui/x-data-grid v8 以降、rowSelectionModel は配列ではなく
+// { type: 'include' | 'exclude', ids: Set<GridRowId> } というオブジェクト形式になった。
+// そのため selectionModel の初期値・更新・参照はすべてこの形式に合わせている。
+const EMPTY_SELECTION = { type: 'include', ids: new Set() };
+
 function CsprojSyncGrid() {
   const [csprojPath, setCsprojPath] = useState('');
   const [searchFolder, setSearchFolder] = useState('');
 
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null); // {csprojPath, searchFolder, totalScanned, alreadyRegistered, candidates}
-  const [selectionModel, setSelectionModel] = useState([]);
+  const [selectionModel, setSelectionModel] = useState(EMPTY_SELECTION);
   const [quickFilter, setQuickFilter] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -61,7 +67,7 @@ function CsprojSyncGrid() {
     setErrorMsg('');
     setScanning(true);
     setScanResult(null);
-    setSelectionModel([]);
+    setSelectionModel(EMPTY_SELECTION);
     try {
       const res = await fetch('/api/csproj-sync/scan', {
         method: 'POST',
@@ -72,7 +78,10 @@ function CsprojSyncGrid() {
       if (!res.ok) throw new Error(data.error);
       setScanResult(data);
       // デフォルトは全件チェック
-      setSelectionModel((data.candidates || []).map((c) => c.relativePath));
+      setSelectionModel({
+        type: 'include',
+        ids: new Set((data.candidates || []).map((c) => c.relativePath)),
+      });
     } catch (e) {
       setErrorMsg('スキャンエラー: ' + e.message);
     } finally {
@@ -110,7 +119,7 @@ function CsprojSyncGrid() {
             const addedSet = new Set(data.addedFiles || []);
             return { ...prev, candidates: prev.candidates.filter((c) => !addedSet.has(c.relativePath)) };
           });
-          setSelectionModel([]);
+          setSelectionModel(EMPTY_SELECTION);
         } else if (data.status === 'error') {
           clearInterval(interval);
           setApplying(false);
@@ -124,21 +133,23 @@ function CsprojSyncGrid() {
     }, 400);
   };
 
+  const selectedPaths = useMemo(() => Array.from(selectionModel.ids), [selectionModel]);
+
   const handleApply = async () => {
-    if (selectionModel.length === 0) {
+    if (selectedPaths.length === 0) {
       alert('追加するファイルを選択してください');
       return;
     }
-    if (!window.confirm(`${selectionModel.length}件のファイルを ${scanResult.csprojPath} に追加します。よろしいですか？`)) {
+    if (!window.confirm(`${selectedPaths.length}件のファイルを ${scanResult.csprojPath} に追加します。よろしいですか？`)) {
       return;
     }
     setApplying(true);
-    setJobProgress({ total: selectionModel.length, done: 0, status: 'running', message: '開始しています...' });
+    setJobProgress({ total: selectedPaths.length, done: 0, status: 'running', message: '開始しています...' });
     try {
       const res = await fetch('/api/csproj-sync/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csprojPath: scanResult.csprojPath, relativePaths: selectionModel }),
+        body: JSON.stringify({ csprojPath: scanResult.csprojPath, relativePaths: selectedPaths }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -241,9 +252,9 @@ function CsprojSyncGrid() {
                   color="success"
                   startIcon={<PlaylistAddIcon />}
                   onClick={handleApply}
-                  disabled={applying || selectionModel.length === 0}
+                  disabled={applying || selectedPaths.length === 0}
                 >
-                  選択した{selectionModel.length}件をcsprojに追加
+                  選択した{selectedPaths.length}件をcsprojに追加
                 </Button>
               </Box>
             </>
