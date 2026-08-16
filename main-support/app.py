@@ -1205,13 +1205,13 @@ namespace GameCore.Scenario {
             }
         }
         
-        public static BaseOrigintScenarioRoleAction SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {s
-            if (data == null) return null;
+        public static void SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {s
+            if (data == null) return;
             switch (data.RoleID) {
 """
     for role in roles:
         factory_content += f"""                case ScenarioRoleID.{role['name']}:
-                    (action as {role['name']}RoleAction).SetRoleData(data as {role['name']}RoleData));
+                    (action as {role['name']}RoleAction).SetRoleData(data as {role['name']}RoleData);
                     break;
 """
     factory_content += """                default:
@@ -1260,6 +1260,7 @@ namespace GameCore.Scenario {
 
             if (pool.FreeStack.Count > 0) {
                 action = pool.FreeStack.Pop();
+                SetData(action,data);
             } else {
                 action = CreateNewRoleAction(data);
                 if (action == null) return null;

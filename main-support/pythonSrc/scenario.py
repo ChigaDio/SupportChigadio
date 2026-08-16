@@ -537,6 +537,12 @@ public class ScenarioMasterExecuteAction
     public bool IsExecuteFinish { get; private set; }
     private ScenarioExecuteData executeData = new ScenarioExecuteData();
     public ScenarioExecuteData ExecuteData {  get { return executeData; } }
+    
+    public void SetUpExecuteData(ScenarioExecuteData value_data)
+    {
+        executeData = value_data;
+    }
+    
     public void SetExecuteGroupID(int value)
     {
         if (value <= 0 || value >= scenarioActionList.Count) return;
@@ -1242,6 +1248,7 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         string eventSubName,
         bool addressable = false,                    // ← 追加
         Action<ScenarioExecuteData> action = null,
+        ScenarioExecuteData value_execute_data = null,
         CancellationTokenSource cts = null)
     {
         using var localCts = new CancellationTokenSource();
@@ -1253,6 +1260,11 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         event_play_name = eventName;
         event_sub_name = eventSubName;
         is_event_change = is_event_group_change = is_event_sub_group_change = false;
+        
+        if(value_execute_data != null)
+        {
+            master.SetUpExecuteData(value_execute_data);
+        }
 
 
         while(IsHeaderLoad == false)

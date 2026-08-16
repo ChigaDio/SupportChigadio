@@ -512,6 +512,74 @@ def generate_cs_matrix(name):
         matrix_cs += "    }\n}\n"
         with open(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID,f"{name}", f"{name}MatrixTable.cs"), 'w', encoding='utf-8') as f:
             f.write(matrix_cs)
+
+        # {name}MatrixExample.cs
+        # class_data_id.py側の{name}TableExample.cs(GetRow/ForID/Find等の拡張メソッド群)と同じ考え方で、
+        # Matrix向けの拡張メソッド(GetCell/HasCell/GetRow/FindCell/FindAllCell)を生成する。
+        example_cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, f"{name}", f"{name}MatrixExample.cs")
+        with open(example_cs_path, 'w', encoding='utf-8') as ef:
+            template = f"""
+using System;
+using UnityEngine;
+using GameCore.Tables;
+using GameCore.Tables.ID;
+using System.Collections.Generic;
+namespace GameCore.Tables
+{{
+    public static class {name}MatrixExtensions
+    {{
+        /// <summary>指定したセル(row×col)のデータを取得する。存在しなければnullを返す</summary>
+        public static {name}MatrixRow GetCell(this {row_id}ID rowId, {col_id}ID colId)
+        {{
+            var result = {name}MatrixTable.TryGetCell(rowId, colId);
+            return result.Found ? result.Data : null;
+        }}
+
+        /// <summary>指定したセル(row×col)がTableに存在するかどうかを高速に判定する</summary>
+        public static bool HasCell(this {row_id}ID rowId, {col_id}ID colId)
+        {{
+            return {name}MatrixTable.TryGetCell(rowId, colId).Found;
+        }}
+
+        /// <summary>指定した行(全列)を取得する。行が存在しなければnullを返す</summary>
+        public static Dictionary<{col_id}ID, {name}MatrixRow> GetRow(this {row_id}ID rowId)
+        {{
+            return {name}MatrixTable.Table.TryGetValue(rowId, out var rowDict) ? rowDict : null;
+        }}
+
+        /// <summary>条件(predicate)に合致する全セルを検索する</summary>
+        public static List<({row_id}ID Row, {col_id}ID Col, {name}MatrixRow Data)> FindAllCells(Func<{row_id}ID, {col_id}ID, {name}MatrixRow, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+            var results = new List<({row_id}ID, {col_id}ID, {name}MatrixRow)>();
+            foreach (var rowKv in {name}MatrixTable.Table)
+            {{
+                foreach (var colKv in rowKv.Value)
+                {{
+                    if (predicate(rowKv.Key, colKv.Key, colKv.Value)) results.Add((rowKv.Key, colKv.Key, colKv.Value));
+                }}
+            }}
+            return results;
+        }}
+
+        /// <summary>条件(predicate)に合致する最初のセルを検索する。見つからなければnullを返す</summary>
+        public static ({row_id}ID Row, {col_id}ID Col, {name}MatrixRow Data)? FindCell(Func<{row_id}ID, {col_id}ID, {name}MatrixRow, bool> predicate)
+        {{
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+            foreach (var rowKv in {name}MatrixTable.Table)
+            {{
+                foreach (var colKv in rowKv.Value)
+                {{
+                    if (predicate(rowKv.Key, colKv.Key, colKv.Value)) return (rowKv.Key, colKv.Key, colKv.Value);
+                }}
+            }}
+            return null;
+        }}
+    }}
+}}
+            """
+            ef.write(template)
+
         return jsonify({"message": f"C# generated for {name}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1443,8 +1511,13 @@ def set_class_data_matrix_id_subgroup(name):
 
 def generate_matrix_tags_load_script():
     """tags.json / class_data_matrix_id_list.json をもとに、タグ単位・サブグループ単位の
-    一括ロード/アンロードutilと、MatrixTableID単体(複数まとめても可)のシングル
-    ロード/アンロードutilをまとめて MatrixTableIdUtils.cs に生成する（class_data_idのTableIdUtilsと同等）"""
+    一括ロード/アンロードutilと、{Name}ごとの専用型(row/col)シングルロード/アンロードutil
+    (LoadSingle{Name}(...)。単一セル/行配列×単一列/単一行×列配列/セル配列/行列配列の直積/
+    行のみ(行全体)/列のみ(列全体)/行配列のみ(各行全体)/列配列のみ(各列全体)の9パターン対応)
+    をまとめて MatrixTableIdUtils.cs に生成する（class_data_idのTableIdUtils側のLoadSingle{Name}
+    (idType id, ...)と同じ考え方。ただしMatrixのセルはrow×colの組で特定されるため、汎用の
+    GameCore.Tables.MatrixTableIdを引数に取るオーバーロードは廃止し、行・列それぞれの専用型を
+    引数に取る形にしている）"""
     tags_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'tags.json')
     try:
         tags = []
@@ -1542,11 +1615,24 @@ def generate_matrix_tags_load_script():
                 all_blocks += build_bulk_block(f"{tag_name}_{sub_name}", sub_items)
 
         # ------------------------------------------------------------
-        # テーブル単体(MatrixTableID)のシングルロード/アンロード(配列対応)。
-        # テーブル丸ごとのロード/アンロードで、ClassDataMatrixIDCore.LoadClassDataSingleAsync/
-        # UnloadClassDataがMatrixTableRegistry経由でディスパッチする。
-        # (行・列・セル単位のシングルロードは各{Name}MatrixTable.cs側にLoadSingle/LoadRow/
-        #  LoadColumn等として個別に生成される)
+        # {name}ごとの専用型シングルロード/アンロード。
+        # class_data_id.py の LoadSingle{Name}({Name}TableID id, ...) と同じ考え方だが、
+        # Matrixのセルは(row, col)の組で特定されるため、行・列それぞれの専用型を引数に取る
+        # (汎用のGameCore.Tables.MatrixTableIdを引数に取るオーバーロードは廃止し、
+        #  呼び出し側が取り違えないよう、行・列の型がそのままシグネチャに出る形にした)。
+        # 単体セルだけでなく、行/列を配列にした場合や、片方を省略した場合(行/列全体)の
+        # 組み合わせパターンをまとめてオーバーロード生成する。実体は各{Name}MatrixTable.cs側の
+        # LoadSingleAsync/LoadRowAsync/LoadColumnAsync/UnloadSingle/UnloadRow/UnloadColumnへ委譲するだけ。
+        #
+        #   1. (row, col)              : 単一セル
+        #   2. (row[], col)             : 複数行 × 単一列のセル
+        #   3. (row, col[])             : 単一行 × 複数列のセル
+        #   4. (cells: (row,col)[])     : 行・列を組で指定した複数セル
+        #   5. (row[], col[])           : 複数行 × 複数列の全組み合わせセル(直積)
+        #   6. (row)                    : colを指定しない → その1行全体
+        #   7. (col)                    : rowを指定しない → その1列全体
+        #   8. (row[])                  : colを指定しない → 各行ごとに行全体
+        #   9. (col[])                  : rowを指定しない → 各列ごとに列全体
         # ------------------------------------------------------------
         single_lines = []
         indent = 0
@@ -1554,63 +1640,144 @@ def generate_matrix_tags_load_script():
         def add_single(text=""):
             single_lines.append("    " * indent + text)
 
-        add_single("public static async UniTask LoadSingleAsync(GameCore.Tables.MatrixTableID id, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("await ClassDataMatrixIDCore.Instance.LoadClassDataSingleAsync(id);")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+        basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data = get_type_lists()
+        custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
 
-        add_single("public static async UniTask LoadSingleAsync(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("foreach (var id in ids)")
-        add_single("{")
-        indent += 1
-        add_single("await ClassDataMatrixIDCore.Instance.LoadClassDataSingleAsync(id);")
-        add_single("await UniTask.Yield();")
-        indent -= 1
-        add_single("}")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+        for item in matrix_list:
+            item_name = item.get('name')
+            row_id = item.get('rowId', '')
+            col_id = item.get('colId', '')
+            if not item_name or not row_id or not col_id:
+                continue
+            if row_id in class_data_id_list or row_id in custom_type_info['custom_class_id_list']:
+                row_id += "Table"
+            if col_id in class_data_id_list or col_id in custom_type_info['custom_class_id_list']:
+                col_id += "Table"
+            row_type = f"{row_id}ID"
+            col_type = f"{col_id}ID"
+            table_ref = f"GameCore.Tables.{item_name}MatrixTable"
+            cell_tuple_type = f"IEnumerable<({row_type} Row, {col_type} Col)>"
 
-        add_single("public static void LoadSingle(GameCore.Tables.MatrixTableID id, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("UniTask.Action(async () => { await LoadSingleAsync(id, action); }).Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+            patterns = [
+                {
+                    'params': [(row_type, 'row'), (col_type, 'col')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadSingleAsync(row, col, false, action);",
+                    'unload_call': f"{table_ref}.UnloadSingle(row, col, action);",
+                    'doc': f"{item_name}: 指定した1セル(row×col)だけを、事前記録済みのシーク位置で直接読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: 指定した1セルだけをTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(f"IEnumerable<{row_type}>", 'rows'), (col_type, 'col')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadSingleAsync(rows, col, false, action);",
+                    'unload_call': f"{table_ref}.UnloadSingle(rows, col, action);",
+                    'doc': f"{item_name}: 複数行(row[]) × 単一列(col)のセルだけをまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: 複数行(row[]) × 単一列(col)のセルだけをTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(row_type, 'row'), (f"IEnumerable<{col_type}>", 'cols')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadSingleAsync(row, cols, false, action);",
+                    'unload_call': f"{table_ref}.UnloadSingle(row, cols, action);",
+                    'doc': f"{item_name}: 単一行(row) × 複数列(col[])のセルだけをまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: 単一行(row) × 複数列(col[])のセルだけをTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(cell_tuple_type, 'cells')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadSingleAsync(cells, false, action);",
+                    'unload_call': f"{table_ref}.UnloadSingle(cells, action);",
+                    'doc': f"{item_name}: 指定した複数セル(row,colの組)だけをまとめて読み込む(配列対応。テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: 指定した複数セルだけをTableから解放する(配列対応。テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(f"IEnumerable<{row_type}>", 'rows'), (f"IEnumerable<{col_type}>", 'cols')],
+                    'pre': [
+                        f"var cells = new List<({row_type} Row, {col_type} Col)>();",
+                        "foreach (var r in rows) { foreach (var c in cols) { cells.Add((r, c)); } }",
+                    ],
+                    'load_call': f"await {table_ref}.LoadSingleAsync(cells, false, action);",
+                    'unload_call': f"{table_ref}.UnloadSingle(cells, action);",
+                    'doc': f"{item_name}: 複数行(row[]) × 複数列(col[])の全組み合わせセルをまとめて読み込む(直積。テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: 複数行(row[]) × 複数列(col[])の全組み合わせセルをTableから解放する(直積。テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(row_type, 'row')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadRowAsync(row, false, action);",
+                    'unload_call': f"{table_ref}.UnloadRow(row, action);",
+                    'doc': f"{item_name}: colを指定しない場合は、指定した1行(row)全体をまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: colを指定しない場合は、指定した1行(row)全体をTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(col_type, 'col')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadColumnAsync(col, false, action);",
+                    'unload_call': f"{table_ref}.UnloadColumn(col, action);",
+                    'doc': f"{item_name}: rowを指定しない場合は、指定した1列(col)全体をまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: rowを指定しない場合は、指定した1列(col)全体をTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(f"IEnumerable<{row_type}>", 'rows')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadRowAsync(rows, false, action);",
+                    'unload_call': f"{table_ref}.UnloadRow(rows, action);",
+                    'doc': f"{item_name}: colを指定しない場合は、複数行(row[])をそれぞれ行全体でまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: colを指定しない場合は、複数行(row[])をそれぞれ行全体でTableから解放する(テーブル全体は解放しない)",
+                },
+                {
+                    'params': [(f"IEnumerable<{col_type}>", 'cols')],
+                    'pre': [],
+                    'load_call': f"await {table_ref}.LoadColumnAsync(cols, false, action);",
+                    'unload_call': f"{table_ref}.UnloadColumn(cols, action);",
+                    'doc': f"{item_name}: rowを指定しない場合は、複数列(col[])をそれぞれ列全体でまとめて読み込む(テーブル全体はロードしない)",
+                    'undoc': f"{item_name}: rowを指定しない場合は、複数列(col[])をそれぞれ列全体でTableから解放する(テーブル全体は解放しない)",
+                },
+            ]
 
-        add_single("public static void LoadSingle(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("UniTask.Action(async () => { await LoadSingleAsync(ids, action); }).Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+            for pattern in patterns:
+                sig_params = ", ".join(f"{t} {n}" for t, n in pattern['params'])
+                call_args = ", ".join(n for t, n in pattern['params'])
 
-        add_single("public static void UnloadSingle(GameCore.Tables.MatrixTableID id, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("ClassDataMatrixIDCore.Instance.UnloadClassData(id);")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+                add_single(f"/// <summary>{pattern['doc']}</summary>")
+                add_single(f"public static async UniTask LoadSingleAsync{item_name}({sig_params}, Action action = null)")
+                add_single("{")
+                indent += 1
+                for line in pattern['pre']:
+                    add_single(line)
+                add_single(pattern['load_call'])
+                indent -= 1
+                add_single("}")
+                add_single()
 
-        add_single("public static void UnloadSingle(GameCore.Tables.MatrixTableID[] ids, Action action = null)")
-        add_single("{")
-        indent += 1
-        add_single("foreach (var id in ids) ClassDataMatrixIDCore.Instance.UnloadClassData(id);")
-        add_single("action?.Invoke();")
-        indent -= 1
-        add_single("}")
-        add_single()
+                add_single(f"public static void LoadSingle{item_name}({sig_params}, Action action = null)")
+                add_single("{")
+                indent += 1
+                add_single(f"UniTask.Action(async () => {{ await LoadSingleAsync{item_name}({call_args}, action); }}).Invoke();")
+                indent -= 1
+                add_single("}")
+                add_single()
+
+                add_single(f"/// <summary>{pattern['undoc']}</summary>")
+                add_single(f"public static void UnloadSingle{item_name}({sig_params}, Action action = null)")
+                add_single("{")
+                indent += 1
+                for line in pattern['pre']:
+                    add_single(line)
+                add_single(pattern['unload_call'])
+                indent -= 1
+                add_single("}")
+                add_single()
+
+                add_single(f"public static async UniTask UnloadSingleAsync{item_name}({sig_params}, Action action = null)")
+                add_single("{")
+                indent += 1
+                add_single(f"UnloadSingle{item_name}({call_args}, action);")
+                add_single("await UniTask.CompletedTask;")
+                indent -= 1
+                add_single("}")
+                add_single()
 
         all_blocks += single_lines
 
@@ -1914,6 +2081,20 @@ def generate_base(data_dir):
             }
 
             // ========================= セル単位 =========================
+
+            /// <summary>
+            /// 指定したセル(rowId×colId)が、現在メモリ上のTableに存在するかどうかを高速に判定する。
+            /// ファイルアクセスは一切行わず、既にロード済みのTableを辞書引きするだけ(O(1))。
+            /// 存在すればFound=true・Dataにそのセルのデータを、存在しなければFound=false・Data=defaultを返す。
+            /// </summary>
+            public static (bool Found, E Data) TryGetCell(TRow rowId, TCol colId)
+            {
+                if (Table.TryGetValue(rowId, out var rowDict) && rowDict.TryGetValue(colId, out var cell))
+                {
+                    return (true, cell);
+                }
+                return (false, default);
+            }
 
             /// <summary>指定した1つのセル(rowKey×colKey)だけをロードする。</summary>
             public static void ReadOneCell(TRow rowId, TCol colId, ClassDataMatrixHeader header, BinaryReader reader, bool preloadReferences = false, ClassDataHeader idHeader = null, BinaryReader idReader = null, bool forceReloadIndex = false)
