@@ -534,14 +534,14 @@ namespace GameCore.Tables
     public static class {name}MatrixExtensions
     {{
         /// <summary>指定したセル(row×col)のデータを取得する。存在しなければnullを返す</summary>
-        public static {name}MatrixRow GetCell(this {row_id}ID rowId, {col_id}ID colId)
+        public static {name}MatrixRow Get{name}MatrixCell(this {row_id}ID rowId, {col_id}ID colId)
         {{
             var result = {name}MatrixTable.TryGetCell(rowId, colId);
             return result.Found ? result.Data : null;
         }}
 
         /// <summary>指定したセル(row×col)がTableに存在するかどうかを高速に判定する</summary>
-        public static bool HasCell(this {row_id}ID rowId, {col_id}ID colId)
+        public static bool Has{name}MatrixCell(this {row_id}ID rowId, {col_id}ID colId)
         {{
             return {name}MatrixTable.TryGetCell(rowId, colId).Found;
         }}
