@@ -1662,6 +1662,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(row_type, 'row'), (col_type, 'col')],
                     'pre': [],
+                    'name_suffix': '',
                     'load_call': f"await {table_ref}.LoadSingleAsync(row, col, false, action);",
                     'unload_call': f"{table_ref}.UnloadSingle(row, col, action);",
                     'doc': f"{item_name}: 指定した1セル(row×col)だけを、事前記録済みのシーク位置で直接読み込む(テーブル全体はロードしない)",
@@ -1670,6 +1671,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(f"IEnumerable<{row_type}>", 'rows'), (col_type, 'col')],
                     'pre': [],
+                    'name_suffix': '',
                     'load_call': f"await {table_ref}.LoadSingleAsync(rows, col, false, action);",
                     'unload_call': f"{table_ref}.UnloadSingle(rows, col, action);",
                     'doc': f"{item_name}: 複数行(row[]) × 単一列(col)のセルだけをまとめて読み込む(テーブル全体はロードしない)",
@@ -1678,6 +1680,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(row_type, 'row'), (f"IEnumerable<{col_type}>", 'cols')],
                     'pre': [],
+                    'name_suffix': '',
                     'load_call': f"await {table_ref}.LoadSingleAsync(row, cols, false, action);",
                     'unload_call': f"{table_ref}.UnloadSingle(row, cols, action);",
                     'doc': f"{item_name}: 単一行(row) × 複数列(col[])のセルだけをまとめて読み込む(テーブル全体はロードしない)",
@@ -1686,6 +1689,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(cell_tuple_type, 'cells')],
                     'pre': [],
+                    'name_suffix': '',
                     'load_call': f"await {table_ref}.LoadSingleAsync(cells, false, action);",
                     'unload_call': f"{table_ref}.UnloadSingle(cells, action);",
                     'doc': f"{item_name}: 指定した複数セル(row,colの組)だけをまとめて読み込む(配列対応。テーブル全体はロードしない)",
@@ -1697,14 +1701,21 @@ def generate_matrix_tags_load_script():
                         f"var cells = new List<({row_type} Row, {col_type} Col)>();",
                         "foreach (var r in rows) { foreach (var c in cols) { cells.Add((r, c)); } }",
                     ],
+                    'name_suffix': '',
                     'load_call': f"await {table_ref}.LoadSingleAsync(cells, false, action);",
                     'unload_call': f"{table_ref}.UnloadSingle(cells, action);",
                     'doc': f"{item_name}: 複数行(row[]) × 複数列(col[])の全組み合わせセルをまとめて読み込む(直積。テーブル全体はロードしない)",
                     'undoc': f"{item_name}: 複数行(row[]) × 複数列(col[])の全組み合わせセルをTableから解放する(直積。テーブル全体は解放しない)",
                 },
+                # --- 行全体 / 列全体系(6〜9)は、row_typeとcol_typeが同じ型のときに
+                # 「LoadSingle{Name}(T row)」と「LoadSingle{Name}(T col)」が完全に同一シグネチャに
+                # なってコンパイルエラー(CS0111)になってしまうため、行専用/列専用でメソッド名自体を
+                # 分ける(LoadSingleRow{Name} / LoadSingleColumn{Name})。型が異なる場合でも同じ命名規則で
+                # 統一しておく。
                 {
                     'params': [(row_type, 'row')],
                     'pre': [],
+                    'name_suffix': 'Row',
                     'load_call': f"await {table_ref}.LoadRowAsync(row, false, action);",
                     'unload_call': f"{table_ref}.UnloadRow(row, action);",
                     'doc': f"{item_name}: colを指定しない場合は、指定した1行(row)全体をまとめて読み込む(テーブル全体はロードしない)",
@@ -1713,6 +1724,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(col_type, 'col')],
                     'pre': [],
+                    'name_suffix': 'Column',
                     'load_call': f"await {table_ref}.LoadColumnAsync(col, false, action);",
                     'unload_call': f"{table_ref}.UnloadColumn(col, action);",
                     'doc': f"{item_name}: rowを指定しない場合は、指定した1列(col)全体をまとめて読み込む(テーブル全体はロードしない)",
@@ -1721,6 +1733,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(f"IEnumerable<{row_type}>", 'rows')],
                     'pre': [],
+                    'name_suffix': 'Row',
                     'load_call': f"await {table_ref}.LoadRowAsync(rows, false, action);",
                     'unload_call': f"{table_ref}.UnloadRow(rows, action);",
                     'doc': f"{item_name}: colを指定しない場合は、複数行(row[])をそれぞれ行全体でまとめて読み込む(テーブル全体はロードしない)",
@@ -1729,6 +1742,7 @@ def generate_matrix_tags_load_script():
                 {
                     'params': [(f"IEnumerable<{col_type}>", 'cols')],
                     'pre': [],
+                    'name_suffix': 'Column',
                     'load_call': f"await {table_ref}.LoadColumnAsync(cols, false, action);",
                     'unload_call': f"{table_ref}.UnloadColumn(cols, action);",
                     'doc': f"{item_name}: rowを指定しない場合は、複数列(col[])をそれぞれ列全体でまとめて読み込む(テーブル全体はロードしない)",
@@ -1739,9 +1753,10 @@ def generate_matrix_tags_load_script():
             for pattern in patterns:
                 sig_params = ", ".join(f"{t} {n}" for t, n in pattern['params'])
                 call_args = ", ".join(n for t, n in pattern['params'])
+                method_name = f"{item_name}{pattern['name_suffix']}"
 
                 add_single(f"/// <summary>{pattern['doc']}</summary>")
-                add_single(f"public static async UniTask LoadSingleAsync{item_name}({sig_params}, Action action = null)")
+                add_single(f"public static async UniTask LoadSingleAsync{method_name}({sig_params}, Action action = null)")
                 add_single("{")
                 indent += 1
                 for line in pattern['pre']:
@@ -1751,16 +1766,16 @@ def generate_matrix_tags_load_script():
                 add_single("}")
                 add_single()
 
-                add_single(f"public static void LoadSingle{item_name}({sig_params}, Action action = null)")
+                add_single(f"public static void LoadSingle{method_name}({sig_params}, Action action = null)")
                 add_single("{")
                 indent += 1
-                add_single(f"UniTask.Action(async () => {{ await LoadSingleAsync{item_name}({call_args}, action); }}).Invoke();")
+                add_single(f"UniTask.Action(async () => {{ await LoadSingleAsync{method_name}({call_args}, action); }}).Invoke();")
                 indent -= 1
                 add_single("}")
                 add_single()
 
                 add_single(f"/// <summary>{pattern['undoc']}</summary>")
-                add_single(f"public static void UnloadSingle{item_name}({sig_params}, Action action = null)")
+                add_single(f"public static void UnloadSingle{method_name}({sig_params}, Action action = null)")
                 add_single("{")
                 indent += 1
                 for line in pattern['pre']:
@@ -1770,10 +1785,10 @@ def generate_matrix_tags_load_script():
                 add_single("}")
                 add_single()
 
-                add_single(f"public static async UniTask UnloadSingleAsync{item_name}({sig_params}, Action action = null)")
+                add_single(f"public static async UniTask UnloadSingleAsync{method_name}({sig_params}, Action action = null)")
                 add_single("{")
                 indent += 1
-                add_single(f"UnloadSingle{item_name}({call_args}, action);")
+                add_single(f"UnloadSingle{method_name}({call_args}, action);")
                 add_single("await UniTask.CompletedTask;")
                 indent -= 1
                 add_single("}")
@@ -1787,6 +1802,8 @@ def generate_matrix_tags_load_script():
 using System;
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
+using GameCore.Tables.ID;
+using GameCore.Enums;
 
 namespace GameCore.Tables
 {{
