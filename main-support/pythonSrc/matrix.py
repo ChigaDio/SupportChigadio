@@ -515,7 +515,12 @@ def generate_cs_matrix(name):
 
         # {name}MatrixExample.cs
         # class_data_id.py側の{name}TableExample.cs(GetRow/ForID/Find等の拡張メソッド群)と同じ考え方で、
-        # Matrix向けの拡張メソッド(GetCell/HasCell/GetRow/FindCell/FindAllCell)を生成する。
+        # Matrix向けの拡張メソッド(GetCell/HasCell/Get{name}MatrixRow/Get{name}MatrixCol/FindCell/FindAllCell)を生成する。
+        # 注意: {row_id}TableExample.cs / {col_id}TableExample.cs 側で既に
+        # `GetRow(this {row_id}TableID id)` という拡張メソッドが生成されているため、
+        # 単純に `GetRow` という名前で行アクセス用拡張メソッドを生やすと、同じ
+        # namespace(GameCore.Tables)内で拡張メソッド名が衝突し、あいまい参照(CS0121)になる。
+        # そのため、Matrix固有の名前(Get{name}MatrixRow / Get{name}MatrixCol)にしている。
         example_cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, f"{name}", f"{name}MatrixExample.cs")
         with open(example_cs_path, 'w', encoding='utf-8') as ef:
             template = f"""
@@ -541,10 +546,26 @@ namespace GameCore.Tables
             return {name}MatrixTable.TryGetCell(rowId, colId).Found;
         }}
 
-        /// <summary>指定した行(全列)を取得する。行が存在しなければnullを返す</summary>
-        public static Dictionary<{col_id}ID, {name}MatrixRow> GetRow(this {row_id}ID rowId)
+        /// <summary>指定した行(全列)を取得する。行が存在しなければnullを返す
+        /// ({row_id}ID側に既に汎用のGetRow拡張メソッドがあるため、{name}Matrix専用の名前にしている)</summary>
+        public static Dictionary<{col_id}ID, {name}MatrixRow> Get{name}MatrixRow(this {row_id}ID rowId)
         {{
             return {name}MatrixTable.Table.TryGetValue(rowId, out var rowDict) ? rowDict : null;
+        }}
+
+        /// <summary>指定した列(全行)を取得する。列が存在しなければnullを返す
+        /// ({col_id}ID側に既に汎用のGetRow拡張メソッドがあるため、{name}Matrix専用の名前にしている)</summary>
+        public static Dictionary<{row_id}ID, {name}MatrixRow> Get{name}MatrixCol(this {col_id}ID colId)
+        {{
+            var result = new Dictionary<{row_id}ID, {name}MatrixRow>();
+            foreach (var rowKv in {name}MatrixTable.Table)
+            {{
+                if (rowKv.Value.TryGetValue(colId, out var cell))
+                {{
+                    result[rowKv.Key] = cell;
+                }}
+            }}
+            return result.Count > 0 ? result : null;
         }}
 
         /// <summary>条件(predicate)に合致する全セルを検索する</summary>
@@ -1878,8 +1899,11 @@ def generate_base(data_dir):
         with open(os.path.join(data_dir, CLASS_DATA_MATRIX_ID, "BaseTableMatrix.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str.strip() + "\n")
 
-    # BaseClassDataMatrixID.cs 生成 (初回のみ)
-    if not os.path.exists(os.path.join(data_dir, CLASS_DATA_MATRIX_ID, "BaseClassDataMatrixID.cs")):
+    # BaseClassDataMatrixID.cs 生成
+    # ※以前は「初回のみ」生成していたが、TryGetCellなどベースクラス側の機能追加が
+    #   既存プロジェクトに反映されない不具合があったため、常に再生成する
+    #   (ユーザーが手を加えるファイルではなく、完全自動生成のボイラープレートのため)
+    if True:
         code_str = """
     using System.IO;
     using System;
