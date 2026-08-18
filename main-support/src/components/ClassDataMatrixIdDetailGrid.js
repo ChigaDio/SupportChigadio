@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, createTheme, ThemeProvider, InputAdornment, IconButton, Tooltip } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, InputAdornment, IconButton, Tooltip } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
@@ -26,81 +26,6 @@ import {
   ArrayOptionsEditor,
   DictionaryOptionsEditor,
 } from './ClassDataIdDetailGrid';
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: { main: '#1976d2' },
-    secondary: { main: '#ff4081' },
-    background: { default: '#fafafa', paper: '#ffffff' },
-    text: { primary: '#333', secondary: '#666' },
-  },
-  components: {
-    MuiButton: {
-      styleOverrides: {
-        root: {
-          borderRadius: '8px',
-          textTransform: 'none',
-          padding: '8px 16px',
-          transition: 'background-color 0.2s ease',
-          '&:hover': {
-            backgroundColor: '#e0e0e0',
-          },
-        },
-        containedPrimary: {
-          backgroundColor: '#1976d2',
-          color: '#fff',
-          '&:hover': {
-            backgroundColor: '#1565c0',
-          },
-        },
-        containedSecondary: {
-          backgroundColor: '#ff4081',
-          color: '#fff',
-          '&:hover': {
-            backgroundColor: '#f50057',
-          },
-        },
-      },
-    },
-    MuiDataGrid: {
-      styleOverrides: {
-        root: {
-          border: 'none',
-          borderRadius: '8px',
-          backgroundColor: '#fff',
-        },
-        columnHeader: {
-          backgroundColor: '#1976d2',
-          color: '#fff',
-          fontWeight: 500,
-          borderBottom: '1px solid #e0e0e0',
-        },
-        cell: {
-          borderBottom: '1px solid #e0e0e0',
-          borderRight: '1px solid #e0e0e0',
-          padding: '8px',
-          transition: 'background-color 0.2s ease',
-          '&:hover': {
-            backgroundColor: '#f5f7fa',
-          },
-          '&.MuiDataGrid-cell--editing': {
-            backgroundColor: '#e8f0fe',
-            border: '1px solid #1976d2',
-          },
-        },
-      },
-    },
-    MuiDialog: {
-      styleOverrides: {
-        paper: {
-          borderRadius: '8px',
-          backgroundColor: '#fff',
-        },
-      },
-    },
-  },
-});
 
 function ClassDataMatrixIdDetailGrid() {
   const { name } = useParams();
@@ -665,7 +590,6 @@ function ClassDataMatrixIdDetailGrid() {
   const getMatrixRowHeight = useCallback(() => matrixRowHeight, [matrixRowHeight]);
 
   return (
-    <ThemeProvider theme={theme}>
       <Box sx={{ p: 3, maxWidth: '1600px', margin: '0 auto' }}>
         <Typography variant="h5" gutterBottom sx={{ fontWeight: 500, color: 'text.primary', display: 'flex', alignItems: 'center', gap: 1 }}>
           {name}
@@ -949,7 +873,6 @@ function ClassDataMatrixIdDetailGrid() {
           </DialogActions>
         </Dialog>
       </Box>
-    </ThemeProvider>
   );
 }
 

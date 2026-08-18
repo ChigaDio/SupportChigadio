@@ -2,9 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Box, Typography, Paper, TextField, Select, MenuItem, FormControl, InputLabel,
-  Button, Chip, Grid,
+  Button, Chip, Grid, Dialog, DialogTitle, DialogContent, DialogActions,
+  List, ListItemButton, ListItemText, CircularProgress,
 } from '@mui/material';
+import DifferenceIcon from '@mui/icons-material/Difference';
 import { useNavigate } from 'react-router-dom';
+import DiffViewer from './DiffViewer';
 
 // 直近7日分だけでなく、アーカイブ済みの過去ログも含めた「全体ログ」を
 // フィルタ（ユーザー・操作種別・カテゴリ・日付範囲）とキーワード検索付きで
@@ -25,6 +28,39 @@ function ActivityLogGrid() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 50 });
+
+  // --- 変更内容(diff)ダイアログ ---
+  const [diffDialogOpen, setDiffDialogOpen] = useState(false);
+  const [diffTargets, setDiffTargets] = useState([]); // [{path, snapshot}]
+  const [diffSelected, setDiffSelected] = useState(null); // {path, snapshot}
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffData, setDiffData] = useState(null); // {diffText, summary}
+
+  const openDiffDialog = (changedFiles) => {
+    setDiffTargets(changedFiles);
+    setDiffSelected(changedFiles[0]);
+    setDiffDialogOpen(true);
+    setDiffData(null);
+  };
+
+  const fetchDiff = useCallback((target) => {
+    if (!target) return;
+    setDiffLoading(true);
+    setDiffData(null);
+    const params = new URLSearchParams({ path: target.path, snapshot: target.snapshot });
+    fetch(`/api/history-diff?${params.toString()}`)
+      .then((r) => r.json())
+      .then((data) => setDiffData(data))
+      .catch((e) => setDiffData({ diffText: null, summary: 'エラー: ' + e.message }))
+      .finally(() => setDiffLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (diffDialogOpen && diffSelected) {
+      fetchDiff(diffSelected);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diffDialogOpen, diffSelected]);
 
   useEffect(() => {
     fetch('/api/workspace/logs/filters')
@@ -88,6 +124,26 @@ function ActivityLogGrid() {
       renderCell: (params) => (
         <Chip size="small" color={params.value < 400 ? 'success' : 'error'} label={params.value} />
       ),
+    },
+    {
+      field: 'diff',
+      headerName: '変更内容',
+      width: 130,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => {
+        const changedFiles = params.row.changed_files;
+        if (!changedFiles || changedFiles.length === 0) return null;
+        return (
+          <Button
+            size="small"
+            startIcon={<DifferenceIcon />}
+            onClick={() => openDiffDialog(changedFiles)}
+          >
+            確認({changedFiles.length})
+          </Button>
+        );
+      },
     },
   ];
 
@@ -173,6 +229,40 @@ function ActivityLogGrid() {
           />
         </div>
       </Paper>
+
+      <Dialog open={diffDialogOpen} onClose={() => setDiffDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>変更内容の確認</DialogTitle>
+        <DialogContent dividers>
+          {diffTargets.length > 1 && (
+            <List dense sx={{ mb: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+              {diffTargets.map((t) => (
+                <ListItemButton
+                  key={`${t.path}-${t.snapshot}`}
+                  selected={diffSelected?.snapshot === t.snapshot && diffSelected?.path === t.path}
+                  onClick={() => setDiffSelected(t)}
+                >
+                  <ListItemText primary={t.path} />
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+          {diffTargets.length === 1 && (
+            <Typography variant="body2" sx={{ mb: 2, fontFamily: '"Roboto Mono", monospace' }}>
+              {diffTargets[0].path}
+            </Typography>
+          )}
+          {diffLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <DiffViewer diffText={diffData?.diffText} summary={diffData?.summary} />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDiffDialogOpen(false)}>閉じる</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

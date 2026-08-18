@@ -13,6 +13,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EditIcon from '@mui/icons-material/Edit';
 import Papa from 'papaparse';
 import { useMemo } from 'react';
+import SpreadsheetImportExportDialog from './SpreadsheetImportExportDialog';
 
 // ============================================================
 // ユーティリティ
@@ -1725,6 +1726,7 @@ function ClassDataIdDetailGrid() {
   const [openDefaultRecords, setOpenDefaultRecords] = useState(false);
   const [openDeleteColumn, setOpenDeleteColumn] = useState(false);
   const [openImportCsv, setOpenImportCsv] = useState(false);
+  const [openSpreadsheetDialog, setOpenSpreadsheetDialog] = useState(false);
   const [newColType, setNewColType] = useState('');
   const [newColName, setNewColName] = useState('');
   const [newColDescription, setNewColDescription] = useState('');
@@ -2414,6 +2416,9 @@ function ClassDataIdDetailGrid() {
         <Button variant="contained" color="primary" onClick={() => setOpenImportCsv(true)} sx={{ mr: 1 }}>
           CSVインポート
         </Button>
+        <Button variant="outlined" onClick={() => setOpenSpreadsheetDialog(true)} sx={{ mr: 1 }}>
+          Excel/CSV連携
+        </Button>
         <Button variant="contained" color="primary" onClick={handleSave} sx={{ mr: 1 }}>
           保存
         </Button>
@@ -2610,6 +2615,14 @@ function ClassDataIdDetailGrid() {
           <Button onClick={() => setOpenImportCsv(false)}>キャンセル</Button>
         </DialogActions>
       </Dialog>
+
+      <SpreadsheetImportExportDialog
+        open={openSpreadsheetDialog}
+        onClose={() => setOpenSpreadsheetDialog(false)}
+        category="class_data_id"
+        name={name}
+        onImported={() => window.location.reload()}
+      />
 
       {/* classData型・配列型セル編集ダイアログ */}
       {/* ★ グリッドの外にある広いダイアログで編集するため、

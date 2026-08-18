@@ -18,6 +18,8 @@ from math import isnan, isfinite
 import sys
 from flask import Blueprint, jsonify, request
 
+import pythonSrc.trash as trash
+
 import pythonSrc.customclassdata
 from pythonSrc.constants import ENUM, CLASS_DATA, CLASS_DATA_ID
 from pythonSrc.data_utils import (
@@ -146,14 +148,16 @@ def manage_enum_detail(name):
     elif request.method == 'DELETE':
         try:
             if os.path.exists(file_path):
-                os.remove(file_path)
-                os.rmdir(os.path.join(DATA_DIR, ENUM, name))
                 enum_list_path = os.path.join(DATA_DIR, ENUM, 'enum_list.json')
                 with open(enum_list_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                # 復元時に一覧へ戻せるよう、削除前のエントリを退避しておく
+                deleted_entry = next((item for item in data if item.get('name') == name), None)
                 data = [item for item in data if item['name'] != name]
                 with open(enum_list_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
+                # 即時削除ではなくゴミ箱へ退避（一定期間内なら復元可能）
+                trash.move_to_trash('enum', name, os.path.join(DATA_DIR, ENUM, name), list_entry=deleted_entry)
                 logger.info(f"Deleted enum: {name}")
                 try:
                     import pythonSrc.class_data_id as class_data_id_api
@@ -335,9 +339,15 @@ def manage_class_data():
             delete_name = request.get_json()['name']
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            # 復元時に一覧へ戻せるよう、削除前のエントリを退避しておく
+            deleted_entry = next((item for item in data if item.get('name') == delete_name), None)
             data = [item for item in data if item['name'] != delete_name]
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            # 一覧から消すだけでなく、実データフォルダも即時削除ではなく
+            # ゴミ箱へ退避する（一定期間内なら復元可能）
+            trash.move_to_trash('class_data', delete_name,
+                                 os.path.join(DATA_DIR, CLASS_DATA, delete_name), list_entry=deleted_entry)
             logger.info(f"Removed class: {delete_name}")
             return jsonify({"message": f"Class {delete_name} removed from class_list.json"})
         except FileNotFoundError:
@@ -383,14 +393,15 @@ def manage_class_detail(name):
     elif request.method == 'DELETE':
         try:
             if os.path.exists(file_path):
-                os.remove(file_path)
-                os.rmdir(os.path.join(DATA_DIR, CLASS_DATA, name))
                 class_list_path = os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')
                 with open(class_list_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                deleted_entry = next((item for item in data if item.get('name') == name), None)
                 data = [item for item in data if item['name'] != name]
                 with open(class_list_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
+                trash.move_to_trash('class_data', name,
+                                     os.path.join(DATA_DIR, CLASS_DATA, name), list_entry=deleted_entry)
                 logger.info(f"Deleted class: {name}")
                 return jsonify({"message": f"{name}.class.json deleted successfully"})
             logger.warning(f"{name}.class.json not found at {file_path}")

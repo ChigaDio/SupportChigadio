@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import SpreadsheetImportExportDialog from './SpreadsheetImportExportDialog';
 
 function EnumDetailGrid() {
   const { name } = useParams();
@@ -15,6 +17,7 @@ function EnumDetailGrid() {
   const [newProperty, setNewProperty] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [defaultCount, setDefaultCount] = useState('');
+  const [openSpreadsheetDialog, setOpenSpreadsheetDialog] = useState(false);
 
   // データ取得
   useEffect(() => {
@@ -213,6 +216,14 @@ function EnumDetailGrid() {
           C#生成
         </Button>
         <Button
+          variant="outlined"
+          startIcon={<TableChartIcon />}
+          onClick={() => setOpenSpreadsheetDialog(true)}
+          sx={{ mr: 1 }}
+        >
+          Excel/CSV連携
+        </Button>
+        <Button
           variant="contained"
           color="error"
           onClick={handleDelete}
@@ -292,6 +303,13 @@ function EnumDetailGrid() {
           <Button onClick={handleAddDefault}>作成</Button>
         </DialogActions>
       </Dialog>
+      <SpreadsheetImportExportDialog
+        open={openSpreadsheetDialog}
+        onClose={() => setOpenSpreadsheetDialog(false)}
+        category="enum"
+        name={name}
+        onImported={() => window.location.reload()}
+      />
     </Box>
   );
 }

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { fetchEnumIdData } from '../services/api';
+import { fetchEnumIdData, confirmDeleteWithReferenceCheck } from '../services/api';
 
 function EnumIdGrid() {
   const [enumIdData, setEnumIdData] = useState([]);
@@ -40,8 +40,8 @@ function EnumIdGrid() {
   };
 
   // Enum削除
-  const handleDeleteEnum = (name) => {
-    if (window.confirm(`Delete ${name}?`)) {
+  const handleDeleteEnum = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('enum', name)) {
       fetch(`/api/enum/${name}`, { method: 'DELETE' })
         .then(response => response.json())
         .then(result => {

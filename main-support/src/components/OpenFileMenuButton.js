@@ -25,6 +25,25 @@ async function copyForVisualStudio(absolutePath) {
   }
 }
 
+// ローカルモード（サーバーモードではない通常起動）専用: ブラウザとFlask
+// プロセスが同じPC上で動いていることを利用し、サーバー側(=自PC)で直接
+// エディタを起動する。vscode:// URLスキームが未登録/ブロックされている
+// 環境でも確実に開けるのが利点。サーバーモード時はバックエンド側で403に
+// なるため、このボタンはfileInfo.localOpenAvailableがtrueのときだけ表示する。
+async function openLocally(absolutePath, editor, onError) {
+  try {
+    const res = await fetch('/api/local-open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: absolutePath, editor }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '開けませんでした');
+  } catch (e) {
+    onError(e.message);
+  }
+}
+
 // category, name: file_locator.py側のカテゴリ名・対象アイテム名（通常の一覧Grid用）
 // fetchUrl: 指定した場合、category/name の代わりにこのURLを直接叩く
 //           （例: StateDetailGridのノード単位のようにfile-locator以外のAPIを使う場合）
@@ -94,6 +113,11 @@ function OpenFileMenuButton({ category, name, fetchUrl, resolveCsFiles, size = '
             Visual Studio用にパスをコピー
           </MenuItem>
         )}
+        {!loading && !errorMsg && fileInfo && fileInfo.jsonPath && fileInfo.localOpenAvailable && (
+          <MenuItem onClick={() => { openLocally(fileInfo.jsonPath, 'vscode', (msg) => alert('開けませんでした: ' + msg)); handleClose(); }}>
+            ローカルで直接開く（VSCode）
+          </MenuItem>
+        )}
 
         {!loading && !errorMsg && fileInfo && fileInfo.jsonPath && fileInfo.csFiles?.length > 0 && <Divider />}
 
@@ -108,6 +132,17 @@ function OpenFileMenuButton({ category, name, fetchUrl, resolveCsFiles, size = '
         {!loading && !errorMsg && fileInfo && fileInfo.csFiles?.map((f) => (
           <MenuItem key={`${f.path}-vs`} onClick={() => { copyForVisualStudio(f.path); handleClose(); }}>
             Visual Studio用にパスをコピー: {f.label}
+          </MenuItem>
+        ))}
+        {!loading && !errorMsg && fileInfo && fileInfo.localOpenAvailable && fileInfo.csFiles?.length > 0 && <Divider />}
+        {!loading && !errorMsg && fileInfo && fileInfo.localOpenAvailable && fileInfo.csFiles?.map((f) => (
+          <MenuItem key={`${f.path}-local-vscode`} onClick={() => { openLocally(f.path, 'vscode', (msg) => alert('開けませんでした: ' + msg)); handleClose(); }}>
+            ローカルで直接開く（VSCode）: {f.label}
+          </MenuItem>
+        ))}
+        {!loading && !errorMsg && fileInfo && fileInfo.localOpenAvailable && fileInfo.csFiles?.map((f) => (
+          <MenuItem key={`${f.path}-local-vs`} onClick={() => { openLocally(f.path, 'vs', (msg) => alert('開けませんでした: ' + msg)); handleClose(); }}>
+            ローカルで直接開く（Visual Studio）: {f.label}
           </MenuItem>
         ))}
       </Menu>

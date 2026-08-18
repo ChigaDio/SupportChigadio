@@ -136,6 +136,48 @@ function buildFlatComponents({
 }
 
 // ------------------------------------------------------------------
+// DataGrid（各種一覧・データ入力Grid）の見た目をテーマごとに明示的に
+// 指定するための共通ヘルパー。
+//
+// 背景: @mui/x-data-grid はテーマのpaletteから完全には色を継承しない
+// 挙動があり、テーマ側で明示的に上書きしないと、ダークテーマ(cyber等)や
+// 特徴的な配色のテーマ(slack/discord)でヘッダー背景とヘッダー文字が
+// 同系色になって読めなくなったり、逆にヘッダーだけデフォルトの明るい色の
+// ままになって周囲から浮いて見えたりする不具合が起きる。
+// これまでmonotone/flatテーマだけがbuildFlatComponents経由でこの対策を
+// 受けていたため、それ以外のテーマ(light/cyber/slack/discord)で「文字色と
+// 背景色が同化して見えない」問題が起きていた。全テーマに適用することで解消する。
+function buildDataGridOverrides({ paper, border, text, headerBg, headerText, hoverBg, selectedBg, accent }) {
+  return {
+    MuiDataGrid: {
+      styleOverrides: {
+        root: {
+          border: `1px solid ${border}`,
+          backgroundColor: paper,
+          color: text,
+          '--DataGrid-rowBorderColor': border,
+          '& .MuiDataGrid-columnHeaders': {
+            backgroundColor: headerBg,
+            color: headerText,
+          },
+          '& .MuiDataGrid-columnHeaderTitle': { fontWeight: 700, color: headerText },
+          '& .MuiDataGrid-columnSeparator': { color: border },
+          '& .MuiDataGrid-cell': { borderColor: border, color: text },
+          '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: `1px solid ${accent}` },
+          '& .MuiDataGrid-row:hover': { backgroundColor: hoverBg },
+          '& .MuiDataGrid-row.Mui-selected': { backgroundColor: selectedBg },
+          '& .MuiDataGrid-row.Mui-selected:hover': { backgroundColor: selectedBg },
+          '& .MuiDataGrid-footerContainer': { borderTop: `1px solid ${border}`, color: text },
+          '& .MuiDataGrid-overlay': { backgroundColor: paper, color: text },
+          '& .MuiDataGrid-menuIcon, & .MuiDataGrid-sortIcon, & .MuiDataGrid-iconButtonContainer': { color: headerText },
+          '& .MuiTablePagination-root, & .MuiDataGrid-selectedRowCount': { color: text },
+        },
+      },
+    },
+  };
+}
+
+// ------------------------------------------------------------------
 // ライト（最初のデザインに近い、素のMUIライトテーマ）
 // ------------------------------------------------------------------
 export const lightTheme = createTheme({
@@ -149,6 +191,16 @@ export const lightTheme = createTheme({
     fontFamily: ['"Roboto"', '"Noto Sans JP"', 'Helvetica', 'Arial', 'sans-serif'].join(','),
   },
   shape: { borderRadius: 6 },
+  components: buildDataGridOverrides({
+    paper: '#ffffff',
+    border: 'rgba(0, 0, 0, 0.12)',
+    text: '#1a1a1a',
+    headerBg: '#eef1f5',
+    headerText: '#1a1a1a',
+    hoverBg: 'rgba(25, 118, 210, 0.06)',
+    selectedBg: 'rgba(25, 118, 210, 0.12)',
+    accent: '#1976d2',
+  }),
 });
 
 // ------------------------------------------------------------------
@@ -220,6 +272,16 @@ export const cyberTheme = createTheme({
         root: { borderBottom: '1px solid rgba(255,255,255,0.06)' },
       },
     },
+    ...buildDataGridOverrides({
+      paper: '#0e1420',
+      border: 'rgba(0,234,255,0.18)',
+      text: '#e6f7ff',
+      headerBg: '#0b111c',
+      headerText: '#00eaff',
+      hoverBg: 'rgba(0,234,255,0.08)',
+      selectedBg: 'rgba(0,234,255,0.16)',
+      accent: '#00eaff',
+    }),
   },
 });
 
@@ -264,6 +326,16 @@ export const slackTheme = createTheme({
     MuiButton: {
       styleOverrides: { root: { borderRadius: 6 } },
     },
+    ...buildDataGridOverrides({
+      paper: '#ffffff',
+      border: '#e2e2e2',
+      text: '#1d1c1d',
+      headerBg: '#f6f2f6',
+      headerText: '#3f0e40',
+      hoverBg: 'rgba(97, 31, 105, 0.06)',
+      selectedBg: 'rgba(97, 31, 105, 0.12)',
+      accent: '#611f69',
+    }),
   },
 });
 
@@ -304,6 +376,16 @@ export const discordTheme = createTheme({
         containedPrimary: { boxShadow: 'none', '&:hover': { backgroundColor: '#4752c4' } },
       },
     },
+    ...buildDataGridOverrides({
+      paper: '#2b2d31',
+      border: 'rgba(255,255,255,0.08)',
+      text: '#f2f3f5',
+      headerBg: '#1e1f22',
+      headerText: '#f2f3f5',
+      hoverBg: 'rgba(88,101,242,0.10)',
+      selectedBg: 'rgba(88,101,242,0.20)',
+      accent: '#5865F2',
+    }),
   },
 });
 

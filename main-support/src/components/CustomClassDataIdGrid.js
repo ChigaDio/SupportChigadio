@@ -7,6 +7,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
+import { confirmDeleteWithReferenceCheck } from '../services/api';
 
 const NO_TAG = '__none__';
 
@@ -78,8 +79,8 @@ function CustomClassDataIdGrid() {
       .catch(error => alert('作成エラー: ' + error.message));
   };
 
-  const handleDelete = (name) => {
-    if (window.confirm(`${name} を削除しますか？`)) {
+  const handleDelete = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('custom_class_data_id', name)) {
       fetch('/api/custom-class-data-id', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

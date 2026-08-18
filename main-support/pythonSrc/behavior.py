@@ -11,6 +11,8 @@ import shutil
 import uuid
 from flask import jsonify
 
+import pythonSrc.trash as trash
+
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -1205,7 +1207,7 @@ def add_behavior(request):
 def delete_behavior(name):
     behavior_dir = os.path.join(DATA_DIR, BEHAVIOR_DATA, name)
     if os.path.exists(behavior_dir):
-        shutil.rmtree(behavior_dir)
+        trash.move_to_trash('behavior_data', name, behavior_dir)
         return jsonify({'message': 'Deleted'})
     return jsonify({'error': 'Not found'}), 404
 

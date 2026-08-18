@@ -3,6 +3,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
+import { confirmDeleteWithReferenceCheck } from '../services/api';
 
 function ScenarioRoleGrid() {
   const navigate = useNavigate();
@@ -82,8 +83,8 @@ function ScenarioRoleGrid() {
   };
 
   // Delete role
-  const handleDeleteRole = (name) => {
-    if (window.confirm(`ロール ${name} を削除しますか？`)) {
+  const handleDeleteRole = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('scenario_role', name)) {
       fetch('/api/scenario-role', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

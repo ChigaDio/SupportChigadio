@@ -3,6 +3,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
+import { confirmDeleteWithReferenceCheck } from '../services/api';
 
 function StateGrid() {
   const navigate = useNavigate();
@@ -62,8 +63,8 @@ function StateGrid() {
   };
 
   // 状態を削除
-  const handleDelete = (name) => {
-    if (window.confirm(`${name}.state.json を削除しますか？`)) {
+  const handleDelete = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('state_data', name)) {
       fetch(`/api/state-data/${name}`, {
         method: 'DELETE',
       })

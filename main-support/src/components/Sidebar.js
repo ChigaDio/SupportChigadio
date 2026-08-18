@@ -23,7 +23,9 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'State', key: 'state' },
         { name: 'Behavior', key: 'behavior' },
         { name: 'Save Data', key: 'save-data' },
-        { name: 'CSプロジェクト同期', key: 'csproj-sync' }
+        { name: 'CSプロジェクト同期', key: 'csproj-sync' },
+        { name: 'データ整合性チェック', key: 'data-lint' },
+        { name: '一括生成ダッシュボード', key: 'generate-all' }
       ],
     },
     {
@@ -56,8 +58,11 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
 
   // ワークスペース／お知らせはサブメニューを持たない単独リンク
   const singleItems = [
+    { name: 'ProjectStats' },
     { name: 'Workspace' },
     { name: 'Announcements' },
+    { name: 'Trash' },
+    { name: 'PermissionMatrix' },
   ];
 
   return (
@@ -80,7 +85,13 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
             onClick={() => handleMenuClick(item.name, null)}
             selected={selectedMenu === item.name}
           >
-            <ListItemText primary={item.name === 'Workspace' ? 'ワークスペース' : 'お知らせ'} />
+            <ListItemText primary={
+              item.name === 'Workspace' ? 'ワークスペース'
+                : item.name === 'Trash' ? 'ゴミ箱'
+                : item.name === 'ProjectStats' ? 'プロジェクト統計'
+                : item.name === 'PermissionMatrix' ? '権限マトリクス'
+                : 'お知らせ'
+            } />
           </ListItem>
         ))}
         {menuItems.map((item) => (

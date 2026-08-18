@@ -32,6 +32,7 @@ from pythonSrc.data_utils import (
     write_binary_field,
     load_custom_class_data_id_dict,
 )
+import pythonSrc.trash as trash
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('matrix', __name__)
@@ -100,10 +101,13 @@ def manage_matrix_id():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            deleted_entry = next((item for item in data if item.get('name') == delete_name), None)
             data = [item for item in data if item['name'] != delete_name]
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            shutil.rmtree(os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, delete_name), ignore_errors=True)
+            trash.move_to_trash(CLASS_DATA_MATRIX_ID, delete_name,
+                                os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, delete_name), list_entry=deleted_entry)
+            
             return jsonify({"message": "Deleted"})
         except FileNotFoundError:
             return jsonify({"error": "List file not found"}), 404

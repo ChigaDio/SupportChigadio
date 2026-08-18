@@ -3,6 +3,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
+import { confirmDeleteWithReferenceCheck } from '../services/api';
 
 function CustomClassDataGrid() {
   const navigate = useNavigate();
@@ -46,8 +47,8 @@ function CustomClassDataGrid() {
       .catch(error => alert('作成エラー: ' + error.message));
   };
 
-  const handleDelete = (name) => {
-    if (window.confirm(`CustomClassData ${name} を削除しますか？`)) {
+  const handleDelete = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('custom_class_data', name)) {
       fetch('/api/custom-class-data', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

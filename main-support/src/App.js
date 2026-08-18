@@ -37,6 +37,12 @@ import SaveDataGrid from './components/SaveDataGrid';
 import CsprojSyncGrid from './components/CsprojSyncGrid';
 import ActivityLogGrid from './components/ActivityLogGrid';
 import WorkspaceUploadGrid from './components/WorkspaceUploadGrid';
+import DownloadGrid from './components/DownloadGrid';
+import LintCheckGrid from './components/LintCheckGrid';
+import TrashGrid from './components/TrashGrid';
+import GenerateAllGrid from './components/GenerateAllGrid';
+import ProjectStatsGrid from './components/ProjectStatsGrid';
+import PermissionMatrixGrid from './components/PermissionMatrixGrid';
 
 import Sound from './assets/sound';
 import Texture from './assets/texture';
@@ -127,6 +133,12 @@ function AppContent() {
         case 'csproj-sync':
           navigate('/csproj-sync');
           break;
+        case 'data-lint':
+          navigate('/data-lint');
+          break;
+        case 'generate-all':
+          navigate('/generate-all');
+          break;
         default:
           navigate('/enum-id'); // GenerateTool default
       }
@@ -182,6 +194,12 @@ function AppContent() {
       navigate('/workspace');
     } else if (menu === 'Announcements') {
       navigate('/announcements');
+    } else if (menu === 'Trash') {
+      navigate('/trash');
+    } else if (menu === 'ProjectStats') {
+      navigate('/project-stats');
+    } else if (menu === 'PermissionMatrix') {
+      navigate('/permission-matrix');
     }
     else {
       navigate('/');
@@ -244,6 +262,11 @@ function AppContent() {
             <Route path="/scene" element={<Scene />} />
             <Route path="/save-data" element={<SaveDataGrid />} />
             <Route path="/csproj-sync" element={<CsprojSyncGrid />} />
+            <Route path="/data-lint" element={<LintCheckGrid />} />
+            <Route path="/trash" element={<TrashGrid />} />
+            <Route path="/generate-all" element={<GenerateAllGrid />} />
+            <Route path="/project-stats" element={<ProjectStatsGrid />} />
+            <Route path="/permission-matrix" element={<PermissionMatrixGrid />} />
             <Route path="/log" element={<DbgLog />} />
             <Route path="/command" element={<DbgCommand />} />
 
@@ -252,6 +275,7 @@ function AppContent() {
             <Route path="/workspace" element={<Workspace />} />
             <Route path="/activity-log" element={<ActivityLogGrid />} />
             <Route path="/workspace/upload" element={<WorkspaceUploadGrid />} />
+            <Route path="/workspace/download" element={<DownloadGrid />} />
             <Route path="/announcements" element={<AnnouncementList />} />
             <Route path="/announcements/new" element={<AnnouncementEditor />} />
             <Route path="/announcements/:id" element={<AnnouncementDetail />} />

@@ -1,9 +1,9 @@
-// <DOCUMENT filename="BehaviorGrid.js">
 import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
+import { confirmDeleteWithReferenceCheck } from '../services/api';
 
 function BehaviorGrid() {
   const navigate = useNavigate();
@@ -62,8 +62,8 @@ function BehaviorGrid() {
   };
 
   // ビヘイビアを削除
-  const handleDelete = (name) => {
-    if (window.confirm(`${name}.behavior.json を削除しますか？`)) {
+  const handleDelete = async (name) => {
+    if (await confirmDeleteWithReferenceCheck('behavior_data', name)) {
       fetch(`/api/behavior-data/${name}`, {
         method: 'DELETE',
       })

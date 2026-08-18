@@ -24,13 +24,20 @@ vscode://file/… や、Visual Studioへのパスコピー）であり、本モ�
 """
 import os
 import re
+import sys
+import subprocess
 
 DATA_DIR = None
 
-
-def init(data_dir):
-    global DATA_DIR
-    DATA_DIR = os.path.abspath(data_dir)
+# サーバーモード(SERVER_MODE=True)のときは、ブラウザを開いているクライアントと
+# Flaskプロセスが別マシンである可能性があるため、サーバー側でエディタや
+# エクスプローラーを起動することはできない（vscode://file/ URLスキームで
+# クライアント側から開く方式のみが安全）。
+# 一方、ローカルモード(通常起動)ではブラウザとFlaskプロセスが同じPC上で
+# 動いているため、サーバー側でエディタを直接起動する方式が使える。
+# vscode://が未登録・ブロックされている環境でも確実に開けるよう、
+# ローカルモードのときだけこの直接起動オプションを提供する。
+SERVER_MODE = False
 
 
 def _to_valid_identifier(name):
@@ -123,13 +130,82 @@ def resolve(category, name):
     }
 
 
-def register(app, data_dir):
-    from flask import jsonify
+def _open_with_os_default(path):
+    """OS標準の関連付けアプリでファイルを開く（最終フォールバック）。"""
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # noqa: S606 (Windows専用API)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+def open_locally(path, editor):
+    """ローカルモード限定: サーバー(=自PC)側でエディタを直接起動する。
+    `code`/`devenv` コマンドがPATHに無い・起動に失敗した場合は、
+    OS標準の関連付け(拡張子ダブルクリック相当)にフォールバックする。"""
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError(f"ファイルが見つかりません: {path}")
+
+    commands = {
+        "vscode": ["code", "--goto", path],
+        "vs": ["devenv", "/edit", path],
+    }
+    cmd = commands.get(editor)
+    if cmd is None:
+        raise ValueError(f"未対応のエディタ指定です: {editor}")
+
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=5, check=True)
+        return
+    except (OSError, subprocess.SubprocessError):
+        # code/devenv が無い、もしくはエディタ側の一時的な起動失敗。
+        # OS標準の関連付けで開くフォールバックへ進む。
+        pass
+
+    _open_with_os_default(path)
+    
+def init(data_dir):
+    """DATA_DIR を設定する。register() から呼ばれる想定だが、
+    テスト等で file-locator 単体を使う場合はここを直接呼んでもよい。"""
+    global DATA_DIR
+    if not data_dir:
+        raise ValueError("data_dir が指定されていません")
+    DATA_DIR = os.path.abspath(data_dir)
+
+
+def register(app, data_dir, server_mode=False):
+    from flask import jsonify, request
+    global SERVER_MODE
     init(data_dir)
+    SERVER_MODE = server_mode
 
     @app.route("/api/file-locator/<category>/<path:name>", methods=["GET"])
     def file_locator_resolve(category, name):
         result = resolve(category, name)
         if result is None:
             return jsonify({"error": f"未対応のカテゴリです: {category}"}), 400
+        # ローカルモードのときだけ、クライアントに「サーバー側で直接開く」
+        # ボタンを出してよいことを知らせる。
+        result["localOpenAvailable"] = not SERVER_MODE
         return jsonify(result)
+
+    @app.route("/api/local-open", methods=["POST"])
+    def local_open():
+        if SERVER_MODE:
+            # 別マシン(クライアント)のエディタをサーバー側から起動することは
+            # できないため、サーバーモードでは明示的に拒否する
+            # （クライアント側は代わりに vscode://file/ を使う）。
+            return jsonify({"error": "サーバーモードではこの機能は使用できません"}), 403
+        body = request.get_json(silent=True) or {}
+        path = body.get("path")
+        editor = body.get("editor", "vscode")
+        try:
+            open_locally(path, editor)
+            return jsonify({"message": f"{os.path.basename(path)} を開きました"})
+        except FileNotFoundError as e:
+            return jsonify({"error": str(e)}), 400
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"ファイルを開けませんでした: {e}"}), 500

@@ -62,6 +62,13 @@ import pythonSrc.workspace_routes as workspace_routes
 import pythonSrc.download as download_module
 import pythonSrc.csproj_sync as csproj_sync
 import pythonSrc.file_locator as file_locator
+import pythonSrc.reference_check as reference_check
+import pythonSrc.lint_check as lint_check
+import pythonSrc.trash as trash
+import pythonSrc.generate_all as generate_all
+import pythonSrc.history as history
+import pythonSrc.spreadsheet_io as spreadsheet_io
+import pythonSrc.project_stats as project_stats
 import pythonSrc.upload as upload_module
 
 # `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
@@ -1341,16 +1348,18 @@ def handle_scenario_role_list():
         name = data.get('name')
         if not name:
             return jsonify({"error": "Name is required"}), 400
+        deleted_entry = None
         if os.path.exists(list_path):
             with open(list_path, 'r+', encoding='utf-8') as f:
                 roles = json.load(f)
+                deleted_entry = next((r for r in roles if r.get('name') == name), None)
                 roles = [r for r in roles if r['name'] != name]
                 f.seek(0)
                 f.truncate()
                 json.dump(roles, f)
         role_dir = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, name)
         if os.path.exists(role_dir):
-            shutil.rmtree(role_dir)
+            trash.move_to_trash('scenario_role', name, role_dir, list_entry=deleted_entry)
         generate_scenario_role_factory()  # Regenerate enum and factory
         return jsonify({"message": "Role deleted"})
 
@@ -1371,15 +1380,17 @@ def handle_scenario_role_detail(name):
         return jsonify({"message": "Data saved"})
     elif request.method == 'DELETE':
         list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
+        deleted_entry = None
         if os.path.exists(list_path):
             with open(list_path, 'r+', encoding='utf-8') as f:
                 roles = json.load(f)
+                deleted_entry = next((r for r in roles if r.get('name') == name), None)
                 roles = [r for r in roles if r['name'] != name]
                 f.seek(0)
                 f.truncate()
                 json.dump(roles, f)
         if os.path.exists(role_dir):
-            shutil.rmtree(role_dir)
+            trash.move_to_trash('scenario_role', name, role_dir, list_entry=deleted_entry)
         return jsonify({"message": "Role deleted"})
 
 @app.route('/api/generate-scenario-role/<name>', methods=['POST'])
@@ -3152,7 +3163,14 @@ if __name__ == '__main__':
     workspace_routes.register(app, DATA_DIR, SERVER_MODE)
     download_module.register(app, DATA_DIR)
     csproj_sync.register(app, DATA_DIR)
-    file_locator.register(app, DATA_DIR)
+    file_locator.register(app, DATA_DIR, SERVER_MODE)
+    reference_check.register(app, DATA_DIR)
+    lint_check.register(app, DATA_DIR)
+    trash.register(app, DATA_DIR)
+    generate_all.register(app, DATA_DIR)
+    history.register(app, DATA_DIR)
+    spreadsheet_io.register(app, DATA_DIR)
+    project_stats.register(app, DATA_DIR)
     upload_module.register(app, DATA_DIR)
 
     # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）

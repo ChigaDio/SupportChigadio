@@ -30,6 +30,7 @@ from pythonSrc.data_utils import (
     write_binary_field,
 )
 import pythonSrc.generators as generators
+import pythonSrc.trash as trash
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('class_data_id', __name__)
@@ -151,15 +152,16 @@ def manage_class_data_id():
                 logger.warning(f"ClassDataID {delete_name} が見つかりません")
                 return jsonify({"error": f"ClassDataID {delete_name} が見つかりません"}), 404
 
+            deleted_entry = next((item for item in data if item.get('name') == delete_name), None)
             data = [item for item in data if item['name'] != delete_name]
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            # 関連ディレクトリの削除
+            # 関連ディレクトリの削除（即時削除ではなくゴミ箱へ退避）
             data_dir = os.path.join(class_data_id_dir, delete_name)
             if os.path.exists(data_dir):
-                shutil.rmtree(data_dir)
-                logger.info(f"ディレクトリを削除しました: {data_dir}")
+                trash.move_to_trash('class_data_id', delete_name, data_dir, list_entry=deleted_entry)
+                logger.info(f"ディレクトリをゴミ箱へ退避しました: {data_dir}")
 
             logger.info(f"ClassDataIDを削除しました: {delete_name}")
             return jsonify({"message": f"ClassDataID {delete_name} を正常に削除しました"}), 200
@@ -1267,11 +1269,10 @@ def sync_scenario_parent_enum_files(events):
         wrapper_lines.append(f"            {enum_name}ID sub = {enum_name}ID.{sub_names[0]},")
         wrapper_lines.append(f"            bool addressable = false,")
         wrapper_lines.append(f"            Action<ScenarioExecuteData> action = null,")
-        wrapper_lines.append(f"            ScenarioExecuteData data = null,,")
         wrapper_lines.append(f"            CancellationTokenSource cts = null)")
         wrapper_lines.append("        {")
         wrapper_lines.append(f"            var subName = _{enum_name}IDToName(sub);")
-        wrapper_lines.append(f"            await core.ScenarioExecuteUpdate(\"{parent_name}\", subName, addressable, action, data,cts);")
+        wrapper_lines.append(f"            await core.ScenarioExecuteUpdate(\"{parent_name}\", subName, addressable, action, cts);")
         wrapper_lines.append("        }")
         wrapper_lines.append("")
         wrapper_lines.append(f"        private static string _{enum_name}IDToName({enum_name}ID id)")

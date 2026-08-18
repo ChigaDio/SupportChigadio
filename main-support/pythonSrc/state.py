@@ -20,6 +20,7 @@ from flask import Blueprint, jsonify, request
 
 from pythonSrc.constants import STATE_DATA, TYPE_MAP
 from pythonSrc.data_utils import get_type_lists, generate_csharp_field
+import pythonSrc.trash as trash
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('state', __name__)
@@ -154,14 +155,15 @@ def manage_state_detail(name):
     elif request.method == 'DELETE':
         try:
             if os.path.exists(file_path):
-                os.remove(file_path)
-                os.rmdir(os.path.join(DATA_DIR, STATE_DATA, name))
                 state_list_path = os.path.join(DATA_DIR, STATE_DATA, 'state_list.json')
                 with open(state_list_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                deleted_entry = next((item for item in data if item.get('name') == name), None)
                 data = [item for item in data if item['name'] != name]
                 with open(state_list_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
+                trash.move_to_trash('state_data', name,
+                                     os.path.join(DATA_DIR, STATE_DATA, name), list_entry=deleted_entry)
                 logger.info(f"Deleted state: {name}")
                 return jsonify({"message": f"{name}.state.json deleted successfully"})
             return jsonify({"error": f"{name}.state.json not found"}), 404

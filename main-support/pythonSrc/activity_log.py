@@ -68,6 +68,43 @@ def record(user, role, method, path, category=None, item=None, status=200):
         pass
 
 
+def attach_changed_files(changed_files, within_seconds=5):
+    """直近（within_seconds秒以内）に記録された本日分ログの最後のエントリへ、
+    変更されたファイル一覧(changed_files)を後から追記する。
+
+    pythonSrc/history.py が、状態変更を伴うAPIリクエストの処理完了後
+    （＝そのリクエスト内で既に record() が呼ばれた後）に呼び出す想定。
+    record() 自体は変更しておらず、あくまで直後に追記するだけなので、
+    既存の呼び出し箇所（各カテゴリのルート）には一切手を加えていない。
+
+    直近のログが無い、または最後のログが古すぎる（別リクエストの可能性が
+    高い）場合は何もしない。"""
+    if _LOGS_DIR is None or not changed_files:
+        return
+    path = _today_path()
+    if not os.path.isfile(path):
+        return
+    try:
+        with _lock:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if not lines:
+                return
+            last = json.loads(lines[-1])
+            try:
+                last_time = datetime.fromisoformat(last.get("time", ""))
+            except ValueError:
+                return
+            if (datetime.now() - last_time).total_seconds() > within_seconds:
+                return
+            last["changed_files"] = changed_files
+            lines[-1] = json.dumps(last, ensure_ascii=False) + "\n"
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
 def read_recent(limit=100, user=None, days=LOG_RETENTION_DAYS):
     """直近 `days` 日分のログを新しい順に読み出す。"""
     if _LOGS_DIR is None or not os.path.isdir(_LOGS_DIR):

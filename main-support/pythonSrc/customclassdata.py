@@ -40,6 +40,8 @@ import textwrap
 
 from flask import Blueprint, jsonify, request
 
+import pythonSrc.trash as trash
+
 logger = logging.getLogger(__name__)
 
 # --- ディレクトリ/ファイル名定数 -------------------------------------------------
@@ -347,11 +349,12 @@ def manage_custom_class_data():
         try:
             delete_name = request.get_json().get('name')
             data = _load_json(file_path, [])
+            deleted_entry = next((item for item in data if item.get('name') == delete_name), None)
             data = [item for item in data if item['name'] != delete_name]
             _save_json(file_path, data)
             target_dir = _path(CUSTOM_CLASS_DATA, delete_name)
             if os.path.exists(target_dir):
-                shutil.rmtree(target_dir)
+                trash.move_to_trash('custom_class_data', delete_name, target_dir, list_entry=deleted_entry)
             return jsonify({"message": f"CustomClassData {delete_name} を削除しました"})
         except Exception as e:
             logger.error(f"CustomClassData削除エラー: {e}")
@@ -892,11 +895,12 @@ def manage_custom_class_data_id():
         try:
             delete_name = request.get_json().get('name')
             data = _load_json(file_path, [])
+            deleted_entry = next((item for item in data if item.get('name') == delete_name), None)
             data = [item for item in data if item['name'] != delete_name]
             _save_json(file_path, data)
             target_dir = _path(CUSTOM_CLASS_DATA_ID, delete_name)
             if os.path.exists(target_dir):
-                shutil.rmtree(target_dir)
+                trash.move_to_trash('custom_class_data_id', delete_name, target_dir, list_entry=deleted_entry)
             return jsonify({"message": f"CustomClassDataID {delete_name} を削除しました"})
         except Exception as e:
             logger.error(f"CustomClassDataID削除エラー: {e}")
