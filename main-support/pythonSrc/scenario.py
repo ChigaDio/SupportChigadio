@@ -1475,7 +1475,12 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         var_type = var['type']
 
         # bit / color / bezier / dictionary: 値編集に必要な options をそのままフロントへ渡す
-        if var_type in ('bit', 'color', 'bezier', 'dictionary'):
+        # voice_ref: Voice専用Role(VoiceLine)専用の特殊型。通常のRoleフィールド
+        # エディタでは選ばせず、story_setting.ensure_voice_role() が自動生成する
+        # VoiceLineロールでのみ使う。フロント(BaseRoleInputForm.js)側で、
+        # そのサブイベントの物語設定のvoice_series_idから絞り込んだSoundID一覧を
+        # 選ぶドロップダウンとして特別描画する。
+        if var_type in ('bit', 'color', 'bezier', 'dictionary', 'voice_ref'):
             field['type'] = var_type
             field['options'] = var.get('options', {})
 

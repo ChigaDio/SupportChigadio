@@ -29,6 +29,87 @@ const VECTOR_AXIS_LABELS = {
 };
 
 // ============================================================
+// voice_ref: Voice専用Role(VoiceLine)専用の特殊フィールド型。
+// そのサブイベントの物語設定(story_setting)で指定されたvoice_series_id
+// （Group+SubGroup）に属するSoundID（type=VOICE）だけへ絞り込んだ
+// ドロップダウンを表示する。eventId/subIdはScenarioEventTransition.js
+// から伝播される（無い場合はRole単体プレビュー等の文脈なので、その旨を表示）。
+// ============================================================
+function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
+  const [options, setOptions] = useState([]);
+  const [seriesLabel, setSeriesLabel] = useState('');
+  const [loadingVoice, setLoadingVoice] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (!eventId || !subId) {
+      setErrorMsg('このRoleはシナリオイベントの遷移編集画面からのみ使用できます（物語設定のvoice_series_idが必要）。');
+      setLoadingVoice(false);
+      return;
+    }
+    setLoadingVoice(true);
+    setErrorMsg('');
+    Promise.all([
+      fetch(`/api/scenario-event/${eventId}/sub/${subId}/story`).then((r) => r.json()),
+      fetch('/api/sound').then((r) => r.json()),
+    ])
+      .then(([story, soundData]) => {
+        const series = story.voiceSeriesId;
+        if (!series) {
+          setErrorMsg('このサブイベントの物語設定にvoice_series_idが設定されていません。先に物語設定画面でVoice系列を指定してください。');
+          setOptions([]);
+          return;
+        }
+        setSeriesLabel(`Sound_${series.group}_${series.subGroup}`);
+        const items = [];
+        Object.entries(soundData.groups || {}).forEach(([groupName, groupValue]) => {
+          if (groupName !== series.group) return;
+          (groupValue.items || []).forEach((item) => {
+            if (item.type === 'VOICE' && item.subgroup === series.subGroup) {
+              items.push({ name: item.name, enumName: `${groupName}_${item.name}` });
+            }
+          });
+        });
+        setOptions(items);
+      })
+      .catch((e) => setErrorMsg('取得エラー: ' + e.message))
+      .finally(() => setLoadingVoice(false));
+  }, [eventId, subId]);
+
+  if (loadingVoice) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={16} />
+        <Typography variant="caption" color="text.secondary">Voice候補を読み込み中...</Typography>
+      </Box>
+    );
+  }
+
+  if (errorMsg) {
+    return <Typography variant="caption" color="error">{errorMsg}</Typography>;
+  }
+
+  const selected = options.find((o) => o.enumName === value) || null;
+
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+        Voice系列: {seriesLabel}（{options.length}件）
+      </Typography>
+      <Autocomplete
+        size="small"
+        options={options}
+        value={selected}
+        onChange={(e, v) => onChange(v ? v.enumName : '')}
+        getOptionLabel={(o) => (o ? `SoundID.${o.enumName}` : '')}
+        isOptionEqualToValue={(a, b) => a.enumName === b.enumName}
+        renderInput={(params) => <TextField {...params} label="Voice" />}
+      />
+    </Box>
+  );
+}
+
+// ============================================================
 // bit / color / bezier 値エディタ
 // (CustomClassDataIdDetailGrid.js の編集UIと同じ挙動・データ形式に揃えてある)
 // ============================================================
@@ -608,7 +689,7 @@ function DictionaryValueEditor({ value, options, onChange, enumValues, classData
   );
 }
 
-const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
+const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId }) => {
   const [formData, setFormData] = useState(initialData || []);
   const [enumValues, setEnumValues] = useState({});
   const [classDataSchemas, setClassDataSchemas] = useState({});
@@ -785,6 +866,9 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
 
     const renderSingle = (value, onValueChange) => {
       // bit / color / bezier (CustomClassDataの拡張型)
+      if (field.type === 'voice_ref') {
+        return <VoiceRefFieldEditor key={key} value={value} onChange={onValueChange} eventId={eventId} subId={subId} />;
+      }
       if (field.type === 'bit') {
         return <BitValueEditor key={key} value={value} options={field.options} onChange={onValueChange} />;
       }

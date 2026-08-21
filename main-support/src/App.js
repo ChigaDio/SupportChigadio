@@ -27,6 +27,7 @@ import ScenarioRoleGrid from './components/ScenarioRoleGrid';
 import ScenarioRoleDetailGrid from './components/ScenarioRoleDetailGrid';
 import ScenarioEventGrid from './components/ScenarioEventGrid';
 import ScenarioEventTransition from './components/ScenarioEventTransition';
+import ScenarioStorySettingGrid from './components/ScenarioStorySettingGrid';
 import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 import BehaviorGrid from './components/BehaviorGrid';
 import BehaviorDetailGrid from './components/BehaviorDetailGrid';
@@ -245,6 +246,7 @@ function AppContent() {
             <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
             <Route path="/scenario-event" element={<ScenarioEventGrid />} />
             <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+            <Route path="/scenario-event/:eventId/sub/:subId/story" element={<ScenarioStorySettingGrid />} />
 
             <Route path="/custom-class-data" element={<CustomClassDataGrid />} />
             <Route path="/custom-class-data/:name" element={<CustomClassDataDetailGrid />} />

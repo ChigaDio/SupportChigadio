@@ -33,6 +33,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import RoleInputFactory from '../scenario/RoleInputFactory';
+import ScenarioTransactionCodeEditor from '../scenario/ScenarioTransactionCodeEditor';
+import { compileDocument, decompileRoles } from '../scenario/scenarioTransactionDsl';
 import { debounce } from 'lodash';
 
 // ============================================================
@@ -290,13 +292,89 @@ const ConnectionBadge = ({ nodeId, edges, onRemove }) => {
 // ============================================================
 const RoleDataDrawer = ({
   open, onClose, nodeId, roles, formDataState, setFormDataState,
-  roleFormSchemas, eventId, subId, onSave, onDeleteRole
+  roleFormSchemas, eventId, subId, onSave, onDeleteRole, onAddRole
 }) => {
   const [roleForms, setRoleForms] = useState({});
   const [formErrors, setFormErrors] = useState({});
   const [loadingForms, setLoadingForms] = useState({});
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
   const loadedRef = useRef({});
+
+  // ── テキスト(DSL)モード ──
+  // 「上から順にRoleを追加していく」GUI入力は残しつつ、迅速な入力向けに
+  // テキストDSL（1行1Role呼び出し）での編集モードを追加している。
+  // scenarioTransactionDsl.js が唯一の文法定義であり、シンタックス
+  // ハイライト・リンター・オートコンプリートもそこを共通の情報源として使う。
+  const [inputMode, setInputMode] = useState('gui'); // 'gui' | 'text'
+  const [dslText, setDslText] = useState('');
+  const [dslDiagnostics, setDslDiagnostics] = useState([]);
+  const [applying, setApplying] = useState(false);
+
+  const switchToTextMode = () => {
+    const rolesForDsl = roles.map((r) => ({
+      uniqueId: r.uniqueId,
+      name: r.name,
+      data: formDataState[r.uniqueId] || r.data || [],
+    }));
+    setDslText(decompileRoles(rolesForDsl, roleFormSchemas));
+    setDslDiagnostics([]);
+    setInputMode('text');
+  };
+
+  const switchToGuiMode = () => {
+    if (dslDiagnostics.some((d) => d.severity !== 'warning')) {
+      if (!window.confirm('未適用のエラーがあります。GUIモードへ切り替えると、テキストの変更内容は破棄されます。よろしいですか？')) {
+        return;
+      }
+    }
+    setInputMode('gui');
+  };
+
+  const handleApplyDsl = () => {
+    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, roleFormSchemas, roles);
+    setDslDiagnostics(diagnostics);
+    const hasError = diagnostics.some((d) => d.severity === 'error');
+    if (hasError) {
+      showSnack('エラーがあるため適用できません。赤波線の箇所を確認してください。', 'error');
+      return;
+    }
+
+    setApplying(true);
+    try {
+      const existingIds = new Set(roles.map((r) => r.uniqueId));
+      const compiledIds = new Set(compiledRoles.map((r) => r.uniqueId));
+
+      // 削除された行（既存にあったが、テキストから消えたRole呼び出し）
+      roles.forEach((r) => {
+        if (!compiledIds.has(r.uniqueId)) onDeleteRole(r.uniqueId);
+      });
+
+      // 新規追加された行（既存に無かった新しいRole呼び出し）
+      compiledRoles.forEach((r) => {
+        if (!existingIds.has(r.uniqueId)) {
+          onAddRole({ uniqueId: r.uniqueId, id: r.uniqueId, name: r.name, branchType: 'General', data: [] });
+        }
+      });
+
+      // 各Roleのフィールド値を反映（新規・既存とも）
+      const nextFormDataState = { ...formDataState };
+      compiledRoles.forEach((r) => {
+        nextFormDataState[r.uniqueId] = r.data;
+      });
+      compiledRoles.forEach((r) => {
+        if (!existingIds.has(r.uniqueId)) delete loadedRef.current[r.uniqueId]; // 新規分はフォームを再読み込みさせる
+      });
+      setFormDataState(nextFormDataState);
+      compiledRoles.forEach((r) => onSave(r.uniqueId, r.data));
+
+      showSnack(`テキストの内容を適用しました（${compiledRoles.length}件）`);
+      setInputMode('gui');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const roleNamesForDsl = Object.keys(roleFormSchemas || {});
 
   // ロールフォーム読み込み（重複防止）
   useEffect(() => {
@@ -316,7 +394,8 @@ const RoleDataDrawer = ({
           role.name,
           formDataState[uid] || role.data || [],
           (formData) => setFormDataState(prev => ({ ...prev, [uid]: formData })),
-          schema
+          schema,
+          { eventId, subId }
         );
         setRoleForms(prev => ({ ...prev, [uid]: FormComp }));
       } catch (err) {
@@ -357,14 +436,53 @@ const RoleDataDrawer = ({
             <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId} / {roles.length} Role</Typography>
           </Box>
           <Box sx={{ display: 'flex', gap: 1 }}>
+            {inputMode === 'gui' ? (
+              <Button variant="outlined" size="small" color="inherit"
+                onClick={switchToTextMode}>
+                テキスト入力へ
+              </Button>
+            ) : (
+              <>
+                <Button variant="outlined" size="small" color="inherit" onClick={switchToGuiMode}>
+                  GUI入力へ
+                </Button>
+                <Button variant="contained" size="small" color="success"
+                  startIcon={<SaveIcon />} onClick={handleApplyDsl} disabled={applying}>
+                  {applying ? '適用中...' : '適用して保存'}
+                </Button>
+              </>
+            )}
             <Button variant="contained" size="small" color="success"
-              startIcon={<SaveIcon />} onClick={handleBatchSave}>
+              startIcon={<SaveIcon />} onClick={handleBatchSave} disabled={inputMode === 'text'}>
               一括保存
             </Button>
             <IconButton onClick={handleClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
           </Box>
         </Box>
 
+        {inputMode === 'text' ? (
+          <Box sx={{ flex: 1, overflow: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Alert severity="info" sx={{ py: 0.5 }}>
+              1行1コマンド形式: <code>RoleName field1=値 field2=値</code>。文字列は <code>"..."</code>、
+              ベクトルは <code>(x, y, z)</code>、配列は <code>[a, b, c]</code>、行頭 <code>#</code> はコメントです。
+              入力中はRole名・フィールド名・値の候補が自動的に表示されます。
+            </Alert>
+            <ScenarioTransactionCodeEditor
+              value={dslText}
+              onChange={setDslText}
+              roleNames={roleNamesForDsl}
+              roleSchemas={roleFormSchemas}
+              height="60vh"
+            />
+            {dslDiagnostics.length > 0 && (
+              <Alert severity={dslDiagnostics.some(d => d.severity === 'error') ? 'error' : 'warning'} sx={{ maxHeight: 160, overflow: 'auto' }}>
+                {dslDiagnostics.map((d, i) => (
+                  <div key={i}>{d.line + 1}行目: {d.message}</div>
+                ))}
+              </Alert>
+            )}
+          </Box>
+        ) : (
         <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
           {roles.length === 0 ? (
             <Alert severity="info">Roleがありません</Alert>
@@ -411,6 +529,7 @@ const RoleDataDrawer = ({
             </Accordion>
           ))}
         </Box>
+        )}
 
         <Snackbar open={snack.open} autoHideDuration={2000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
           <Alert onClose={hideSnack} severity={snack.severity} variant="filled">{snack.msg}</Alert>
@@ -747,6 +866,7 @@ const BlockCard = ({
         subId={subId}
         onSave={(uid, data) => onSaveRole(node.id, uid, data)}
         onDeleteRole={(uid) => onDeleteRole(node.id, uid)}
+        onAddRole={(newRole) => onAddRole(node.id, newRole)}
       />
 
       {/* ── 接続追加ダイアログ ── */}

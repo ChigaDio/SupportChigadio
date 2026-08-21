@@ -69,6 +69,7 @@ import pythonSrc.generate_all as generate_all
 import pythonSrc.history as history
 import pythonSrc.spreadsheet_io as spreadsheet_io
 import pythonSrc.project_stats as project_stats
+import pythonSrc.story_setting as story_setting
 import pythonSrc.upload as upload_module
 
 # `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
@@ -359,6 +360,7 @@ namespace GameCore
         public const string SCENARIO_FOLDER = "scenario_data";
         public const string SCENARIO_EVEMT_FOLDER = "scenario_event_data";
         public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bytes";
+        public const string ALL_STORY_SETTING_BIN_FILE = "story_settings.bytes";
         
         //CustomClassDataID
         public const string CUSTOM_CLASS_DATA_FOLDER = "custom_class_data_id";
@@ -439,6 +441,7 @@ namespace GameCore
         public static string ALL_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, ID_FOLDER, ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_CUSTOM_CLASS_DATA_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, CUSTOM_CLASS_DATA_FOLDER, CUSTOM_CLASS_DATA_ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\\\", "/");
+        public static string ALL_STORY_SETTING_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, ALL_STORY_SETTING_BIN_FILE)).Replace("\\\\", "/");
 
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
@@ -1817,7 +1820,15 @@ def handle_transition(eventId, subId):
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     current_data = json.load(f)
-            current_data.setdefault('subgroups', {}).update({subId: data})
+            # 物語設定(storySetting)など、遷移グラフ(nodes/edges)以外の
+            # キーが既存のsubgroups[subId]に同居している場合があるため、
+            # 丸ごと置き換えず非破壊マージする（このAPIは遷移グラフの
+            # 保存専用であり、物語設定を書き潰さないようにするため）。
+            current_data.setdefault('subgroups', {})
+            existing_sub = current_data['subgroups'].get(subId, {})
+            merged_sub = dict(existing_sub)
+            merged_sub.update(data)
+            current_data['subgroups'][subId] = merged_sub
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(current_data, f, ensure_ascii=False, indent=2)
             return jsonify({'message': 'Transition saved'})
@@ -2471,6 +2482,23 @@ def add_sound():
         return jsonify({'status': 'success'})
     except Exception as e:
         logger.error(f"Sound追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sound/bulk_add_from_folder', methods=['POST'])
+def bulk_add_sounds_from_folder():
+    """フォルダを1つ選択し、直下の音声ファイルをまとめて登録する。
+    VOICEのようにファイル数が非常に多いカテゴリを想定した一括登録用。"""
+    data = request.json
+    try:
+        result = assets.bulk_add_sounds_from_folder(
+            data['group_name'],
+            data['type'],
+            subgroup_name=data.get('subgroup_name'),
+            use_folder_name_as_subgroup=data.get('use_folder_name_as_subgroup', True),
+        )
+        return jsonify({'status': 'success', **result})
+    except Exception as e:
+        logger.error(f"Sound一括追加エラー: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sound/delete_sound', methods=['POST'])
@@ -3171,6 +3199,7 @@ if __name__ == '__main__':
     history.register(app, DATA_DIR)
     spreadsheet_io.register(app, DATA_DIR)
     project_stats.register(app, DATA_DIR)
+    story_setting.register(app, DATA_DIR)
     upload_module.register(app, DATA_DIR)
 
     # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）

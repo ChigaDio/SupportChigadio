@@ -3,7 +3,10 @@ import { Box, Typography } from '@mui/material';
 import BaseRoleInputForm from './BaseRoleInputForm';
 
 const RoleInputFactory = {
-  async getForm(roleName, initialData, onChange, schemaOverride) {  // onSave を onChange に変更
+  async getForm(roleName, initialData, onChange, schemaOverride, context) {  // onSave を onChange に変更
+    // context: { eventId, subId } を渡すと、voice_ref型フィールド
+    // （VoiceLine専用Role）がそのサブイベントの物語設定から
+    // Voice候補を絞り込めるようになる（無くても他の型は通常通り動作する）。
     try {
       // 呼び出し元(RoleDataDrawerなど)がすでに(必要なら強制リフレッシュ済みの)
       // スキーマを渡してきた場合はそれをそのまま使う。渡されなかった場合のみ
@@ -25,7 +28,15 @@ const RoleInputFactory = {
         // import SpecialRoleInputForm from './SpecialRoleInputForm'; // 必要なら
       }
 
-      return () => <BaseRoleInputForm schema={schema} initialData={initialData} onChange={onChange} />;  // onSave を onChange に変更
+      return () => (
+        <BaseRoleInputForm
+          schema={schema}
+          initialData={initialData}
+          onChange={onChange}
+          eventId={context?.eventId}
+          subId={context?.subId}
+        />
+      );  // onSave を onChange に変更
     } catch (error) {
       console.error(error);
       return () => (

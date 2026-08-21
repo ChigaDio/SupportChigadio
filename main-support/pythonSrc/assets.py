@@ -1238,6 +1238,22 @@ def select_file(initial_dir, filetypes):
     root.destroy()
     return file_path if file_path else None
 
+
+def select_folder(initial_dir=None):
+    """
+    フォルダ選択ダイアログを表示。
+    VOICEのように大量のファイルを個別選択するのが非現実的なカテゴリで、
+    フォルダをまとめて指定するために使う。
+    """
+    root = tk.Tk()
+    root.withdraw()
+    folder_path = filedialog.askdirectory(initialdir=initial_dir) if initial_dir else filedialog.askdirectory()
+    root.destroy()
+    return folder_path if folder_path else None
+
+
+_AUDIO_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.aiff', '.aif'}
+
 # Sound data management
 def get_sound_data():
     """
@@ -1368,6 +1384,93 @@ def reload_sound_file(group_name, index):
     save_sound_data(data)
     return entry
 
+
+def bulk_add_sounds_from_folder(group_name, sound_type, subgroup_name=None, use_folder_name_as_subgroup=True):
+    """
+    フォルダを1つ選択し、直下にある音声ファイル（.mp3/.wav/.ogg/.aiff）を
+    まとめてグループへ登録する。
+
+    VOICEのようにファイル数が非常に多くなるカテゴリで、1件ずつファイル
+    選択ダイアログを開いて登録するのは現実的でないため、フォルダ単位で
+    一括登録できるようにしたもの。
+
+    - subgroup_name が指定されていれば、追加する全件のSubGroupとして使う
+      （手動指定）。
+    - subgroup_name が無く use_folder_name_as_subgroup=True の場合は、
+      選択したフォルダ名をそのままSubGroup名として使う（自動、フォルダ
+      直下の構成をそのままSubGroup分けとして再現できる）。
+    - 指定されたSubGroup名が既存の一覧に無ければ自動的に新設する。
+    - アイテム名（name）は拡張子を除いたファイル名を使う。同名が既に
+      グループ内にある場合は重複登録を避けるためスキップする
+      （volume等の上書きはせず、既存優先）。
+    - 直下（サブフォルダは辿らない）のみを対象にする。サブフォルダごとに
+      SubGroupを分けたい場合は、本関数をサブフォルダ単位で複数回呼び出す
+      想定（1フォルダ = 1SubGroupという対応関係を明確に保つため）。
+
+    戻り値: {"folder", "subgroup", "added": [...], "skipped": [...], "failed": [...]}
+    """
+    data = load_sound_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+
+    project_path = get_unity_project_path()
+    if not project_path:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    folder_path = select_folder(project_path)
+    if not folder_path:
+        raise Exception("フォルダが選択されていません。")
+
+    subgroup = subgroup_name or (
+        os.path.basename(os.path.normpath(folder_path)) if use_folder_name_as_subgroup else None
+    )
+    if subgroup and subgroup not in data['groups'][group_name]['subgroups']:
+        data['groups'][group_name]['subgroups'].append(subgroup)
+
+    existing_names = {item['name'] for item in data['groups'][group_name]['items']}
+
+    added = []
+    skipped = []
+    failed = []
+    for fname in sorted(os.listdir(folder_path)):
+        full_path = os.path.join(folder_path, fname)
+        if not os.path.isfile(full_path):
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in _AUDIO_EXTENSIONS:
+            continue
+
+        item_name = os.path.splitext(fname)[0]
+        if item_name in existing_names:
+            skipped.append(item_name)
+            continue
+
+        addr_path = get_addressable_path(full_path)
+        if not addr_path:
+            failed.append(item_name)
+            continue
+
+        data['groups'][group_name]['items'].append({
+            'name': item_name,
+            'desc': '',
+            'path': addr_path,
+            'absolute_path': os.path.abspath(full_path),
+            'volume': 1.0,
+            'type': sound_type,
+            'subgroup': subgroup,
+        })
+        existing_names.add(item_name)
+        added.append(item_name)
+
+    save_sound_data(data)
+    return {
+        'folder': folder_path,
+        'subgroup': subgroup,
+        'added': added,
+        'skipped': skipped,
+        'failed': failed,
+    }
+
 def generate_sound_csharp():
     """
     サウンド関連のC#コードとJSONを生成
@@ -1384,7 +1487,7 @@ def generate_sound_csharp():
         for group in data['groups']:
             f.write(f', {group}')
         f.write(' ,Max\n  };\n')
-        f.write('    public enum SoundType { SE, BGM };\n')
+        f.write('    public enum SoundType { SE, BGM, VOICE };\n')
         sound_id_counter = 1
         sound_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
@@ -1444,6 +1547,14 @@ namespace GameCore.Sound
         private const int PoolSize = 30;
         private int poolIndex = 0;
 
+        // ボイス専用プール。SEプールと共有すると、同時に鳴っているSEに
+        // よってボイス再生がプールから追い出されてしまう（あるいはその逆）
+        // ため、独立したプールを持たせている。同時に複数ボイスが重なる
+        // ケースは通常少ないため、SEよりは小さいプールサイズにしている。
+        private readonly List<AudioSource> voicePool = new();
+        private const int VoicePoolSize = 4;
+        private int voicePoolIndex = 0;
+
         private bool isCrossFading = false;
 
         // =============================================================
@@ -1476,6 +1587,13 @@ namespace GameCore.Sound
                 sePool.Add(source);
             }
 
+            for (int i = 0; i < VoicePoolSize; i++)
+            {
+                var source = gameObject.AddComponent<AudioSource>();
+                source.playOnAwake = false;
+                voicePool.Add(source);
+            }
+
             LoadDatabaseAsync().Forget();
         }
 
@@ -1501,6 +1619,15 @@ namespace GameCore.Sound
             combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
 
             foreach (var source in sePool)
+            {
+                if (source != null)
+                {
+                    if (source.isPlaying) source.Stop();
+                    source.clip = null;
+                }
+            }
+
+            foreach (var source in voicePool)
             {
                 if (source != null)
                 {
@@ -1566,6 +1693,10 @@ namespace GameCore.Sound
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
 
+            // このGroupのサウンドバンク（メタデータチャンク）がまだ読み込まれて
+            // いなければ、ここで初めてバイナリからそのGroup分だけを読み込む。
+            await database.EnsureGroupChunkLoadedAsync(group);
+
             var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
             if (groupData == null) { onCompleted?.Invoke(); return; }
 
@@ -1604,7 +1735,13 @@ namespace GameCore.Sound
         public void UnloadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null)
             => UnloadGroupAsync(group, onCompleted).Forget();
 
-        private async UniTask UnloadGroupAsync(SoundGroup group, Action onCompleted)
+        /// <param name="unloadChunk">
+        /// trueの場合、AudioClip本体だけでなく、このGroupのメタデータ
+        /// チャンク（サウンドバンク）もメモリから解放する。VOICEのように
+        /// 1グループあたりの件数が非常に多いケースでメモリを確実に戻せる。
+        /// 次に同じGroupが必要になった場合は、バイナリから読み直される。
+        /// </param>
+        private async UniTask UnloadGroupAsync(SoundGroup group, Action onCompleted, bool unloadChunk = true)
         {
             var keysToRemove = new List<(SoundGroup, SoundID)>();
             foreach (var kv in clipCache)
@@ -1622,8 +1759,62 @@ namespace GameCore.Sound
                 typeCache.Remove(key);
             }
 
+            if (unloadChunk)
+                database?.UnloadGroupChunk(group);
+
             onCompleted?.Invoke();
             await UniTask.CompletedTask;
+        }
+
+        // =============================================================
+        // SubGroup単位のロード（Voice等、フォルダ＝SubGroup単位で大量に
+        // 存在するケースを想定）。既存のUnloadSubGroupInternalと対になる。
+        // Group全体を読み込む LoadGroupAsync と違い、対象SubGroupの
+        // サウンドだけをAddressableロードするため、無駄な同時ロードを避けられる。
+        // =============================================================
+        public void LoadSubGroup(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+            => LoadSubGroupAsync(group, subGroupId, category, onCompleted).Forget();
+
+        public async UniTask LoadSubGroupAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+        {
+            while (!IsLoadDatabase)
+                await UniTask.Yield(combinedToken);
+
+            await database.EnsureGroupChunkLoadedAsync(group);
+
+            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            if (groupData == null) { onCompleted?.Invoke(); return; }
+
+            var tasks = new List<UniTask>();
+
+            foreach (var sound in groupData.Sounds.Where(s => s.SubGroupId == subGroupId))
+            {
+                var key = (group, sound.SoundID);
+                if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
+
+                loadingKeys.Add(key);
+
+                var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
+
+                tasks.Add(addressable.LoadAsync(clip =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                    {
+                        clipCache[key] = clip;
+                        volumeCache[key] = sound.BaseVolume;
+                        typeCache[key] = sound.Type;
+                        soundAddressables[key] = addressable;
+                    }
+                    loadingKeys.Remove(key);
+                }, ex =>
+                {
+                    Debug.LogError($"[SoundCore] Load failed {sound.SoundID}: {ex.Message}");
+                    loadingKeys.Remove(key);
+                }).AttachExternalCancellation(combinedToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            onCompleted?.Invoke();
         }
 
         // =============================================================
@@ -1644,6 +1835,8 @@ namespace GameCore.Sound
                 onCompleted?.Invoke();
                 return;
             }
+
+            await database.EnsureGroupChunkLoadedAsync(group);
 
             var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
             var sound = groupData?.Sounds.FirstOrDefault(s => s.SoundID == id);
@@ -1827,6 +2020,85 @@ namespace GameCore.Sound
         }
 
         // =============================================================
+        // VOICE再生（SEと同じ一発再生方式だが、専用プール・専用音量を使う）
+        // =============================================================
+        private AudioSource currentVoiceSource;
+
+        public void PlayVoice(SoundGroup group, SoundID id, float volume = 1f)
+            => PlayVoiceAsync(group, id, volume).Forget();
+
+        /// <summary>
+        /// 現在再生中のボイスを止めて次のボイスを再生したい場合はこちらを使う
+        /// （会話送り等、直前のセリフの発話中に次のセリフへ進むケースを想定）
+        /// </summary>
+        public void PlayVoiceInterrupt(SoundGroup group, SoundID id, float volume = 1f)
+        {
+            StopAllVoice();
+            PlayVoice(group, id, volume);
+        }
+
+        public void StopAllVoice()
+        {
+            foreach (var source in voicePool)
+            {
+                if (source != null && source.isPlaying)
+                    source.Stop();
+            }
+        }
+
+        private async UniTask PlayVoiceAsync(SoundGroup group, SoundID id, float volume)
+        {
+            var key = (group, id);
+
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.VOICE)
+                return;
+
+            var source = GetPooledVoiceSourceFast();
+            if (source == null) return;
+
+            currentVoiceSource = source;
+            source.clip = clip;
+            source.volume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.voiceVolume;
+            source.loop = false;
+            source.spatialBlend = 0f;
+
+            source.Play();
+
+            try
+            {
+                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken);
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                ResetSource(source);
+                if (currentVoiceSource == source) currentVoiceSource = null;
+            }
+        }
+
+        private AudioSource GetPooledVoiceSourceFast()
+        {
+            int startIndex = voicePoolIndex;
+            do
+            {
+                var source = voicePool[voicePoolIndex];
+                if (!source.isPlaying)
+                {
+                    ResetSource(source);
+                    voicePoolIndex = (voicePoolIndex + 1) % VoicePoolSize;
+                    return source;
+                }
+                voicePoolIndex = (voicePoolIndex + 1) % VoicePoolSize;
+            } while (voicePoolIndex != startIndex);
+
+            var victim = voicePool[0];
+            ResetSource(victim);
+            return victim;
+        }
+
+        // =============================================================
         // BGM再生・フェード・クロスフェード
         // =============================================================
         public void PlayBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 0f)
@@ -1953,12 +2225,19 @@ namespace GameCore.Sound
             foreach (var s in sePool) s.volume = vol;
         }
 
+        public void SetSystemVoiceVolume()
+        {
+            float vol = SaveManagerCore.instance.SystemSettings.voiceVolume;
+            foreach (var s in voicePool) s.volume = vol;
+        }
+
         private void Update()
         {
             if (bgmSource == null && !isCrossFading)
                 bgmSource = gameObject.AddComponent<AudioSource>();
 
             sePool.RemoveAll(s => s == null);
+            voicePool.RemoveAll(s => s == null);
         }
 
         private void OnDestroy()
@@ -2031,11 +2310,64 @@ namespace GameCore.Sound
             public List<SoundData> Sounds => sounds;
         }
         private readonly List<GroupedSounds> groupedSounds;
+
+        // ---- サウンドバンク（チャンク）遅延読み込みのための管理情報 ----
+        // 起動時にはこの2つ（オフセット表・データソース）だけを持ち、
+        // 各Groupの実データ（SoundDataのリスト）はEnsureGroupChunkLoadedAsync
+        // が呼ばれて初めてバイナリから読み込まれる。VOICEのように件数の
+        // 多いGroupがあっても、実際に使うGroupだけをメモリに載せられる。
+        private readonly Dictionary<SoundGroup, int> chunkOffsets = new();
+        private readonly HashSet<SoundGroup> loadedChunks = new();
+        private byte[] sourceBytes;   // Addressable経由の場合、全バイト列をここに保持
+        private string sourceFilePath; // ファイル直読みの場合、パスをここに保持
+
         public SoundDatabase()
         {
             groupedSounds = new List<GroupedSounds>();
         }
         public List<GroupedSounds> GroupedSoundsList => groupedSounds;
+
+        internal void SetSource(byte[] bytes, string filePath)
+        {
+            sourceBytes = bytes;
+            sourceFilePath = filePath;
+        }
+
+        internal void SetChunkOffset(SoundGroup group, int offset)
+        {
+            chunkOffsets[group] = offset;
+        }
+
+        public bool IsGroupChunkLoaded(SoundGroup group) => loadedChunks.Contains(group);
+
+        /// <summary>
+        /// 指定したGroupのサウンドバンク（チャンク）がまだメモリに無ければ、
+        /// このタイミングでバイナリからそのGroup分だけを読み込む。
+        /// 既に読み込み済みの場合は何もしない（軽量な早期リターン）。
+        /// </summary>
+        public async UniTask EnsureGroupChunkLoadedAsync(SoundGroup group)
+        {
+            if (loadedChunks.Contains(group)) return;
+            if (!chunkOffsets.TryGetValue(group, out int offset)) return;
+
+            List<SoundData> sounds = await UniTask.RunOnThreadPool(
+                () => SoundBinaryReader.ReadGroupChunk(sourceBytes, sourceFilePath, offset));
+
+            groupedSounds.RemoveAll(g => g.Group == group);
+            groupedSounds.Add(new GroupedSounds(group, sounds));
+            loadedChunks.Add(group);
+        }
+
+        /// <summary>
+        /// このGroupのメタデータチャンクをメモリから解放する
+        /// （AudioClip本体の解放とは別。UnloadGroupから呼ばれる想定）。
+        /// 次に必要になった際はバイナリから読み直される。
+        /// </summary>
+        public void UnloadGroupChunk(SoundGroup group)
+        {
+            groupedSounds.RemoveAll(g => g.Group == group);
+            loadedChunks.Remove(group);
+        }
     }
 }
 """
@@ -2061,6 +2393,14 @@ namespace GameCore.Sound
 
         public static async UniTask<SoundDatabase> LoadSoundDatabaseFromBinaryAsync(string filePath, bool addressable = false)
         {
+            // 全Groupのサウンドを一括で読み込むのではなく、まずヘッダー
+            // （Group毎のオフセット表＝サウンドバンクの目次）だけを読み込む
+            // 「インデックスロード」に変更した。各Groupの実データ（サウンドバンク
+            // /チャンク本体）は、そのGroupが実際に必要になったタイミング
+            // （LoadGroupAsync / LoadSubGroupAsync / LoadSingleAsync 等）で
+            // database.EnsureGroupChunkLoadedAsync() 経由で個別に読み込まれる。
+            // VOICEのように件数が非常に多いGroupがあっても、起動時のパースコストは
+            // ヘッダー分だけで済み、実際に使うGroupだけをメモリに載せられる。
             if (!addressable)
             {
                 if (!File.Exists(filePath))
@@ -2073,7 +2413,9 @@ namespace GameCore.Sound
                 {
                     using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                     {
-                        return ReadDatabase(reader);
+                        var database = ReadIndex(reader);
+                        database?.SetSource(null, filePath);
+                        return database;
                     }
                 });
             }
@@ -2097,13 +2439,15 @@ namespace GameCore.Sound
                 // ★★★ ここでメインスレッド上で .bytes を取得 ★★★
                 byte[] rawBytes = textAsset.bytes;        // ← これを先に取る！
 
-                // 解析だけ別スレッドに逃がす
+                // 解析だけ別スレッドに逃がす（ヘッダーのみ、軽量）
                 SoundDatabase database;
                 using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
-                    database = ReadDatabase(reader);
+                    database = ReadIndex(reader);
                 }
+
+                database?.SetSource(rawBytes, null);
 
                 Addressables.Release(handle);
 
@@ -2122,7 +2466,9 @@ namespace GameCore.Sound
 
                 using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                 {
-                    return ReadDatabase(reader);
+                    var database = ReadIndex(reader);
+                    database?.SetSource(null, filePath);
+                    return database;
                 }
             }
             else
@@ -2143,19 +2489,22 @@ namespace GameCore.Sound
                 }
 
                 TextAsset textAsset = handle.Result;
+                byte[] rawBytes = textAsset.bytes;
 
-                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
-                    SoundDatabase database = ReadDatabase(reader);
+                    SoundDatabase database = ReadIndex(reader);
+                    database?.SetSource(rawBytes, null);
                     Addressables.Release(handle);
                     return database;
                 }
             }
         }
 
-        // 共通読み込みロジック
-        private static SoundDatabase ReadDatabase(BinaryReader reader)
+        // ヘッダー（groupCount + Group毎のオフセット表）だけを読み込む。
+        // 各Groupの実データ（サウンド一覧本体）はここでは読まない。
+        private static SoundDatabase ReadIndex(BinaryReader reader)
         {
             SoundDatabase database = new SoundDatabase();
 
@@ -2176,38 +2525,72 @@ namespace GameCore.Sound
 
             for (int i = 0; i < groupCount; i++)
             {
-                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                int soundCount = reader.ReadInt32();
-                List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
-
-                for (int j = 0; j < soundCount; j++)
-                {
-                    int id = reader.ReadInt32();
-                    string addressablePath = ReadNullTerminatedString(reader);
-                    float volume = reader.ReadSingle();
-                    byte typeByte = reader.ReadByte();
-                    SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
-                    int subGroupId = reader.ReadInt32();
-
-                    string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
-
-                    sounds.Add(new SoundDatabase.SoundData(
-                        idName: enumName,
-                        addressablePath: addressablePath,
-                        baseVolume: volume,
-                        type: type,
-                        soundID: (SoundID)id,
-                        subGroupId: subGroupId
-                    ));
-                }
-
-                database.GroupedSoundsList.Add(new SoundDatabase.GroupedSounds(
-                    group: (SoundGroup)(i + 1),
-                    sounds: sounds
-                ));
+                // グループ書き込み順とSoundGroup enumの対応は、Noneが0番なので+1する
+                // （generate_sound_bin側の書き込み順と揃える必要がある）。
+                database.SetChunkOffset((SoundGroup)(i + 1), offsets[i]);
             }
 
             return database;
+        }
+
+        /// <summary>
+        /// 指定オフセットから1Group分のサウンドバンク（チャンク）だけを読み込む。
+        /// rawBytesが渡されていればメモリ上のバイト列から、そうでなければ
+        /// filePathを直接開いて読む（LoadSoundDatabaseFromBinaryAsyncの
+        /// addressable有無に対応する2通りのデータソースを両対応させている）。
+        /// SoundDatabase.EnsureGroupChunkLoadedAsync() から呼ばれる。
+        /// </summary>
+        internal static List<SoundDatabase.SoundData> ReadGroupChunk(byte[] rawBytes, string filePath, int offset)
+        {
+            if (rawBytes != null)
+            {
+                using (MemoryStream ms = new MemoryStream(rawBytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    return ReadGroupChunkBody(reader, offset);
+                }
+            }
+
+            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+            {
+                return ReadGroupChunkBody(reader, offset);
+            }
+        }
+
+        private static List<SoundDatabase.SoundData> ReadGroupChunkBody(BinaryReader reader, int offset)
+        {
+            reader.BaseStream.Seek(offset, SeekOrigin.Begin);
+            int soundCount = reader.ReadInt32();
+            List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
+
+            for (int j = 0; j < soundCount; j++)
+            {
+                int id = reader.ReadInt32();
+                string addressablePath = ReadNullTerminatedString(reader);
+                float volume = reader.ReadSingle();
+                byte typeByte = reader.ReadByte();
+                SoundType type = typeByte switch
+                {
+                    0 => SoundType.SE,
+                    1 => SoundType.BGM,
+                    2 => SoundType.VOICE,
+                    _ => SoundType.SE,
+                };
+                int subGroupId = reader.ReadInt32();
+
+                string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
+
+                sounds.Add(new SoundDatabase.SoundData(
+                    idName: enumName,
+                    addressablePath: addressablePath,
+                    baseVolume: volume,
+                    type: type,
+                    soundID: (SoundID)id,
+                    subGroupId: subGroupId
+                ));
+            }
+
+            return sounds;
         }
 
         private static string ReadNullTerminatedString(BinaryReader reader)
@@ -2863,7 +3246,9 @@ def generate_sound_bin():
                 path_bytes = sound['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
                 f.write(struct.pack('f', sound['volume']))
-                type_byte = 0 if sound['type'] == 'SE' else 1
+                # SE=0, BGM=1, VOICE=2（既存データとの後方互換のため、
+                # 未知の値は従来通りSE(0)として書き込む）
+                type_byte = {'SE': 0, 'BGM': 1, 'VOICE': 2}.get(sound['type'], 0)
                 f.write(struct.pack('B', type_byte))
                 sub_group_id = subgroup_map.get(sound.get('subgroup'), 0)
                 f.write(struct.pack('i', sub_group_id))
