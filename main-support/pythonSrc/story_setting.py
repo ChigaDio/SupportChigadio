@@ -509,9 +509,9 @@ namespace GameCore.Scenario.StorySetting
             return null;
         }
 
-        Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id;
-        public Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundSESettingData => sound_se_setting_id;
-        public Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundSESetting(Story_SoundSE_ID id)
+        Dictionary<Story_SoundSEID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id;
+        public Dictionary<Story_SoundSEID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundSESettingData => sound_se_setting_id;
+        public StorySettingSlotDetailsData<SoundID,SoundGroup> SoundSESetting(Story_SoundSEID id)
         {
             if(sound_se_setting_id.TryGetValue(id,out var result))
             {
@@ -519,9 +519,9 @@ namespace GameCore.Scenario.StorySetting
             }
             return null;
         }
-        Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id;
-        public Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundBGMSettingData => sound_bgm_setting_id;
-        public Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundBGMSetting(Story_SoundBGM_ID id)
+        Dictionary<Story_SoundBGMID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id;
+        public Dictionary<Story_SoundBGMID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundBGMSettingData => sound_bgm_setting_id;
+        public StorySettingSlotDetailsData<SoundID,SoundGroup> SoundBGMSetting(Story_SoundBGMID id)
         {
             if(sound_bgm_setting_id.TryGetValue(id,out var result))
             {
@@ -531,7 +531,7 @@ namespace GameCore.Scenario.StorySetting
         }
         Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> gameobject_setting_id;
         public Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> GameobjectSettingData => gameobject_setting_id;
-        public Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> GameobjectSetting(Story_SoundID id)
+        public StorySettingSlotDetailsData<GameObjectID,GameObjectGroup> GameobjectSetting(Story_GameobjectID id)
         {
             if(gameobject_setting_id.TryGetValue(id,out var result))
             {
@@ -543,8 +543,8 @@ namespace GameCore.Scenario.StorySetting
 
         public StorySettingSlotData(
            Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> texture_setting_id,
-           Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id,
-           Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id,
+           Dictionary<Story_SoundSEID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id,
+           Dictionary<Story_SoundBGMID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id,
            Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> gameobject_setting_id)
         {
             this.texture_setting_id = texture_setting_id;
@@ -692,8 +692,8 @@ namespace GameCore.Scenario.StorySetting
 
 
             var img_dict = ReadBinary(reader);
-            var sound_se_dict = ReadBinary<Story_SoundSE_ID, SoundID,SoundGroup>(reader);
-            var sound_bgm_dict = ReadBinary<Story_SoundBGM_ID, SoundID,SoundGroup>(reader);
+            var sound_se_dict = ReadBinary<Story_SoundSEID, SoundID,SoundGroup>(reader);
+            var sound_bgm_dict = ReadBinary<Story_SoundBGMID, SoundID,SoundGroup>(reader);
             var gameobject_dict = ReadBinary<Story_GameobjectID, GameObjectID,GameObjectGroup>(reader);
             entry.Slots.Add(new StorySettingSlotData(img_dict, sound_se_dict, sound_bgm_dict, gameobject_dict));
 
@@ -787,6 +787,7 @@ namespace GameCore.Scenario.StorySetting
 
     }
 }
+
 
 
 
