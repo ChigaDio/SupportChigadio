@@ -33,8 +33,9 @@ function flattenAssetGroups(groups, filterFn) {
 }
 
 function optionLabel(opt) {
-  return `${opt.group} / ${opt.name}`;
+  return `${opt.group} / ${opt.subgroup ? opt.subgroup + ' / ' : ''}${opt.name}`;
 }
+
 
 function ScenarioStorySettingGrid() {
   const { eventId, subId } = useParams();
@@ -106,6 +107,7 @@ function ScenarioStorySettingGrid() {
       slot: slotName,
       kind,
       group: asset.group,
+      subGroup: asset.subgroup || null,
       id: asset.name,
       spriteName: kind === 'img' ? (spriteName || null) : undefined,
       retain: !!retain,
@@ -244,6 +246,17 @@ function ScenarioStorySettingGrid() {
   );
 }
 
+// 追加フォームの各列に共通で持たせる最小幅。
+// Grid の sm 比率だけに頼ると画面幅によっては数文字しか見えなくなるため、
+// ここで実寸(px)の下限を必ず確保する。
+const FIELD_MIN_WIDTH = {
+  slot: 160,
+  asset: 260,
+  sprite: 180,
+  retain: 100,
+  button: 96,
+};
+
 function SlotSection({ kind, label, slots, options, availableSlotNames, hasSprite, onAdd, onRemove, onToggleRetain }) {
   const [slotName, setSlotName] = useState('');
   const [asset, setAsset] = useState(null);
@@ -300,50 +313,58 @@ function SlotSection({ kind, label, slots, options, availableSlotNames, hasSprit
       <Divider sx={{ mb: 2 }} />
 
       <Typography variant="subtitle2" sx={{ mb: 1 }}>スロットを追加</Typography>
-      <Grid container spacing={2} alignItems="center">
-        <Grid item xs={12} sm={2}>
-          <FormControl size="small" fullWidth>
-            <InputLabel>スロット</InputLabel>
-            <Select label="スロット" value={slotName} onChange={(e) => setSlotName(e.target.value)}>
-              {availableSlotNames.map((n) => <MenuItem key={n} value={n}>{n}</MenuItem>)}
-            </Select>
-          </FormControl>
-        </Grid>
-        <Grid item xs={12} sm={hasSprite ? 4 : 6}>
+      {/*
+        各列を「グリッド比率」ではなく「実寸のflexアイテム」として並べる。
+        画面が狭くなったら自動的に折り返す(flexWrap)ので、比率で潰れて
+        文字が数文字しか見えない、という事態を避けられる。
+      */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+        <FormControl size="small" sx={{ minWidth: FIELD_MIN_WIDTH.slot }}>
+          <InputLabel>スロット</InputLabel>
+          <Select label="スロット" value={slotName} onChange={(e) => setSlotName(e.target.value)}>
+            {availableSlotNames.map((n) => <MenuItem key={n} value={n}>{n}</MenuItem>)}
+          </Select>
+        </FormControl>
+
+        <Autocomplete
+          size="small"
+          options={options}
+          value={asset}
+          onChange={(e, v) => { setAsset(v); setSpriteName(''); }}
+          getOptionLabel={optionLabel}
+          isOptionEqualToValue={(a, b) => a.group === b.group && a.name === b.name}
+          sx={{ minWidth: FIELD_MIN_WIDTH.asset, flex: '1 1 260px' }}
+          renderInput={(params) => <TextField {...params} label={`${label}を検索`} />}
+        />
+
+        {hasSprite && (
           <Autocomplete
             size="small"
-            options={options}
-            value={asset}
-            onChange={(e, v) => { setAsset(v); setSpriteName(''); }}
-            getOptionLabel={optionLabel}
-            isOptionEqualToValue={(a, b) => a.group === b.group && a.name === b.name}
-            renderInput={(params) => <TextField {...params} label={`${label}を検索`} />}
+            options={spriteOptions}
+            value={spriteName || null}
+            onChange={(e, v) => setSpriteName(v || '')}
+            disabled={spriteOptions.length === 0}
+            sx={{ minWidth: FIELD_MIN_WIDTH.sprite }}
+            renderInput={(params) => <TextField {...params} label="Sprite(任意)" />}
           />
-        </Grid>
-        {hasSprite && (
-          <Grid item xs={12} sm={3}>
-            <Autocomplete
-              size="small"
-              options={spriteOptions}
-              value={spriteName || null}
-              onChange={(e, v) => setSpriteName(v || '')}
-              disabled={spriteOptions.length === 0}
-              renderInput={(params) => <TextField {...params} label="Sprite(任意)" />}
-            />
-          </Grid>
         )}
-        <Grid item xs={6} sm={2}>
-          <FormControlLabel
-            control={<Checkbox checked={retain} onChange={(e) => setRetain(e.target.checked)} />}
-            label="保持"
-          />
-        </Grid>
-        <Grid item xs={6} sm={1}>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={handleAdd} disabled={!slotName || !asset}>
-            追加
-          </Button>
-        </Grid>
-      </Grid>
+
+        <FormControlLabel
+          sx={{ minWidth: FIELD_MIN_WIDTH.retain, ml: 0 }}
+          control={<Checkbox checked={retain} onChange={(e) => setRetain(e.target.checked)} />}
+          label="保持"
+        />
+
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={handleAdd}
+          disabled={!slotName || !asset}
+          sx={{ minWidth: FIELD_MIN_WIDTH.button }}
+        >
+          追加
+        </Button>
+      </Box>
     </Paper>
   );
 }
@@ -361,36 +382,34 @@ function VoiceSeriesSection({ value, options, onChange }) {
         実際のセリフ選択（Transaction入力時）は、ここで指定したVoice系列に属するIDだけが
         カスケードで絞り込まれます（例: Sound_Scenario_TestScene 配下のみ選択可能になる）。
       </Typography>
-      <Grid container spacing={2} alignItems="center">
-        <Grid item xs={12} sm={6}>
-          <Autocomplete
-            size="small"
-            options={options}
-            value={selected}
-            onChange={(e, v) => onChange(v ? { group: v.group, subGroup: v.subGroup, retain: value?.retain || false } : null)}
-            getOptionLabel={(o) => `Sound_${o.group}_${o.subGroup}（VOICE ${o.count}件）`}
-            isOptionEqualToValue={(a, b) => a.group === b.group && a.subGroup === b.subGroup}
-            renderInput={(params) => <TextField {...params} label="Voice系列を検索" />}
-          />
-        </Grid>
-        <Grid item xs={12} sm={3}>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={!!value?.retain}
-                disabled={!value}
-                onChange={(e) => onChange(value ? { ...value, retain: e.target.checked } : null)}
-              />
-            }
-            label="保持"
-          />
-        </Grid>
-        <Grid item xs={12} sm={3}>
-          <Button variant="outlined" color="error" onClick={() => onChange(null)} disabled={!value}>
-            クリア
-          </Button>
-        </Grid>
-      </Grid>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+        <Autocomplete
+          size="small"
+          options={options}
+          value={selected}
+          onChange={(e, v) => onChange(v ? { group: v.group, subGroup: v.subGroup, retain: value?.retain || false } : null)}
+          getOptionLabel={(o) => `Sound_${o.group}_${o.subGroup}（VOICE ${o.count}件）`}
+          isOptionEqualToValue={(a, b) => a.group === b.group && a.subGroup === b.subGroup}
+          sx={{ minWidth: 320, flex: '1 1 320px' }}
+          renderInput={(params) => <TextField {...params} label="Voice系列を検索" />}
+        />
+
+        <FormControlLabel
+          sx={{ minWidth: FIELD_MIN_WIDTH.retain }}
+          control={
+            <Checkbox
+              checked={!!value?.retain}
+              disabled={!value}
+              onChange={(e) => onChange(value ? { ...value, retain: e.target.checked } : null)}
+            />
+          }
+          label="保持"
+        />
+
+        <Button variant="outlined" color="error" onClick={() => onChange(null)} disabled={!value} sx={{ minWidth: FIELD_MIN_WIDTH.button }}>
+          クリア
+        </Button>
+      </Box>
     </Paper>
   );
 }

@@ -524,6 +524,7 @@ namespace GameCore.Scenario {{
         factory_content = """
 
 using Cysharp.Threading.Tasks;
+using GameCore.Scenario;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;

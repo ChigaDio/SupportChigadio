@@ -362,6 +362,8 @@ namespace GameCore
         public const string ALL_SCENARIO_EVENT_BIN_FILE = "all_events.bytes";
         public const string ALL_STORY_SETTING_BIN_FILE = "story_settings.bytes";
         
+        public const string ALL_STORY_SETTING_BIN_FILE = "story_settings.bytes";
+        
         //CustomClassDataID
         public const string CUSTOM_CLASS_DATA_FOLDER = "custom_class_data_id";
         public const string CUSTOM_CLASS_DATA_ID_BIN_FILE = "all_custom_class_data_id.bytes";
@@ -442,7 +444,7 @@ namespace GameCore
         public static string ALL_CUSTOM_CLASS_DATA_ID_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, CUSTOM_CLASS_DATA_FOLDER, CUSTOM_CLASS_DATA_ID_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_SCENARIO_EVENTS_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, SCENARIO_EVEMT_FOLDER, ALL_SCENARIO_EVENT_BIN_FILE)).Replace("\\\\", "/");
         public static string ALL_STORY_SETTING_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, ALL_STORY_SETTING_BIN_FILE)).Replace("\\\\", "/");
-
+        public static string ALL_STORY_SETTING_BIN => Path.GetFullPath(Path.Combine(SupportDataPath, SCENARIO_FOLDER, ALL_STORY_SETTING_BIN_FILE)).Replace("\\", "/");
 #if UNITY_EDITOR
         // Editor専用：AssetDatabaseで探して "Assets/..." を返す（失敗すれば null）
         private static string FindFolderPathByAssetDatabase(string folderName)
@@ -519,7 +521,8 @@ public class SupportFilesPostprocessor : IPostprocessBuildWithReport
             (SupportFiles.ALL_MATRIX_ID_BIN, SupportFiles.MATRIX_DATA_ID_FOLDER),
             (SupportFiles.ALL_ID_BIN, SupportFiles.ID_FOLDER),
             (SupportFiles.ALL_SCENARIO_EVENTS_BIN,Path.Combine(SupportFiles.SCENARIO_FOLDER,SupportFiles.SCENARIO_EVEMT_FOLDER)),
-            (SupportFiles.ALL_CUSTOM_CLASS_DATA_ID_BIN, SupportFiles.CUSTOM_CLASS_DATA_FOLDER)
+            (SupportFiles.ALL_CUSTOM_CLASS_DATA_ID_BIN, SupportFiles.CUSTOM_CLASS_DATA_FOLDER),
+            (SupportFiles.ALL_STORY_SETTING_BIN,SupportFiles.SCENARIO_FOLDER)
         };
 
         foreach (var (filePath, targetFolder) in allFiles)

@@ -1100,7 +1100,8 @@ public class AddressableBinCustomizer
             SupportFiles.ALL_GAMEOBJECT_BIN_FILE,
             SupportFiles.ALL_TEXTURE_BIN_FILE,
             SupportFiles.ALL_SOUND_BIN_FILE,
-            SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE
+            SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE,
+            SupportFiles.ALL_STORY_SETTING_BIN_FILE
         };
 
         var findData = fileDataPath.Find(x => x.Equals(fileNameWithExt));
@@ -1492,7 +1493,7 @@ def generate_sound_csharp():
         sound_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound['subgroup']}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
                     sound_id_counter += 1
@@ -1509,6 +1510,7 @@ def generate_sound_csharp():
     # SoundCore.cs
     if not os.path.exists(os.path.join(SOUND_DATA, "SoundCore.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -2024,17 +2026,17 @@ namespace GameCore.Sound
         // =============================================================
         private AudioSource currentVoiceSource;
 
-        public void PlayVoice(SoundGroup group, SoundID id, float volume = 1f)
-            => PlayVoiceAsync(group, id, volume).Forget();
+        public void PlayVoice(SoundGroup group, SoundID id, float volume = 1f,Action action = null)
+            => PlayVoiceAsync(group, id, volume,action).Forget();
 
         /// <summary>
         /// 現在再生中のボイスを止めて次のボイスを再生したい場合はこちらを使う
         /// （会話送り等、直前のセリフの発話中に次のセリフへ進むケースを想定）
         /// </summary>
-        public void PlayVoiceInterrupt(SoundGroup group, SoundID id, float volume = 1f)
+        public void PlayVoiceInterrupt(SoundGroup group, SoundID id, float volume = 1f,Action action = null)
         {
             StopAllVoice();
-            PlayVoice(group, id, volume);
+            PlayVoice(group, id, volume,action);
         }
 
         public void StopAllVoice()
@@ -2046,7 +2048,7 @@ namespace GameCore.Sound
             }
         }
 
-        private async UniTask PlayVoiceAsync(SoundGroup group, SoundID id, float volume)
+        private async UniTask PlayVoiceAsync(SoundGroup group, SoundID id, float volume,Action action = null)
         {
             var key = (group, id);
 
@@ -2066,6 +2068,7 @@ namespace GameCore.Sound
 
             source.Play();
 
+
             try
             {
                 await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken);
@@ -2073,6 +2076,7 @@ namespace GameCore.Sound
             catch (OperationCanceledException) { }
             finally
             {
+                action?.Invoke();
                 ResetSource(source);
                 if (currentVoiceSource == source) currentVoiceSource = null;
             }
@@ -2256,6 +2260,8 @@ namespace GameCore.Sound
 }
 
 
+
+
 """
         with open(os.path.join(SOUND_DATA, "SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -2266,6 +2272,7 @@ namespace GameCore.Sound
 
 using System.Collections.Generic;
 using GameCore.Enums;
+using Cysharp.Threading.Tasks;
 namespace GameCore.Sound
 {
     public class SoundDatabase
@@ -3159,7 +3166,7 @@ namespace GameCore.Sound
         sound_id_list = []
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound['subgroup']}_{sound['name']}"
                 sound_id_list.append({
                     'description': sound['desc'],
                     'id': sound_id_map[sound_id],
@@ -3229,7 +3236,7 @@ def generate_sound_bin():
         sound_id_counter = 1
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound["subgroup"]}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
                     sound_id_counter += 1
@@ -3241,7 +3248,7 @@ def generate_sound_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(sounds)))
             for sound in sounds:
-                sound_id = sound_id_map.get(f"{group}_{sound['name']}", 0)
+                sound_id = sound_id_map.get(f"{group}_{sound['subgroup']}_{sound['name']}", 0)
                 f.write(struct.pack('i', sound_id))
                 path_bytes = sound['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
@@ -3433,7 +3440,7 @@ def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     
     #json作成
     json_dict: list[dict[str, object]] = []
-    js_path = os.path.join(target_dir, f"{group_name}_{group_name}_{subgroup_name}.json")
+    js_path = os.path.join(target_dir, f"{group_name}_{subgroup_name}_{sprite_name}.json")
     with open(js_path,'w',encoding='utf-8') as f:
         for i, item in enumerate(sprites, start=1):
             json_dict.append({
@@ -3465,7 +3472,7 @@ def generate_texture_csharp():
         texture_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
@@ -3475,13 +3482,13 @@ def generate_texture_csharp():
         sprite_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if len(texture.get('sprites', [])) <= 1:
                     # EnumクラスやJsonを作成
                     enum_name = generate_texture_sprite_enum(group,texture['subgroup'],texture['name'],texture.get('sprites', []))
                     register_enum_names(ENUM_DIR,enum_name)
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['name']}_{sprite}"
+                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -3495,7 +3502,7 @@ def generate_texture_csharp():
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
                 if len(texture.get('sprites', [])) > 1:
-                    sprite_enum_name = f"{group}_{texture['name']}"
+                    sprite_enum_name = f"{group}_{texture['subgroup']}_{texture['name']}"
                     sprite_id_counter = 0
                     for sprite in texture.get('sprites', []):
                         sprite_id_counter += 1
@@ -4224,7 +4231,7 @@ namespace GameCore.Texture
             texture_id_list = []
             for group, group_value in data['groups'].items():
                 for texture in group_value['items']:
-                    texture_id = f"{group}_{texture['name']}"
+                    texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
                     texture_id_list.append({
                         'description': texture['desc'],
                         'id': texture_id_map[texture_id],
@@ -4239,7 +4246,7 @@ namespace GameCore.Texture
     for group, group_value in data['groups'].items():
         for texture in group_value['items']:
             if len(texture.get('sprites', [])) > 1:
-                name = f"{group}_{texture['name']}"
+                name = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if not os.path.exists(os.path.join(ENUM_DIR, f"{name}")):
                     os.makedirs(os.path.join(ENUM_DIR, f"{name}"))
                 with open(os.path.join(ENUM_DIR, f"{name}", f"{name}.json"), 'w', encoding='utf-8') as f:
@@ -4334,13 +4341,13 @@ def generate_texture_bin():
         sprite_id_counter = 1
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
                 if len(texture.get('sprites', [])) <= 1:
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['name']}_{sprite}"
+                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -4357,7 +4364,7 @@ def generate_texture_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(textures)))
             for texture in textures:
-                texture_id = texture_id_map.get(f"{group}_{texture['name']}", 0)
+                texture_id = texture_id_map.get(f"{group}_{texture["subgroup"]}_{texture['name']}", 0)
                 f.write(struct.pack('i', texture_id))
                 id_name = texture['name'].encode('utf-8') + b'\0'
                 f.write(id_name)
@@ -4369,7 +4376,7 @@ def generate_texture_bin():
                 sprite_count = len(sprites)
                 f.write(struct.pack('i', sprite_count))
                 for sprite in sprites:
-                    sprite_id = sprite_id_map.get(f"{group}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['name']}", 0))
+                    sprite_id = sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}", 0))
                     f.write(struct.pack('i', sprite_id))
                     sprite_name = sprite.encode('utf-8') + b'\0'
                     f.write(sprite_name)
@@ -4528,7 +4535,7 @@ def generate_gameobject_csharp():
         gameobject_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
@@ -5479,7 +5486,7 @@ namespace GameCore.Gameobject
         gameobject_id_list = []
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 gameobject_id_list.append({
                     'description': go['desc'],
                     'id': gameobject_id_map[go_id],
@@ -5547,7 +5554,7 @@ def generate_gameobject_bin():
         gameobject_id_counter = 1
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
@@ -5559,7 +5566,7 @@ def generate_gameobject_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(gameobjects)))
             for go in gameobjects:
-                go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
+                go_id = gameobject_id_map.get(f"{group}_{go['subgroup']}_{go['name']}", 0)
                 f.write(struct.pack('i', go_id))
                 id_name = go['name'].encode('utf-8') + b'\0'
                 f.write(id_name)

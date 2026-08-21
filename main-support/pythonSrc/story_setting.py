@@ -34,6 +34,8 @@ pythonSrc/story_setting.py
 import json
 import os
 import struct
+import pythonSrc.data_utils
+import pythonSrc.constants
 
 DATA_DIR = None
 
@@ -60,6 +62,7 @@ def slot_names(prefix, count=99):
 
 def _event_file_path(event_id):
     return os.path.join(DATA_DIR, "scenario_data", "scenario_event_data", event_id, f"{event_id}.json")
+
 
 
 def read_story_setting(event_id, sub_id):
@@ -198,14 +201,170 @@ def ensure_voice_role():
     return role_path, True
 
 
+def find_item(data, group, subgroup, name):
+    for item in data["groups"].get(group, {}).get("items", []):
+        if item.get("subgroup") == subgroup and item.get("name", "").lower() == name.lower():
+            return item
+    return None
+
+def find_index(data, group_name, subgroup, name):
+    index = 0
+
+    for current_group_name, group in data["groups"].items():
+        # 指定したグループだけを見る
+        if current_group_name != group_name:
+            continue
+
+        for item in group.get("items", []):
+            if (
+                item.get("subgroup") == subgroup
+                and item.get("name", "").lower() == name.lower()
+            ):
+                return index + 1
+
+            index += 1
+
+    return None
+
+def find_group_index(data, group_name):
+    for index, name in enumerate(data["groups"], start=1):
+        if name == group_name:
+            return index
+
+    return None
+
+
+def _resolve_id(kind,id_group,id_subgroup, id_name):
+    """kind ('img'|'se'|'bgm'|'effect') の素材ID名から
+    TextureID/SoundID/GameObjectIDの整数値を返す。"""
+    
+    path = ""
+    if kind == "img":
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.TEXTURE_DATA,
+        "assets_texture.json"
+    )
+
+    elif kind in ("se", "bgm"):
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.SOUND_DATA,
+        "assets_sound.json"
+    )
+
+    elif kind == "effect":
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.GAMEOBJECT_DATA,
+        "assets_gameobject.json"
+    )
+    else:
+        raise NotImplementedError(
+        "class_data.py側のEnum管理から、素材ID名→整数値を引く実装が必要です"
+    )
+        
+    with open(path,"r",encoding="utf-8") as f:
+        data = json.load(f)
+        
+    item_index = find_index(data,id_group,id_subgroup,id_name)
+    return item_index
+    
+        
+    
+    
+    
+
+
+
+def _resolve_group(kind, group_name):
+    """kindの素材Group名からTextureGroup/SoundGroup/GameObjectGroupの整数値を返す。"""
+    
+    path = ""
+    if kind == "img":
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.TEXTURE_DATA,
+        "assets_texture.json"
+    )
+
+    elif kind in ("se", "bgm"):
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.SOUND_DATA,
+        "assets_sound.json"
+    )
+
+    elif kind == "effect":
+        path = os.path.join(
+        DATA_DIR,
+        pythonSrc.constants.ASSETS_DATA,
+        pythonSrc.constants.GAMEOBJECT_DATA,
+        "assets_gameobject.json"
+    )
+    else:
+        raise NotImplementedError(
+        "class_data.py側のEnum管理から、Group名→整数値を引く実装が必要です"
+    )
+        
+    with open(path,"r",encoding="utf-8") as f:
+        data = json.load(f)
+        
+    item_index = find_group_index(data,group_name)
+    return item_index
+
+
+def get_value(data, property_name):
+    for item in data:
+        if item.get("property") == property_name:
+            return item.get("value")
+
+    return 0
+def _resolve_sprite_id(sprite_group,sprite_subgroup,sprite_name,sprite_details_name):
+    
+    name = f"{sprite_group}_{sprite_subgroup}_{sprite_name}"
+    path = os.path.join(DATA_DIR,pythonSrc.constants.ENUM,name,f"{name}.json")
+    
+    with open(path,"r",encoding="utf-8") as f:
+        data = json.load(f)
+        
+    return get_value(data,sprite_details_name)
+
+
+def _resolve_slot_key(kind, slot_name):
+    """スロット名(例: 'img_01')から Story_ImgID/Story_SoundID/Story_GameobjectID の
+    整数値を返す。generate_story_setting_enumsで出力する順序と一致させる必要がある。"""
+    if kind == "img":
+        names = slot_names("img", 99)
+    elif kind in ("se", "bgm"):
+        names = slot_names("sound_se", 99) + slot_names("sound_bgm", 99)
+    elif kind == "effect":
+        names = slot_names("effect", 99)
+    else:
+        raise ValueError(f"unknown kind: {kind}")
+    # None=0始まりなので+1
+    return names.index(slot_name) + 1
+
+
 def generate_story_setting_bin():
     """全サブイベントの物語設定を、(eventId, subId)単位でオフセット
-    インデックス化したバイナリへ書き出す（story_settings.bytes）。
+    インデックス化したバイナリへ書き出す。
 
-    Sound側のサウンドバンク/チャンクと同じ考え方: C#側は起動時に
-    インデックス（(eventId, subId) → オフセット）だけを読み、各サブ
-    イベントの物語設定本体は、実際にそのサブイベントへ遷移するタイミング
-    （StorySettingCore.LoadForSubEventAsync）で初めて読み込む。
+    エントリ本体のレイアウトはStorySettingBinaryReader.ReadEntryChunkBodyと
+    完全一致させる必要がある:
+      img_dict:        count(int), [key_id(int), id(int), group_id(int), spriteID(int), retain(byte)] * count
+      sound_se_dict:    count(int), [key_id(int), id(int), group_id(int), retain(byte)] * count
+      sound_bgm_dict:   count(int), [key_id(int), id(int), group_id(int), retain(byte)] * count
+      gameobject_dict:  count(int), [key_id(int), id(int), group_id(int), retain(byte)] * count
+      hasVoice(byte), [SoundID(int)] if hasVoice
+    ID/Group/キーはすべてenumの生の整数値（Unsafe.As再解釈のため、文字列ではなくint）。
+    0は「未設定」として読み飛ばされる（ReadBinary側の`if (x == 0) continue`）ので、
+    有効な素材IDには0を割り当てないこと。
     """
     entries = list(_iter_story_settings())
 
@@ -213,37 +372,54 @@ def generate_story_setting_bin():
     for _event_id, _sub_id, story in entries:
         chunk = bytearray()
         slots = story.get("slots", [])
-        chunk += struct.pack("i", len(slots))
+
+        by_kind = {"img": [], "se": [], "bgm": [], "effect": []}
         for slot in slots:
-            kind_byte = _KIND_BYTE.get(slot.get("kind"), 0)
-            chunk += struct.pack("B", kind_byte)
-            _write_cstr(chunk, slot.get("slot"))
-            _write_cstr(chunk, slot.get("group"))
-            _write_cstr(chunk, slot.get("id"))
-            _write_cstr(chunk, slot.get("spriteName") or "")
+            by_kind.setdefault(slot.get("kind"), []).append(slot)
+
+        # img
+        chunk += struct.pack("i", len(by_kind["img"]))
+        for slot in by_kind["img"]:
+            chunk += struct.pack("i", _resolve_slot_key("img", slot["slot"]))
+            chunk += struct.pack("i", _resolve_id("img",slot["group"],slot["subGroup"],slot["id"]))
+            chunk += struct.pack("i", _resolve_group("img", slot["group"]))
+            chunk += struct.pack("i", _resolve_sprite_id(slot["group"],slot["subGroup"],slot["id"],slot.get("spriteName") or ""))
             chunk += struct.pack("B", 1 if slot.get("retain") else 0)
 
+        # sound_se / sound_bgm
+        for kind in ("se", "bgm"):
+            chunk += struct.pack("i", len(by_kind[kind]))
+            for slot in by_kind[kind]:
+                chunk += struct.pack("i", _resolve_slot_key(kind, slot["slot"]))
+                chunk += struct.pack("i", _resolve_id(kind, slot["group"],slot["subGroup"],slot["id"]))
+                chunk += struct.pack("i", _resolve_group(kind, slot["group"]))
+                chunk += struct.pack("B", 1 if slot.get("retain") else 0)
+
+        # effect (gameobject)
+        chunk += struct.pack("i", len(by_kind["effect"]))
+        for slot in by_kind["effect"]:
+            chunk += struct.pack("i", _resolve_slot_key("effect", slot["slot"]))
+            chunk += struct.pack("i", _resolve_id("effect", slot["group"],slot["subGroup"],slot["id"]))
+            chunk += struct.pack("i", _resolve_group("effect", slot["group"]))
+            chunk += struct.pack("B", 1 if slot.get("retain") else 0)
+
+        # voice: C#側は SoundID(int) のみ。groupやretainは持たない。
         voice = story.get("voiceSeriesId")
-        if voice:
+        if voice and voice.get("id"):
             chunk += struct.pack("B", 1)
-            _write_cstr(chunk, voice.get("group"))
-            _write_cstr(chunk, voice.get("subGroup"))
-            chunk += struct.pack("B", 1 if voice.get("retain") else 0)
+            chunk += struct.pack("i", _resolve_id("se", voice["id"]))
         else:
             chunk += struct.pack("B", 0)
 
         body_chunks.append(bytes(chunk))
 
-    # ヘッダーサイズを先に確定させるため、まず(仮オフセット込みで)同じ長さの
-    # ヘッダーエントリを組み立ててサイズを測り、それを起点に実オフセットを算出する
-    # （文字列長は最終版と仮版で完全に一致するため、この2パスで正しく求まる）。
     header_entries_bytes = []
-    header_size = 4  # entryCount分
+    header_size = 4
     for event_id, sub_id, _story in entries:
         eb = bytearray()
         _write_cstr(eb, event_id)
         _write_cstr(eb, sub_id)
-        eb += struct.pack("i", 0)  # placeholder
+        eb += struct.pack("i", 0)
         header_entries_bytes.append(eb)
         header_size += len(eb)
 
@@ -273,38 +449,115 @@ def generate_story_setting_csharp():
     out_dir = os.path.join(DATA_DIR, "scenario_data")
     os.makedirs(out_dir, exist_ok=True)
 
-    database_code = '''using System;
+    database_code = '''
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Cysharp.Threading.Tasks;
+using GameCore.Enums;
+using GameCore.Gameobject;
+using GameCore.Sound;
+using GameCore.Texture;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace GameCore.Scenario.StorySetting
 {
-    public struct StorySettingSlotData
+    public class StorySettingSlotDetailsData<T,TGroup> where T : struct, Enum where TGroup : struct,Enum
     {
-        public byte Kind;         // 0=img, 1=se, 2=bgm, 3=effect
-        public string SlotName;   // 例: "img_01"
-        public string Group;
-        public string Id;
-        public string SpriteName; // imgのみ使用。それ以外は空文字
-        public bool Retain;
+        protected T id;
+        public T ID => id;
 
-        public StorySettingSlotData(byte kind, string slotName, string group, string id, string spriteName, bool retain)
+        protected TGroup group_id;
+        public TGroup GroupID => group_id;
+
+        protected bool retain;
+        public bool Retain => retain;
+
+        public StorySettingSlotDetailsData(T value_id, TGroup value_group_id,bool value_retain)
         {
-            Kind = kind; SlotName = slotName; Group = group; Id = id; SpriteName = spriteName; Retain = retain;
+            id = value_id;
+            group_id = value_group_id;
+            retain = value_retain;
+        }
+    }
+    public class StorySettingSlotTextureDetailsData : StorySettingSlotDetailsData<TextureID,TextureGroup>
+    {
+        protected int sptiteID;
+        public int SpriteID => sptiteID;
+        public StorySettingSlotTextureDetailsData(int value_sprite_id, TextureID value_id, TextureGroup value_group_id,bool value_retain) : base(value_id, value_group_id,value_retain)
+        {
+            sptiteID = value_sprite_id;
         }
     }
 
-    public struct VoiceSeriesRefData
+    public class StorySettingSlotData
+    {
+        Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> texture_setting_id;
+        public Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> TextureSettingData => texture_setting_id;
+
+        public StorySettingSlotTextureDetailsData TextureSetting(Story_ImgID id)
+        {
+            if(texture_setting_id.TryGetValue(id,out var result))
+            {
+                return result;
+            }
+            return null;
+        }
+
+        Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id;
+        public Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundSESettingData => sound_se_setting_id;
+        public Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundSESetting(Story_SoundSE_ID id)
+        {
+            if(sound_se_setting_id.TryGetValue(id,out var result))
+            {
+                return result;
+            }
+            return null;
+        }
+        Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id;
+        public Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundBGMSettingData => sound_bgm_setting_id;
+        public Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> SoundBGMSetting(Story_SoundBGM_ID id)
+        {
+            if(sound_bgm_setting_id.TryGetValue(id,out var result))
+            {
+                return result;
+            }
+            return null;
+        }
+        Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> gameobject_setting_id;
+        public Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> GameobjectSettingData => gameobject_setting_id;
+        public Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> GameobjectSetting(Story_SoundID id)
+        {
+            if(gameobject_setting_id.TryGetValue(id,out var result))
+            {
+                return result;
+            }
+            return null;
+        }
+
+
+        public StorySettingSlotData(
+           Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> texture_setting_id,
+           Dictionary<Story_SoundSE_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_se_setting_id,
+           Dictionary<Story_SoundBGM_ID, StorySettingSlotDetailsData<SoundID,SoundGroup>> sound_bgm_setting_id,
+           Dictionary<Story_GameobjectID, StorySettingSlotDetailsData<GameObjectID,GameObjectGroup>> gameobject_setting_id)
+        {
+            this.texture_setting_id = texture_setting_id;
+            this.sound_se_setting_id = sound_se_setting_id;
+            this.sound_bgm_setting_id = sound_bgm_setting_id;
+            this.gameobject_setting_id = gameobject_setting_id;
+        }
+    }
+
+    public class VoiceSeriesRefData
     {
         public bool HasValue;
-        public string Group;
-        public string SubGroup;
-        public bool Retain;
+        public SoundID SeriseSoundID;
     }
 
     public class StorySettingEntry
@@ -437,25 +690,19 @@ namespace GameCore.Scenario.StorySetting
             reader.BaseStream.Seek(offset, SeekOrigin.Begin);
             var entry = new StorySettingEntry();
 
-            int slotCount = reader.ReadInt32();
-            for (int i = 0; i < slotCount; i++)
-            {
-                byte kind = reader.ReadByte();
-                string slotName = ReadNullTerminatedString(reader);
-                string group = ReadNullTerminatedString(reader);
-                string id = ReadNullTerminatedString(reader);
-                string spriteName = ReadNullTerminatedString(reader);
-                bool retain = reader.ReadByte() != 0;
-                entry.Slots.Add(new StorySettingSlotData(kind, slotName, group, id, spriteName, retain));
-            }
+
+            var img_dict = ReadBinary(reader);
+            var sound_se_dict = ReadBinary<Story_SoundSE_ID, SoundID,SoundGroup>(reader);
+            var sound_bgm_dict = ReadBinary<Story_SoundBGM_ID, SoundID,SoundGroup>(reader);
+            var gameobject_dict = ReadBinary<Story_GameobjectID, GameObjectID,GameObjectGroup>(reader);
+            entry.Slots.Add(new StorySettingSlotData(img_dict, sound_se_dict, sound_bgm_dict, gameobject_dict));
+
 
             bool hasVoice = reader.ReadByte() != 0;
             if (hasVoice)
             {
-                string group = ReadNullTerminatedString(reader);
-                string subGroup = ReadNullTerminatedString(reader);
-                bool retain = reader.ReadByte() != 0;
-                entry.VoiceSeries = new VoiceSeriesRefData { HasValue = true, Group = group, SubGroup = subGroup, Retain = retain };
+                SoundID id = Convert<SoundID>(reader.ReadInt32());
+                entry.VoiceSeries = new VoiceSeriesRefData{ HasValue = hasVoice,SeriseSoundID = id };
             }
 
             return entry;
@@ -471,13 +718,84 @@ namespace GameCore.Scenario.StorySetting
             }
             return Encoding.UTF8.GetString(bytes.ToArray());
         }
+
+        public static Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> ReadBinary(BinaryReader reader)
+        {
+            var result = new Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData>();
+
+            //サイズ
+            int count = reader.ReadInt32();
+
+            for (int i = 0; i < count; i++)
+            {
+                int key_id = reader.ReadInt32();
+                int id = reader.ReadInt32();
+                int group_id = reader.ReadInt32();
+
+                
+                int spriteID = reader.ReadInt32();
+
+
+                TextureID t = Convert<TextureID>(id);
+                TextureGroup group = Convert<TextureGroup>(group_id);
+
+                Story_ImgID tid = Convert<Story_ImgID>(key_id);
+
+                bool retain = reader.ReadByte() != 0;
+
+                StorySettingSlotTextureDetailsData add_data = new StorySettingSlotTextureDetailsData(spriteID,t, group,retain);
+
+                result.Add(tid, add_data);
+            }
+
+            return result;
+        }
+
+        public static Dictionary<TID, StorySettingSlotDetailsData<TReturn,TGroup>> ReadBinary<TID, TReturn,TGroup>(BinaryReader reader) where TID : struct, Enum where TReturn : struct, Enum where TGroup : struct,Enum
+        {
+            var result = new Dictionary<TID, StorySettingSlotDetailsData<TReturn,TGroup>>();
+
+            //サイズ
+            int count = reader.ReadInt32();
+
+            for (int i = 0; i < count; i++)
+            {
+                int key_id = reader.ReadInt32();
+                int id = reader.ReadInt32();
+                int group_id = reader.ReadInt32();
+
+
+                TReturn t = Convert<TReturn>(id);
+
+                TID tid = Convert<TID>(key_id);
+                TGroup group = Convert<TGroup>(group_id);
+
+                bool retain = reader.ReadByte() != 0;
+
+                StorySettingSlotDetailsData<TReturn,TGroup> add_data = new StorySettingSlotDetailsData<TReturn,TGroup>(t, group,retain);
+
+                result.Add(tid, add_data);
+            }
+
+            return result;
+        }
+        public static TReturn Convert<TReturn>(int id)
+            where TReturn : struct, Enum
+        {
+            return Unsafe.As<int, TReturn>(ref id);
+        }
+
     }
 }
+
+
+
 '''
     with open(os.path.join(out_dir, "StorySettingDatabase.cs"), "w", encoding="utf-8") as f:
         f.write(database_code)
 
-    core_code = '''using System;
+    core_code = '''
+uusing System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -488,6 +806,8 @@ using GameCore.Sound;
 using GameCore.Texture;
 using GameCore.Gameobject;
 using AddressableSystem;
+using Cysharp.Threading.Tasks.Triggers;
+using GameCore.Enums;
 
 namespace GameCore.Scenario.StorySetting
 {
@@ -526,7 +846,7 @@ namespace GameCore.Scenario.StorySetting
             base.AwakeSingleton();
             DontDestroyOnLoad(gameObject);
             manualCancelSource = new CancellationTokenSource();
-            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
+            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), manualCancelSource.Token).Token;
             LoadDatabaseAsync().Forget();
         }
 
@@ -553,10 +873,17 @@ namespace GameCore.Scenario.StorySetting
             var nextSlots = entry?.Slots ?? new List<StorySettingSlotData>();
             var nextVoiceSeries = entry?.VoiceSeries ?? default;
 
-            var slotsToKeep = currentSlots.Where(s => s.Retain).ToList();
-            var slotsToUnload = currentSlots
-                .Where(s => !s.Retain && !nextSlots.Any(n => SameAsset(n, s)))
+            // Retain対象で、かつ次の物語設定に同一内容が無いスロットはそのまま維持する
+            var slotsToKeep = currentSlots
+                .Where(s => IsFullyRetained(s) && !nextSlots.Any(n => SameAsset(n, s)))
                 .ToList();
+
+            // Retain対象でなく、かつ次の物語設定に引き継がれないスロットは解放する
+            var slotsToUnload = currentSlots
+                .Where(s => !IsFullyRetained(s) && !nextSlots.Any(n => SameAsset(n, s)))
+                .ToList();
+
+            // 現在ロード済みの内容に存在しない、新規にロードすべきスロット
             var slotsToLoad = nextSlots
                 .Where(n => !currentSlots.Any(s => SameAsset(n, s)))
                 .ToList();
@@ -570,53 +897,115 @@ namespace GameCore.Scenario.StorySetting
 
             await UniTask.WhenAll(loadTasks);
 
+            // slotsToKeep は定義上nextSlotsと内容が重複しないので、単純結合でOK
             currentSlots.Clear();
             currentSlots.AddRange(slotsToKeep);
-            currentSlots.AddRange(nextSlots.Where(n => !slotsToKeep.Any(s => SameAsset(n, s))));
+            currentSlots.AddRange(nextSlots);
 
-            // Voice系列はデータ参照の引き継ぎのみ（実ロードは専用機構が担当）。
-            if (!currentVoiceSeries.HasValue || !currentVoiceSeries.Retain)
-                currentVoiceSeries = nextVoiceSeries;
+            // Voiceは事前ロード対象外（専用機構が個別にロードする）なので、参照の引き継ぎのみ行う
+            currentVoiceSeries = nextVoiceSeries;
 
             database.UnloadEntry(eventId, subId);
         }
 
+        /// <summary>
+        /// スロット内の全アイテムがRetain対象かどうか。
+        /// 一つでもRetain対象でないアイテムがあればfalse。
+        /// </summary>
+        private static bool IsFullyRetained(StorySettingSlotData slot)
+        {
+            if (slot.TextureSettingData != null && slot.TextureSettingData.Values.Any(v => !v.Retain)) return false;
+            if (slot.SoundSESettingData != null && slot.SoundSESettingData.Values.Any(v => !v.Retain)) return false;
+            if (slot.SoundBGMSettingData != null && slot.SoundBGMSettingData.Values.Any(v => !v.Retain)) return false;
+            if (slot.GameobjectSettingData != null && slot.GameobjectSettingData.Values.Any(v => !v.Retain)) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// 2つのスロットが参照するアセット内容が完全一致するかどうか。
+        /// </summary>
         private static bool SameAsset(StorySettingSlotData a, StorySettingSlotData b)
-            => a.Kind == b.Kind && a.Group == b.Group && a.Id == b.Id && a.SpriteName == b.SpriteName;
+        {
+            if (a == null || b == null) return false;
+            if (ReferenceEquals(a, b)) return true;
+
+            return TextureDictEquals(a.TextureSettingData, b.TextureSettingData)
+                && DetailsDictEquals(a.SoundSESettingData, b.SoundSESettingData)
+                && DetailsDictEquals(a.SoundBGMSettingData, b.SoundBGMSettingData)
+                && DetailsDictEquals(a.GameobjectSettingData, b.GameobjectSettingData);
+        }
+
+        private static bool TextureDictEquals(
+            Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> a,
+            Dictionary<Story_ImgID, StorySettingSlotTextureDetailsData> b)
+        {
+            int countA = a?.Count ?? 0;
+            int countB = b?.Count ?? 0;
+            if (countA != countB) return false;
+            if (countA == 0) return true;
+
+            foreach (var kv in a)
+            {
+                if (!b.TryGetValue(kv.Key, out var other)) return false;
+                if (!kv.Value.ID.Equals(other.ID)) return false;
+                if (!kv.Value.GroupID.Equals(other.GroupID)) return false;
+                if (kv.Value.SpriteID != other.SpriteID) return false;
+            }
+            return true;
+        }
+
+        private static bool DetailsDictEquals<TKey, TID, TGroup>(
+            Dictionary<TKey, StorySettingSlotDetailsData<TID, TGroup>> a,
+            Dictionary<TKey, StorySettingSlotDetailsData<TID, TGroup>> b)
+            where TID : struct, Enum
+            where TGroup : struct, Enum
+        {
+            int countA = a?.Count ?? 0;
+            int countB = b?.Count ?? 0;
+            if (countA != countB) return false;
+            if (countA == 0) return true;
+
+            foreach (var kv in a)
+            {
+                if (!b.TryGetValue(kv.Key, out var other)) return false;
+                if (!kv.Value.ID.Equals(other.ID)) return false;
+                if (!kv.Value.GroupID.Equals(other.GroupID)) return false;
+            }
+            return true;
+        }
 
         private async UniTask LoadSlotAsync(StorySettingSlotData slot, GroupCategory category)
         {
             try
             {
-                switch (slot.Kind)
+                foreach (var data in slot.TextureSettingData)
                 {
-                    case 0: // img
-                        {
-                            var group = (TextureGroup)Enum.Parse(typeof(TextureGroup), slot.Group);
-                            var id = (TextureID)Enum.Parse(typeof(TextureID), $"{slot.Group}_{slot.Id}");
-                            await TextureCore.Instance.LoadSingleAsync(group, id, category);
-                            break;
-                        }
-                    case 1: // se
-                    case 2: // bgm
-                        {
-                            var group = (SoundGroup)Enum.Parse(typeof(SoundGroup), slot.Group);
-                            var id = (SoundID)Enum.Parse(typeof(SoundID), $"{slot.Group}_{slot.Id}");
-                            await SoundCore.Instance.LoadSingleAsync(group, id, category);
-                            break;
-                        }
-                    case 3: // effect
-                        {
-                            var group = (GameObjectGroup)Enum.Parse(typeof(GameObjectGroup), slot.Group);
-                            var id = (GameObjectID)Enum.Parse(typeof(GameObjectID), $"{slot.Group}_{slot.Id}");
-                            await GameObjectCore.Instance.LoadSingleAsync(group, id, category);
-                            break;
-                        }
+                    await TextureCore.Instance.LoadSingleAsync(data.Value.GroupID,
+                                                               data.Value.ID,
+                                                               category);
+                }
+                foreach (var data in slot.SoundSESettingData)
+                {
+                    await SoundCore.Instance.LoadSingleAsync(data.Value.GroupID,
+                                                             data.Value.ID,
+                                                             category);
+                }
+                foreach (var data in slot.SoundBGMSettingData)
+                {
+                    await SoundCore.Instance.LoadSingleAsync(data.Value.GroupID,
+                                                             data.Value.ID,
+                                                              category);
+                }
+                foreach (var data in slot.GameobjectSettingData)
+                {
+                    await GameObjectCore.Instance.LoadSingleAsync(data.Value.GroupID,
+                                                                 data.Value.ID,
+                                                                category);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[StorySettingCore] Failed to load slot {slot.SlotName} ({slot.Group}/{slot.Id}): {ex.Message}");
+                Debug.LogError($"[StorySettingCore] Failed to load slot: {ex}");
             }
         }
 
@@ -624,35 +1013,34 @@ namespace GameCore.Scenario.StorySetting
         {
             try
             {
-                switch (slot.Kind)
+                foreach (var data in slot.TextureSettingData)
                 {
-                    case 0:
-                        {
-                            var group = (TextureGroup)Enum.Parse(typeof(TextureGroup), slot.Group);
-                            var id = (TextureID)Enum.Parse(typeof(TextureID), $"{slot.Group}_{slot.Id}");
-                            TextureCore.Instance.UnloadSingle(group, id);
-                            break;
-                        }
-                    case 1:
-                    case 2:
-                        {
-                            var group = (SoundGroup)Enum.Parse(typeof(SoundGroup), slot.Group);
-                            var id = (SoundID)Enum.Parse(typeof(SoundID), $"{slot.Group}_{slot.Id}");
-                            SoundCore.Instance.UnloadSingle(group, id);
-                            break;
-                        }
-                    case 3:
-                        {
-                            var group = (GameObjectGroup)Enum.Parse(typeof(GameObjectGroup), slot.Group);
-                            var id = (GameObjectID)Enum.Parse(typeof(GameObjectID), $"{slot.Group}_{slot.Id}");
-                            GameObjectCore.Instance.UnloadSingle(group, id);
-                            break;
-                        }
+                    TextureCore.Instance.UnloadSingle(data.Value.GroupID,
+                                                               data.Value.ID
+                                                               );
+                }
+                foreach (var data in slot.SoundSESettingData)
+                {
+                    SoundCore.Instance.UnloadSingle(data.Value.GroupID,
+                                                             data.Value.ID
+                                                             );
+                }
+                foreach (var data in slot.SoundBGMSettingData)
+                {
+                    SoundCore.Instance.UnloadSingle(data.Value.GroupID,
+                                                             data.Value.ID
+                                                              );
+                }
+                foreach (var data in slot.GameobjectSettingData)
+                {
+                    GameObjectCore.Instance.UnloadSingle(data.Value.GroupID,
+                                                                 data.Value.ID
+                                                                );
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[StorySettingCore] Failed to unload slot {slot.SlotName} ({slot.Group}/{slot.Id}): {ex.Message}");
+                Debug.LogError($"[StorySettingCore] Failed to unload slot: {ex}");
             }
         }
 
@@ -681,6 +1069,7 @@ namespace GameCore.Scenario.StorySetting
 def register(app, data_dir):
     from flask import jsonify, request
     init(data_dir)
+    inti_class_data_id()
 
     @app.route("/api/story-setting/slot-defs", methods=["GET"])
     def story_setting_slot_defs():
@@ -741,3 +1130,61 @@ def register(app, data_dir):
                 return jsonify({"message": "物語設定を保存しました"})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+            
+            
+def inti_class_data_id():
+    init_class_data_id_name("Img")
+    init_class_data_id_name("SoundSE")
+    init_class_data_id_name("SoundBGM")
+    init_class_data_id_name("Gameobject")
+
+
+def init_class_data_id_name(name):
+    class_id_name = f"Story_{name}ID"
+    
+    result = pythonSrc.data_utils.add_json_enum_parent(class_id_name)
+
+    
+    data = []
+
+    for i in range(1, 100):
+        data.append({
+            "id": i,
+            "property": f"{name}_{i:02d}",
+            "value": i,
+            "description": f"{name}_{i:02d}"
+        })
+        
+    os.makedirs(
+        os.path.join(DATA_DIR, pythonSrc.constants.ENUM, class_id_name),
+        exist_ok=True
+    )
+    
+    with open(os.path.join(DATA_DIR, pythonSrc.constants.ENUM,f"{class_id_name}", f"{class_id_name}.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+        
+    lines = [
+        "namespace GameCore.Enums",
+        "{",
+        f"    public enum {class_id_name}",
+        "    {",
+        "        None = 0, // デフォルト値",
+    ]
+
+    for item in data:
+        lines.append(
+            f'        {item["property"]} = {item["value"]}, // {item["description"]}'
+        )
+
+    max_value = max((item["value"] for item in data), default=0) + 1
+
+    lines += [
+        f"        Max = {max_value}",
+        "    }",
+        "}",
+    ]
+        
+    with open(os.path.join(DATA_DIR, pythonSrc.constants.ENUM,f"{class_id_name}", f"{class_id_name}.cs"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        
+    

@@ -16,7 +16,7 @@ import sys
 
 import pythonSrc.customclassdata
 
-from pythonSrc.constants import ENUM, CLASS_DATA, CLASS_DATA_ID, TYPE_MAP
+from pythonSrc.constants import ENUM, CLASS_DATA, CLASS_DATA_ID, TYPE_MAP,ASSETS_DATA,GAMEOBJECT_DATA,TEXTURE_DATA,SOUND_DATA
 
 # app.py 側の register(app, DATA_DIR) で設定される
 # 実行可能ファイルのディレクトリを取得（PyInstaller対応）
@@ -216,8 +216,51 @@ def get_json_enum(name):
     enum_data = json.load(open(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM,f"{name}", f"{name}.json")) else []
     return enum_data
 
+def get_json_enum_parent():
+    enum_data = json.load(open(os.path.join(DATA_DIR, ENUM, f"enum_list.json"))) if os.path.exists(os.path.join(DATA_DIR, ENUM,f"enum_list.json")) else []
+    return enum_data
+
+def add_json_enum_parent(name):
+        # JSON読み込み
+    with open(os.path.join(DATA_DIR, ENUM,"enum_list.json"), "r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+     # 既に存在するなら追加しない
+    if any(item["name"] == name for item in data):
+        return None
+
+    # 最大ID + 1
+    new_id = max((item["id"] for item in data), default=0) + 1
+
+    # 追加
+    new_item = {
+        "id": new_id,
+        "name": name,
+        "view": False
+    }
+
+    data.append(new_item)
+
+    # JSON保存
+    with open(os.path.join(DATA_DIR, ENUM,"enum_list.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+    return new_item
+
 def get_json_data_id(name):
     data_id = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID,f"{name}", f"{name}.json"))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID,f"{name}", f"{name}.json")) else []
+    return data_id
+
+def get_json_gameobject():
+    data_id = json.load(open(os.path.join(DATA_DIR,ASSETS_DATA,GAMEOBJECT_DATA ,f"assets_gameobject.json"))) if os.path.exists(os.path.join(DATA_DIR, ASSETS_DATA,GAMEOBJECT_DATA,f"assets_gameobject.json")) else []
+    return data_id
+
+def get_json_sound():
+    data_id = json.load(open(os.path.join(DATA_DIR,ASSETS_DATA,SOUND_DATA ,f"assets_sound.json"))) if os.path.exists(os.path.join(DATA_DIR, ASSETS_DATA,SOUND_DATA,f"assets_sound.json")) else []
+    return data_id
+
+def get_json_texture():
+    data_id = json.load(open(os.path.join(DATA_DIR,ASSETS_DATA,TEXTURE_DATA ,f"assets_texture.json"))) if os.path.exists(os.path.join(DATA_DIR, ASSETS_DATA,TEXTURE_DATA,f"assets_texture.json")) else []
     return data_id
 
 
