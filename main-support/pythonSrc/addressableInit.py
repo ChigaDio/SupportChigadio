@@ -1307,9 +1307,10 @@ namespace AddressableSystem.EditorTools
             {
                 EditorGUILayout.Space(20);
                 EditorGUILayout.HelpBox(
-                    "Playモード中に AddressableDataCore が管理しているロード状況をここに表示します。\n" +
-                    "Playを開始すると自動的に更新されます。",
-                    MessageType.Info);
+                "Playモード中に AddressableDataCore が管理しているロード状況をここに表示します。\\n" +
+                "Playを開始すると自動的に更新されます。",
+                MessageType.Info);
+
                 return;
             }
 
@@ -1465,7 +1466,7 @@ namespace AddressableSystem.EditorTools
             if (settings == null)
             {
                 EditorGUILayout.HelpBox(
-                    "Addressable Asset Settings が見つかりません。\n" +
+                    "Addressable Asset Settings が見つかりません。\\n "+
                     "Window > Asset Management > Addressables > Groups からセットアップしてください。",
                     MessageType.Warning);
                 return;
@@ -1548,7 +1549,8 @@ namespace AddressableSystem.EditorTools
         }
     }
 }
-#endif"""
+#endif
+"""
     generate_file(os.path.join(ADDRESSABLE_EDITOR_DIR,"AddressableManagerWindow.cs"),code_str.strip() + "\\n")
 
     code_str = """

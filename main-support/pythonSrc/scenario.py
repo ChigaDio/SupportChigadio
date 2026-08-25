@@ -1903,7 +1903,11 @@ def fix_all_events():
         role_name = os.path.basename(os.path.dirname(role_file))
         with open(role_file, 'r', encoding='utf-8') as f:
             schema_data = json.load(f)
+            if len(schema_data) == 0:
+                continue
             fields = schema_data.get('data', [])
+            if fields is None:
+                continue
             role_schemas[role_name] = {
                 field['name']: {'type': field['type'], 'default': field.get('default')}
                 for field in fields
