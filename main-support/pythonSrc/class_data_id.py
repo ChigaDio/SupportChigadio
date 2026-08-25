@@ -2575,7 +2575,7 @@ namespace GameCore.Enums
             f.write(code_str)
     
     cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'TableIdUtils.cs')
-    if not os.path.exists(cs_path)
+    if not os.path.exists(cs_path):
         code_str =f"""
 using System;
 using Cysharp.Threading.Tasks;
@@ -2587,7 +2587,7 @@ namespace GameCore.Enums
     {{
         public static void UnloadAllTable(Action action = null)
         {{
-            action?.Invok();  
+            action?.Invoke();  
         }}
     }}
 }}
