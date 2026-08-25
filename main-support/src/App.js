@@ -66,6 +66,8 @@ import AnnouncementEditor from './components/AnnouncementEditor';
 import VersionBadge from './components/VersionBadge';
 import ThemeSwitcher from './components/ThemeSwitcher';
 
+import GitSvnGrid from './components/GitSvnGrid';
+
 function TopBar() {
   const { user, serverMode, logout } = useAuth();
   const navigate = useNavigate();
@@ -101,6 +103,9 @@ function AppContent() {
     console.log('Menu clicked:', menu, 'SubMenu:', subMenu);
     if (menu === 'GenerateTool' && subMenu) {
       switch (subMenu) {
+        case 'vcs':
+          navigate('/vcs');
+          break;
         case 'enum-id':
           navigate('/enum-id');
           break;
@@ -228,6 +233,7 @@ function AppContent() {
         <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
           <Routes>
             <Route path="/" element={<Content />} />
+            <Route path="/vcs" element={<GitSvnGrid />} />
             <Route path="/enum-id" element={<EnumIdGrid />} />
             <Route path="/enum/:name" element={<EnumDetailGrid />} />
             <Route path="/const-class-data" element={<ConstClassDataGrid />} />

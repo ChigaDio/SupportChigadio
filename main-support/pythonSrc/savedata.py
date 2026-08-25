@@ -27,6 +27,114 @@ def generate_base():
     if not os.path.exists(SAVE_DATA_DIR):
         os.makedirs(SAVE_DATA_DIR)
 
+    # ── SaveDataVersion.cs ──
+    # Main.Sub.Details(int×3)のバージョン比較・ダウングレード検知ユーティリティ。
+    # Base{SystemData,PlayerData}.cs 側で生成される VersionMain/Sub/Details(const)と
+    # SavedVersionMain/Sub/Details(実際にセーブされる側)の比較にSaveManager.csから使う。
+    if not os.path.exists(os.path.join(SAVE_DATA_DIR, "SaveDataVersion.cs")):
+        code_str = """
+using System;
+
+namespace GameCore.SaveSystem
+{
+    /// <summary>
+    /// Main.Sub.Details の3つのintで構成されるSaveDataバージョン。
+    /// </summary>
+    public readonly struct SaveDataVersion : IEquatable<SaveDataVersion>
+    {
+        public readonly int Main;
+        public readonly int Sub;
+        public readonly int Details;
+
+        public SaveDataVersion(int main, int sub, int details)
+        {
+            Main = main;
+            Sub = sub;
+            Details = details;
+        }
+
+        /// <summary>
+        /// このバージョンが other より新しければ1、同じなら0、古ければ-1。
+        /// </summary>
+        public int CompareTo(SaveDataVersion other)
+        {
+            if (Main != other.Main) return Main > other.Main ? 1 : -1;
+            if (Sub != other.Sub) return Sub > other.Sub ? 1 : -1;
+            if (Details != other.Details) return Details > other.Details ? 1 : -1;
+            return 0;
+        }
+
+        public bool Equals(SaveDataVersion other) => Main == other.Main && Sub == other.Sub && Details == other.Details;
+        public override bool Equals(object obj) => obj is SaveDataVersion v && Equals(v);
+        public override int GetHashCode() => (Main * 397 ^ Sub) * 397 ^ Details;
+        public override string ToString() => Main + "." + Sub + "." + Details;
+
+        public static bool operator >(SaveDataVersion a, SaveDataVersion b) => a.CompareTo(b) > 0;
+        public static bool operator <(SaveDataVersion a, SaveDataVersion b) => a.CompareTo(b) < 0;
+        public static bool operator >=(SaveDataVersion a, SaveDataVersion b) => a.CompareTo(b) >= 0;
+        public static bool operator <=(SaveDataVersion a, SaveDataVersion b) => a.CompareTo(b) <= 0;
+        public static bool operator ==(SaveDataVersion a, SaveDataVersion b) => a.Equals(b);
+        public static bool operator !=(SaveDataVersion a, SaveDataVersion b) => !a.Equals(b);
+    }
+
+    /// <summary>
+    /// プログラム側のバージョンより新しい(=ダウングレード)SaveDataを読み込もうとした場合の例外。
+    /// Debug.Errorでのログのみで済ませず、呼び出し側で確実にハンドリングできるよう例外として投げる。
+    /// </summary>
+    public sealed class SaveDataDowngradeException : Exception
+    {
+        public readonly SaveDataVersion ProgramVersion;
+        public readonly SaveDataVersion SaveVersion;
+
+        public SaveDataDowngradeException(string dataName, SaveDataVersion programVersion, SaveDataVersion saveVersion)
+            : base(dataName + " のSaveDataバージョン(" + saveVersion + ")が実行中プログラムのバージョン(" + programVersion + ")より新しいため読み込めません(ダウングレード不可)。")
+        {
+            ProgramVersion = programVersion;
+            SaveVersion = saveVersion;
+        }
+    }
+
+    public static class SaveDataVersionValidator
+    {
+        /// <summary>
+        /// programVersion: 実行中プログラム側の定数バージョン。
+        /// saveVersion: ロードしたSaveDataに記録されていたバージョン(ref)。
+        /// プログラムの方が新しい場合、この場でprogramVersionへ上書きする
+        /// (＝以後の保存時に新しいバージョンとして書き戻される)。
+        /// 戻り値: true = 読み込み続行可。false = ダウングレード検知(エラー)。
+        /// </summary>
+        public static bool TryValidateAndUpgrade(SaveDataVersion programVersion, ref SaveDataVersion saveVersion)
+        {
+            int cmp = saveVersion.CompareTo(programVersion);
+            if (cmp > 0)
+            {
+                // SaveData側の方が新しい = ダウングレードして読み込もうとしている
+                return false;
+            }
+            if (cmp < 0)
+            {
+                // プログラム側の方が新しい: SaveData側のバージョンをプログラムのバージョンで上書き
+                saveVersion = programVersion;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// TryValidateAndUpgradeのラッパー。失敗時はDebug.Errorではなく例外を投げる。
+        /// </summary>
+        public static void ValidateAndUpgradeOrThrow(string dataName, SaveDataVersion programVersion, ref SaveDataVersion saveVersion)
+        {
+            if (!TryValidateAndUpgrade(programVersion, ref saveVersion))
+            {
+                throw new SaveDataDowngradeException(dataName, programVersion, saveVersion);
+            }
+        }
+    }
+}
+        """
+        with open(os.path.join(SAVE_DATA_DIR, "SaveDataVersion.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
+
     if not os.path.exists(os.path.join(SAVE_DATA_DIR, "SaveManagerCore .cs")):
         code_str = """
         using Cysharp.Threading.Tasks;
@@ -231,6 +339,7 @@ namespace GameCore.SaveSystem
                         byte[] encryptedData = File.ReadAllBytes(systemDataPath);
                         byte[] decryptedData = EncryptDecrypt(encryptedData);
                         SystemSettings = DeserializeFromBinary<SystemData>(decryptedData) ?? new SystemData();
+                        ValidateAndUpgradeSystemDataVersion();
                         Debug.Log($"システムデータを読み込みました: {systemDataPath}");
                     }
                     else
@@ -246,6 +355,13 @@ namespace GameCore.SaveSystem
             {
                 Debug.Log("LoadSystemDataAsyncがキャンセルされました。");
             }
+            catch (SaveDataDowngradeException)
+            {
+                // ダウングレード(セーブデータの方がプログラムより新しい)はDebug.Errorで
+                // 揉み消さず、呼び出し元がcatchして対処(エラー画面表示等)できるよう再送出する。
+                IsLoading = false;
+                throw;
+            }
             catch (Exception ex)
             {
                 Debug.LogError($"LoadSystemDataAsyncでエラー: {ex.Message}");
@@ -255,6 +371,23 @@ namespace GameCore.SaveSystem
                 IsLoading = false;
                 onComplete?.Invoke();
             }
+        }
+
+        /// <summary>
+        /// ロードしたSystemSettings.SavedVersion*と、現在のプログラムが持つ
+        /// SystemData.VersionMain/Sub/Details(const)を比較する。
+        /// セーブデータの方が新しければ SaveDataDowngradeException を投げる(ダウングレード禁止)。
+        /// プログラムの方が新しければ、SystemSettings側のSavedVersion*をプログラムの
+        /// バージョンで上書きする(次回保存時にアップグレードされたバージョンが書き戻る)。
+        /// </summary>
+        private void ValidateAndUpgradeSystemDataVersion()
+        {
+            var programVersion = new SaveDataVersion(SystemData.VersionMain, SystemData.VersionSub, SystemData.VersionDetails);
+            var saveVersion = new SaveDataVersion(SystemSettings.SavedVersionMain, SystemSettings.SavedVersionSub, SystemSettings.SavedVersionDetails);
+            SaveDataVersionValidator.ValidateAndUpgradeOrThrow("SystemData", programVersion, ref saveVersion);
+            SystemSettings.SavedVersionMain = saveVersion.Main;
+            SystemSettings.SavedVersionSub = saveVersion.Sub;
+            SystemSettings.SavedVersionDetails = saveVersion.Details;
         }
 
         public async UniTask SaveSystemDataAsync(Action onComplete = null)
@@ -298,6 +431,7 @@ namespace GameCore.SaveSystem
                         byte[] encryptedData = File.ReadAllBytes(playerDataPath);
                         byte[] decryptedData = EncryptDecrypt(encryptedData);
                         PlayerProgress = DeserializeFromBinary<PlayerData>(decryptedData) ?? new PlayerData();
+                        ValidateAndUpgradePlayerDataVersion();
                         Debug.Log($"プレイヤーデータを読み込みました: {playerDataPath}");
                     }
                     else
@@ -313,6 +447,13 @@ namespace GameCore.SaveSystem
             {
                 Debug.Log("LoadPlayerDataAsyncがキャンセルされました。");
             }
+            catch (SaveDataDowngradeException)
+            {
+                // ダウングレード(セーブデータの方がプログラムより新しい)はDebug.Errorで
+                // 揉み消さず、呼び出し元がcatchして対処(エラー画面表示等)できるよう再送出する。
+                IsLoading = false;
+                throw;
+            }
             catch (Exception ex)
             {
                 Debug.LogError($"LoadPlayerDataAsyncでエラー: {ex.Message}");
@@ -322,6 +463,23 @@ namespace GameCore.SaveSystem
                 IsLoading = false;
                 onComplete?.Invoke();
             }
+        }
+
+        /// <summary>
+        /// ロードしたPlayerProgress.SavedVersion*と、現在のプログラムが持つ
+        /// PlayerData.VersionMain/Sub/Details(const)を比較する。
+        /// セーブデータの方が新しければ SaveDataDowngradeException を投げる(ダウングレード禁止)。
+        /// プログラムの方が新しければ、PlayerProgress側のSavedVersion*をプログラムの
+        /// バージョンで上書きする(次回保存時にアップグレードされたバージョンが書き戻る)。
+        /// </summary>
+        private void ValidateAndUpgradePlayerDataVersion()
+        {
+            var programVersion = new SaveDataVersion(PlayerData.VersionMain, PlayerData.VersionSub, PlayerData.VersionDetails);
+            var saveVersion = new SaveDataVersion(PlayerProgress.SavedVersionMain, PlayerProgress.SavedVersionSub, PlayerProgress.SavedVersionDetails);
+            SaveDataVersionValidator.ValidateAndUpgradeOrThrow("PlayerData", programVersion, ref saveVersion);
+            PlayerProgress.SavedVersionMain = saveVersion.Main;
+            PlayerProgress.SavedVersionSub = saveVersion.Sub;
+            PlayerProgress.SavedVersionDetails = saveVersion.Details;
         }
 
         public async UniTask SavePlayerDataAsync(Action onComplete = null)

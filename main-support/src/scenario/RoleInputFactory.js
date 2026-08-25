@@ -35,6 +35,7 @@ const RoleInputFactory = {
           onChange={onChange}
           eventId={context?.eventId}
           subId={context?.subId}
+          roleName={roleName}
         />
       );  // onSave を onChange に変更
     } catch (error) {

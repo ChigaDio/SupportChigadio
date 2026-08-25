@@ -12,6 +12,16 @@ function SaveDataGrid() {
     const [loading, setLoading] = useState(true);
     const [open, setOpen] = useState(false);
 
+    // ── バージョン(Base) ──
+    // SystemData/PlayerDataそれぞれが持つ「セーブデータのバージョン」。
+    // Main.Sub.Details の3つのint値の組み合わせで表す(整数のみ)。
+    // 生成されるC#側では各SaveDataクラスにconstとして書き込まれる想定
+    // (例: public const int VersionMain = 1; など)。
+    // ロード時、実際のプログラム側のバージョン定数とここで書き込んだ値を比較し、
+    // 「SaveData側の記録バージョンがプログラムより新しい(=ダウングレードして
+    // 読み込もうとしている)」場合だけをエラーとして検知するために使う。
+    const [version, setVersion] = useState({ main: 0, sub: 0, details: 0 });
+
     // New field state
     const [newType, setNewType] = useState('');
     const [newName, setNewName] = useState('');
@@ -65,13 +75,23 @@ function SaveDataGrid() {
                 return response.json();
             })
             .then(fetchedData => {
+                // 後方互換: 旧形式(配列そのまま)と新形式({version, fields})の両方を許容する
+                const isNewFormat = !Array.isArray(fetchedData) && fetchedData && Array.isArray(fetchedData.fields);
+                const fields = isNewFormat ? fetchedData.fields : (Array.isArray(fetchedData) ? fetchedData : []);
+                const ver = isNewFormat && fetchedData.version ? fetchedData.version : { main: 0, sub: 0, details: 0 };
+                setVersion({
+                    main: parseInt(ver.main, 10) || 0,
+                    sub: parseInt(ver.sub, 10) || 0,
+                    details: parseInt(ver.details, 10) || 0,
+                });
                 // Ensure data has IDs for DataGrid
-                setData(fetchedData.map((item, index) => ({ ...item, id: item.id || index + 1 })));
+                setData(fields.map((item, index) => ({ ...item, id: item.id || index + 1 })));
                 setLoading(false);
             })
             .catch(error => {
                 console.error(`Error fetching ${name}:`, error);
                 setData([]); // Clear data on error or new file
+                setVersion({ main: 0, sub: 0, details: 0 });
                 setLoading(false);
             });
     };
@@ -114,11 +134,23 @@ function SaveDataGrid() {
         setData(newData);
     };
 
+    const handleVersionChange = (field) => (e) => {
+        // 整数のみ許可(空文字は一旦許容し、blur時等に0扱いにする)
+        const raw = e.target.value;
+        if (raw !== '' && !/^-?\d+$/.test(raw)) return;
+        setVersion(prev => ({ ...prev, [field]: raw === '' ? '' : parseInt(raw, 10) }));
+    };
+
     const handleSave = () => {
+        const normalizedVersion = {
+            main: parseInt(version.main, 10) || 0,
+            sub: parseInt(version.sub, 10) || 0,
+            details: parseInt(version.details, 10) || 0,
+        };
         fetch(`/api/save-data/${currentDataName}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
+            body: JSON.stringify({ version: normalizedVersion, fields: data }),
         })
             .then(response => response.json())
             .then(result => alert(result.message))
@@ -126,10 +158,15 @@ function SaveDataGrid() {
     };
 
     const handleGenerateCs = () => {
+        const normalizedVersion = {
+            main: parseInt(version.main, 10) || 0,
+            sub: parseInt(version.sub, 10) || 0,
+            details: parseInt(version.details, 10) || 0,
+        };
         fetch(`/api/generate-save-data/${currentDataName}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data), // Send current data to be safe, though server could read from file
+            body: JSON.stringify({ version: normalizedVersion, fields: data }), // Send current data to be safe, though server could read from file
         })
             .then(response => response.json())
             .then(result => alert(result.message))
@@ -177,6 +214,42 @@ function SaveDataGrid() {
                 <Tab label="SystemData" />
                 <Tab label="PlayerData" />
             </Tabs>
+
+            {/* ── Base: バージョン(Main.Sub.Details / int×3) ── */}
+            <Box sx={{
+                mb: 2, p: 1.5, border: '1px solid rgba(0,0,0,0.12)', borderRadius: 1,
+                display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+            }}>
+                <Typography variant="subtitle2" sx={{ mr: 1 }}>
+                    {currentDataName} バージョン (Base / const)
+                </Typography>
+                <TextField
+                    label="Main" size="small" sx={{ width: 90 }}
+                    value={version.main}
+                    onChange={handleVersionChange('main')}
+                    inputProps={{ inputMode: 'numeric', pattern: '-?[0-9]*' }}
+                />
+                <Typography>.</Typography>
+                <TextField
+                    label="Sub" size="small" sx={{ width: 90 }}
+                    value={version.sub}
+                    onChange={handleVersionChange('sub')}
+                    inputProps={{ inputMode: 'numeric', pattern: '-?[0-9]*' }}
+                />
+                <Typography>.</Typography>
+                <TextField
+                    label="Details" size="small" sx={{ width: 90 }}
+                    value={version.details}
+                    onChange={handleVersionChange('details')}
+                    inputProps={{ inputMode: 'numeric', pattern: '-?[0-9]*' }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ width: '100%' }}>
+                    「Save JSON」または「Create/Generate C#」で、{currentDataName}側にconstのバージョン値として書き込まれます。
+                    ロード時にプログラム側のバージョンより新しい(セーブデータの方が上)場合は
+                    ダウングレード扱いとしてエラーになり、逆にプログラム側の方が新しい場合はセーブ側のバージョンを
+                    プログラムのバージョンで上書きします。
+                </Typography>
+            </Box>
 
             <Box sx={{ mb: 2 }}>
                 <Button variant="contained" color="primary" startIcon={<AddIcon />} onClick={() => setOpen(true)} sx={{ mr: 1 }}>

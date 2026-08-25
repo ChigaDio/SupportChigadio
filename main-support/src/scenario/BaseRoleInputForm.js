@@ -19,6 +19,7 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
+import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 // Vector のラベル定義
@@ -689,7 +690,7 @@ function DictionaryValueEditor({ value, options, onChange, enumValues, classData
   );
 }
 
-const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId }) => {
+const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, roleName }) => {
   const [formData, setFormData] = useState(initialData || []);
   const [enumValues, setEnumValues] = useState({});
   const [classDataSchemas, setClassDataSchemas] = useState({});
@@ -733,9 +734,14 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId }) =>
     if (!isLoading) {
       const formattedData = schema.fields.map(field => {
         const initialItem = (initialData || []).find(d => d.name === field.name);
+        // 優先順位: ①既存データの値 → ②Role側に保存済みのデフォルト値
+        // （「デフォルト保存」ボタンで保存されたもの） → ③型ごとの汎用初期値
+        const hasSavedDefault = field.default !== undefined && field.default !== null;
         return {
           name: field.name,
-          value: initialItem ? initialItem.value : getDefaultValue(field.type, field.arraySize),
+          value: initialItem
+            ? initialItem.value
+            : (hasSavedDefault ? field.default : getDefaultValue(field.type, field.arraySize)),
           arraySize: field.arraySize !== undefined ? field.arraySize : 0
         };
       });
@@ -843,6 +849,30 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId }) =>
       onChange(newData);
       return newData;
     });
+  };
+
+  // ── フィールドの「デフォルト保存」 ──
+  // 今このフォームに入力されている値を、Role定義側(scenario_role/<Role>/<Role>.json)の
+  // そのフィールドの default として保存する。以後、このRoleを他のシナリオへ新規追加した
+  // 際の初期値として使われる(schema.fields[].default → BaseRoleInputForm冒頭のformattedData参照)。
+  const [savingDefaultField, setSavingDefaultField] = useState(null);
+  const handleSaveAsDefault = async (field) => {
+    if (!roleName) return;
+    const current = formData.find(d => d.name === field.name);
+    setSavingDefaultField(field.name);
+    try {
+      const res = await fetch(`/api/scenario-role/${encodeURIComponent(roleName)}/field-default`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fieldName: field.name, value: current ? current.value : null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      console.error('デフォルト値保存エラー:', e);
+      alert(`デフォルト値の保存に失敗しました: ${e.message}`);
+    } finally {
+      setSavingDefaultField(null);
+    }
   };
 
   const renderField = (field, parentPath = '', indexPath = []) => {
@@ -1219,7 +1249,28 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId }) =>
     <Box sx={{ p: 1 }}>
       {schema.fields.map((field, index) => (
         <Box key={field.name}>
-          {renderField(field)}
+          <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              {renderField(field)}
+            </Box>
+            {roleName && (
+              <Tooltip title={field.default !== undefined && field.default !== null
+                ? `デフォルト保存済み（現在の値で更新できます）`
+                : `今の値をこのフィールドのデフォルト値として保存（次にこのRoleを追加した時の初期値になります）`}>
+                <span>
+                  <IconButton
+                    size="small"
+                    color={field.default !== undefined && field.default !== null ? 'primary' : 'default'}
+                    disabled={savingDefaultField === field.name}
+                    onClick={() => handleSaveAsDefault(field)}
+                    sx={{ mt: 0.5 }}
+                  >
+                    <BookmarkAddIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+          </Box>
           {index < schema.fields.length - 1 && field.arraySize !== 0 && (
             <Divider sx={{ mb: 1 }} />
           )}

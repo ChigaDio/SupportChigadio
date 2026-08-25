@@ -1449,6 +1449,23 @@ def _build_custom_class_subfields(fields, custom_info, depth, max_depth):
 
 # generate_role_form_schema (全考慮版)
 # bit/color/bezier、CustomClassData・CustomClassDataID参照にも対応する。
+def _get_class_data_id_options(table_name, data_dir=None):
+    """class_data_id テーブル(table_name)の現在の行の識別子一覧(enum_property)を返す。
+    Transaction DSL(Lua風テキスト)の予測変換・値検証(coerceValueTokens)で
+    class_data_id型フィールドの候補として使うため、generate_role_form_schema から呼ばれる。
+    _resolve_prefill_members() と同じパス規約(フォルダ名は末尾のIDを除いたもの)を用いる。"""
+    data_dir = data_dir or DATA_DIR
+    class_id_path = os.path.join(data_dir, CLASS_DATA_ID, table_name.replace("ID", ""), f"{table_name}.json")
+    if not os.path.exists(class_id_path):
+        return []
+    try:
+        with open(class_id_path, 'r', encoding='utf-8') as f:
+            table_data = json.load(f)
+        return [r.get('enum_property') for r in table_data.get('rows', []) if r.get('enum_property')]
+    except Exception:
+        return []
+
+
 def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom_info=None):
     if depth > max_depth:
         return {"fields": [], "error": "Max depth reached"}
@@ -1473,6 +1490,11 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
 
     for var in role_data:
         field = {"name": var['name'], "label": var['name'], "arraySize": var.get("arraySize", 0), "description": var.get('description', '')}
+        # フィールドに保存済みのデフォルト値があれば渡す(無ければキー自体を付けない)。
+        # フロント(BaseRoleInputForm.js)はこれをinitialDataより優先度低く、
+        # 型ごとの汎用初期値(getDefaultValue)より優先度高く使う。
+        if 'default' in var and var['default'] is not None:
+            field['default'] = var['default']
         var_type = var['type']
 
         # bit / color / bezier / dictionary: 値編集に必要な options をそのままフロントへ渡す
@@ -1510,13 +1532,20 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
             field['type'] = var_type
             enum_values = get_enum_values()
             if var_type in enum_values:
-                field['options'] = [item.get('name', '') for item in enum_values[var_type]]
+                # enum項目のJSON構造は {"property": "...", "value": N, "description": "..."} であり、
+                # "name"というキーは存在しない(class_data.py の generate_enum_files 参照)。
+                # 以前はitem.get('name', '')としていたため候補が常に空文字列になり、
+                # Transaction DSL(Lua風テキスト)の予測変換に一切出てこなかった。
+                field['options'] = [item.get('property', '') for item in enum_values[var_type] if item.get('property')]
             else:
                 field['options'] = []
                 field['warning'] = 'Enum options not found'
 
         # CustomClassDataID: class_data_id と同じくID参照。値候補はフロント側が
         # /api/custom-class-data-id から取得するので、typeだけ渡せば十分。
+        # ※Transaction DSL(Lua風テキスト)の予測変換では、GUI側のような専用フェッチが
+        # できないため、この型の予測変換は現状未対応(customclassdata.py側の行データ
+        # 構造にここから安全にアクセスする手段が無いため)。
         elif var_type in custom_class_id_list:
             field['type'] = var_type
 
@@ -1532,6 +1561,10 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         # class_data_id: IDテーブル参照(値候補はフロントが/api/class-data-idから取得)
         elif var_type in class_id_names:
             field['type'] = var_type
+            # Transaction DSL(Lua風テキスト)側の予測変換・値検証用に、現在の行の
+            # 識別子一覧(enum_property)をoptionsとして渡す(GUI側は従来通り
+            # /api/class-data-idから取得するため、ここを追加してもGUI側の挙動は変わらない)。
+            field['options'] = _get_class_data_id_options(var_type, data_dir)
 
         # class_data: ネストしたClassData
         elif var_type in class_names:
@@ -1549,6 +1582,66 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         schema['fields'].append(field)
 
     return schema
+
+
+# ============================================================
+# Roleフィールドの「デフォルト値」保存
+# ------------------------------------------------------------
+# Transactionのデータ入力フォーム上で「このフィールドの値をデフォルトとして
+# 保存」した際に呼ばれる。scenario_role/<RoleName>/<RoleName>.jsonの該当
+# フィールド定義に default キーとして書き込む。以後、このRoleを新規に
+# シナリオへ追加した際の初期値として使われる(generate_role_form_schema →
+# BaseRoleInputForm.getDefaultValueの代わりにfield.defaultが使われる)。
+# 既存のシナリオイベントに既に置かれているRoleのデータには影響しない
+# (initialItemが優先されるため)。
+# ============================================================
+def save_role_field_default(role_name, field_name, value, data_dir=None):
+    data_dir = data_dir or DATA_DIR
+    role_path = os.path.join(data_dir, SCENARIO_ROLE, f"{role_name}", f"{role_name}.json")
+    if not os.path.exists(role_path):
+        return {"error": f"Role not found: {role_name}"}
+    with open(role_path, 'r', encoding='utf-8') as f:
+        role_json = json.load(f)
+
+    found = False
+    for var in role_json.get('data', []):
+        if var.get('name') == field_name:
+            var['default'] = value
+            found = True
+            break
+    if not found:
+        return {"error": f"Field not found: {role_name}.{field_name}"}
+
+    with open(role_path, 'w', encoding='utf-8') as f:
+        json.dump(role_json, f, ensure_ascii=False, indent=2)
+
+    # 既に生成済みのスキーマキャッシュ(フロント側 schemaCache/backend側があれば)は
+    # 呼び出し元(Flaskルート)でinvalidate_role_schema_cache的な処理があるなら
+    # ここではなくルート側で対応する想定。
+    return {"message": f"{role_name}.{field_name} のデフォルト値を保存しました", "default": value}
+
+
+def clear_role_field_default(role_name, field_name, data_dir=None):
+    """保存済みデフォルト値を削除し、型ごとの汎用初期値に戻す。"""
+    data_dir = data_dir or DATA_DIR
+    role_path = os.path.join(data_dir, SCENARIO_ROLE, f"{role_name}", f"{role_name}.json")
+    if not os.path.exists(role_path):
+        return {"error": f"Role not found: {role_name}"}
+    with open(role_path, 'r', encoding='utf-8') as f:
+        role_json = json.load(f)
+
+    found = False
+    for var in role_json.get('data', []):
+        if var.get('name') == field_name:
+            var.pop('default', None)
+            found = True
+            break
+    if not found:
+        return {"error": f"Field not found: {role_name}.{field_name}"}
+
+    with open(role_path, 'w', encoding='utf-8') as f:
+        json.dump(role_json, f, ensure_ascii=False, indent=2)
+    return {"message": f"{role_name}.{field_name} のデフォルト値をクリアしました"}
 
 
 # ============================================================
@@ -1776,7 +1869,9 @@ def write_event_data(eventId, data):
     event_path = os.path.join(DATA_DIR, SCENARIO_EVENT, f"{eventId}", f"{eventId}.json")
     with open(event_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-        
+
+
+
 # Role schema の初期値生成ヘルパー
 def get_initial_value(type_):
     type_lower = type_.lower()
@@ -1809,7 +1904,10 @@ def fix_all_events():
         with open(role_file, 'r', encoding='utf-8') as f:
             schema_data = json.load(f)
             fields = schema_data.get('data', [])
-            role_schemas[role_name] = {field['name']: field['type'] for field in fields}
+            role_schemas[role_name] = {
+                field['name']: {'type': field['type'], 'default': field.get('default')}
+                for field in fields
+            }
 
     # 全 event JSON を走査
     event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
@@ -1869,10 +1967,13 @@ def fix_roles(roles, role_schemas):
             updated = True
         
         # schema に新しく追加された field を初期値で追加
-        for field_name, field_type in schema_fields.items():
+        # (保存済みのデフォルト値があればそれを優先し、無ければ型ごとの汎用初期値)
+        for field_name, field_meta in schema_fields.items():
             if field_name not in current_data:
                 updated = True
-                new_data.append({"name": field_name, "value": get_initial_value(field_type)})
+                default_value = field_meta.get('default')
+                initial_value = default_value if default_value is not None else get_initial_value(field_meta.get('type'))
+                new_data.append({"name": field_name, "value": initial_value})
         
         role['data'] = new_data
     return updated

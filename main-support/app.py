@@ -72,6 +72,9 @@ import pythonSrc.project_stats as project_stats
 import pythonSrc.story_setting as story_setting
 import pythonSrc.upload as upload_module
 
+import pythonSrc.vcs as vcs
+
+
 # `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
 # 引数なしの通常起動では、これまで通り誰でも編集可能。
 def _prompt_launch_mode_dialog():
@@ -1398,6 +1401,31 @@ def handle_scenario_role_detail(name):
         if os.path.exists(role_dir):
             trash.move_to_trash('scenario_role', name, role_dir, list_entry=deleted_entry)
         return jsonify({"message": "Role deleted"})
+
+@app.route('/api/scenario-role/<name>/field-default', methods=['POST', 'DELETE'])
+def handle_scenario_role_field_default(name):
+    # フィールドのデフォルト値の保存/クリア。実処理は scenario.py 側の
+    # save_role_field_default / clear_role_field_default を呼ぶだけの薄いルート。
+    if request.method == 'POST':
+        body = request.json or {}
+        field_name = body.get('fieldName')
+        value = body.get('value')
+        if not field_name:
+            return jsonify({"error": "fieldName is required"}), 400
+        result = scenario.save_role_field_default(name, field_name, value, DATA_DIR)
+        if 'error' in result:
+            return jsonify(result), 404
+        generate_scenario_role_factory()
+        return jsonify(result)
+    else:  # DELETE
+        field_name = (request.json or {}).get('fieldName') or request.args.get('fieldName')
+        if not field_name:
+            return jsonify({"error": "fieldName is required"}), 400
+        result = scenario.clear_role_field_default(name, field_name, DATA_DIR)
+        if 'error' in result:
+            return jsonify(result), 404
+        generate_scenario_role_factory()
+        return jsonify(result)
 
 @app.route('/api/generate-scenario-role/<name>', methods=['POST'])
 def generate_scenario_role_cs(name):
@@ -2738,28 +2766,47 @@ def manage_save_data_schema(name):
         return jsonify({"error": "Invalid save data type"}), 400
 
     file_path = os.path.join(SAVE_DATA_CUSTOM_DIR, f"{name}.json")
+    default_payload = {"version": {"main": 0, "sub": 0, "details": 0}, "fields": []}
 
     if request.method == 'GET':
         if os.path.exists(file_path):
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                # 後方互換: 旧形式(配列のみ)ならversion 0.0.0を補って新形式に包む
+                if isinstance(data, list):
+                    data = {"version": {"main": 0, "sub": 0, "details": 0}, "fields": data}
+                else:
+                    data.setdefault('version', {"main": 0, "sub": 0, "details": 0})
+                    data.setdefault('fields', [])
                 return jsonify(data)
             except Exception as e:
                 logger.error(f"Error reading {name} schema: {e}")
-                return jsonify([]), 500 # Return empty list if error or file empty
+                return jsonify(default_payload), 500
         else:
-            return jsonify([]) # Return empty list if file doesn't exist
+            return jsonify(default_payload)
 
     elif request.method == 'POST':
         try:
             data = request.get_json()
+            # 後方互換: 旧形式(配列のみ)で送られてきた場合も受け付ける
+            if isinstance(data, list):
+                data = {"version": {"main": 0, "sub": 0, "details": 0}, "fields": data}
+            version = data.get('version', {}) or {}
+            normalized = {
+                "version": {
+                    "main": int(version.get('main', 0) or 0),
+                    "sub": int(version.get('sub', 0) or 0),
+                    "details": int(version.get('details', 0) or 0),
+                },
+                "fields": data.get('fields', []),
+            }
             # Ensure directory exists
             if not os.path.exists(SAVE_DATA_CUSTOM_DIR):
                 os.makedirs(SAVE_DATA_CUSTOM_DIR)
-            
+
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(normalized, f, ensure_ascii=False, indent=2)
             return jsonify({"message": f"{name} schema saved successfully"})
         except Exception as e:
             logger.error(f"Error saving {name} schema: {e}")
@@ -2812,15 +2859,26 @@ def generate_save_data_cs(name):
     if name not in ['SystemData', 'PlayerData']:
         return jsonify({"error": "Invalid save data type"}), 400
 
-    # Get data from request or file
-    data = request.get_json()
-    if not data:
+    # Get data from request or file (新形式 {version, fields} / 旧形式 配列 の両対応)
+    payload = request.get_json()
+    if not payload:
         file_path = os.path.join(SAVE_DATA_CUSTOM_DIR, f"{name}.json")
         if os.path.exists(file_path):
             with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                payload = json.load(f)
         else:
-            data = []
+            payload = {}
+
+    if isinstance(payload, list):
+        version = {"main": 0, "sub": 0, "details": 0}
+        data = payload
+    else:
+        version = payload.get('version') or {"main": 0, "sub": 0, "details": 0}
+        data = payload.get('fields', [])
+
+    version_main = int(version.get('main', 0) or 0)
+    version_sub = int(version.get('sub', 0) or 0)
+    version_details = int(version.get('details', 0) or 0)
 
     try:
         # 型解決に enum/class/class_data_id/CustomClassData(ID) を使えるようにする
@@ -2850,6 +2908,26 @@ def generate_save_data_cs(name):
                 init_suffix = f" = {initial}" if initial is not None else ""
                 field_declarations += f"        public {cs_type} {var_name}{init_suffix};\n"
 
+        # ── バージョン(Base) ──
+        # SaveDataGrid.js の「Base(バージョン)」で入力されたMain.Sub.Detailsを
+        # プログラム側の定数として書き込む。加えて、実際にシリアライズされ
+        # ファイルへ書き出される側のフィールド(SavedVersion*)も用意し、
+        # ロード時にこの値とVersionMain/Sub/Details(定数=現在のプログラムのバージョン)を
+        # 比較できるようにする(比較・ダウングレード検知はpythonSrc.savedataが生成する
+        # SaveManager.cs 側で行う。SaveDataVersion.cs のSaveDataVersionValidatorを使用)。
+        version_block = f"""        // --- Version (Base) ---
+        public const int VersionMain = {version_main};
+        public const int VersionSub = {version_sub};
+        public const int VersionDetails = {version_details};
+
+        // 実際にセーブファイルへシリアライズされる、そのセーブが書かれた時点のバージョン記録。
+        // 初期値は生成時点のプログラムのバージョン(=上のVersion*定数)と同じにしておく。
+        public int SavedVersionMain = {version_main};
+        public int SavedVersionSub = {version_sub};
+        public int SavedVersionDetails = {version_details};
+
+"""
+
         code_str = f"""using System;
 using UnityEngine;
 using System.Collections.Generic;
@@ -2862,7 +2940,7 @@ namespace GameCore.SaveSystem
     [Serializable]
     public class Base{name}
     {{
-{field_declarations}
+{version_block}{field_declarations}
     }}
 }}
 """
@@ -3204,6 +3282,7 @@ if __name__ == '__main__':
     project_stats.register(app, DATA_DIR)
     story_setting.register(app, DATA_DIR)
     upload_module.register(app, DATA_DIR)
+    vcs.register(app, DATA_DIR, SERVER_MODE)
 
     # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）
     versioning.register(app, DATA_DIR, BASE_DIR, SERVER_MODE)
