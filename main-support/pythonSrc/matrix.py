@@ -1818,6 +1818,28 @@ def generate_matrix_tags_load_script():
                 indent -= 1
                 add_single("}")
                 add_single()
+                
+        add_single(f"public static async UniTask UnloadAllTableAsync(Action action = null)")
+        add_single("{")
+        indent += 1
+        for item in matrix_list:
+            add_single(f"{table_ref}.Table.Clear();")
+            add_single("await UniTask.Yield();")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+        
+        
+        add_single(f"public static void UnloadAllTable(Action action = null)")
+        add_single("{")
+        indent += 1
+        for item in matrix_list:
+            add_single(f"{table_ref}.Table.Clear();")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
 
         all_blocks += single_lines
 
@@ -2278,7 +2300,7 @@ public class ClassDataMatrixIDCore : BaseSingleton<ClassDataMatrixIDCore>
 
     private void OnDestroy()
     {
-
+        MatrixTableIdUtils.UnloadAllTable();
     }
 
     /// <summary>
@@ -2414,6 +2436,32 @@ namespace GameCore.Tables
 }
 """
         with open(matrix_table_id_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+            
+    cs_path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, 'MatrixTableIdUtils.cs')
+    if not os.path.exists(cs_path):
+        code_str = f"""
+using System;
+using Cysharp.Threading.Tasks;
+using System.Collections.Generic;
+using GameCore.Tables.ID;
+using GameCore.Enums;
+
+namespace GameCore.Tables
+{{
+    public static class MatrixTableIdUtils
+    {{
+        public static void UnloadAllTable(Action action = null)
+        {{
+            action?.Invoke();
+        }}
+
+    }}
+}}
+"""
+
+       
+        with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(code_str)
 
 

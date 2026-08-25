@@ -1897,9 +1897,27 @@ def generate_tags_load_script():
         indent -= 1
         add_single("}")
         add_single()
-
-        all_blocks += single_lines
-
+        
+        add_single("public static async UniTask UnloadAllTableAsync(Action action = null)")
+        add_single("{")
+        indent += 1
+        for item_name in all_names:
+            add_single(f"GameCore.Tables.{item_name}Table.Table.Clear();")
+            add_single("await UniTask.Yield();")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
+        
+        add_single("public static void UnloadAllTable(Action action = null)")
+        add_single("{")
+        indent += 1
+        for item_name in all_names:
+            add_single(f"GameCore.Tables.{item_name}Table.Table.Clear();")
+        add_single("action?.Invoke();")
+        indent -= 1
+        add_single("}")
+        add_single()
         # ------------------------------------------------------------
         # ClassDataReferenceDispatcher.cs
         # 行が参照している他テーブルの行(参照先id)をプリロードする際のディスパッチ。
@@ -2305,6 +2323,7 @@ public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
 
     private void OnDestroy()
     {
+        TableIdUtils.UnloadAllTable();
     }
 
     /// <summary>
@@ -2553,6 +2572,29 @@ namespace GameCore.Enums
 }
 """
         with open(table_id_path, 'w', encoding='utf-8') as f:
+            f.write(code_str)
+    
+    cs_path = os.path.join(DATA_DIR, CLASS_DATA_ID, 'TableIdUtils.cs')
+    if not os.path.exists(cs_path)
+        code_str =f"""
+using System;
+using Cysharp.Threading.Tasks;
+using System.Collections.Generic;
+        
+namespace GameCore.Enums
+{{
+    public static class TableIdUtils
+    {{
+        public static void UnloadAllTable(Action action = null)
+        {{
+            action?.Invok();  
+        }}
+    }}
+}}
+"""
+    
+        #ファイル書き込み
+        with open(cs_path, 'w', encoding='utf-8') as f:
             f.write(code_str)
 
 
