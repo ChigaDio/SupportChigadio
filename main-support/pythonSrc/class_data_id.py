@@ -1918,6 +1918,8 @@ def generate_tags_load_script():
         indent -= 1
         add_single("}")
         add_single()
+        
+        all_blocks += single_lines
         # ------------------------------------------------------------
         # ClassDataReferenceDispatcher.cs
         # 行が参照している他テーブルの行(参照先id)をプリロードする際のディスパッチ。

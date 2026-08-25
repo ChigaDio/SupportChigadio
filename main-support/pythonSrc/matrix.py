@@ -2444,8 +2444,6 @@ namespace GameCore.Tables
 using System;
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
-using GameCore.Tables.ID;
-using GameCore.Enums;
 
 namespace GameCore.Tables
 {{

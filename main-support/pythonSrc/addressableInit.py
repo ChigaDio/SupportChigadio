@@ -307,6 +307,8 @@ namespace AddressableSystem
 
     code_str = """
 
+
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -362,7 +364,7 @@ namespace AddressableSystem
         /// <summary>
         /// Editor向け: 現在追跡中の全エントリのスナップショットを返す（Runtime専用ウィンドウ表示用）。
         /// </summary>
-        List<BaseAddressableData> GetAllEntries();
+        List<BaseAddressableData> GetAllEntriesEditor();
         List<GroupCategory> GetActiveGroups();
         List<AssetCategory> GetActiveCategories(GroupCategory group);
     }
@@ -658,7 +660,7 @@ namespace AddressableSystem
         /// Editor向け: 現在追跡中の全エントリのスナップショット（参照のコピー）を返す。
         /// 列挙中にコレクションが変更されても影響を受けないよう、必ず新しいListを返す。
         /// </summary>
-        public List<BaseAddressableData> GetAllEntries()
+        public List<BaseAddressableData> GetAllEntriesEditor()
         {
             var result = new List<BaseAddressableData>();
             foreach (var categoryMap in groupDataMap.Values)
@@ -688,6 +690,7 @@ namespace AddressableSystem
         
     }
 }
+    
     """
     generate_file(os.path.join(ADDRESSABLE_LIB_DIR,"AddressableDataContainer.cs"),code_str)
 
