@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   Box, Typography, TextField, Button, Accordion, AccordionSummary, AccordionDetails,
   List, ListItem, ListItemText, IconButton, MenuItem, Select, FormControl, InputLabel,
-  Chip, Divider, CircularProgress
+  Chip, Divider, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -99,6 +99,17 @@ function Sound() {
     return response.data.entry;
   };
 
+  const bulkAddFromFolder = async (groupName, soundType, subgroupName, useFolderNameAsSubgroup) => {
+    const response = await axios.post('/api/sound/bulk_add_from_folder', {
+      group_name: groupName,
+      type: soundType,
+      subgroup_name: subgroupName || null,
+      use_folder_name_as_subgroup: useFolderNameAsSubgroup,
+    });
+    fetchGroups();
+    return response.data;
+  };
+
   const generateFiles = async () => {
     try {
       await axios.post('/api/sound/generate');
@@ -162,6 +173,13 @@ function Sound() {
                 onTogglePlay={togglePlay}
                 onEdit={(index, fields) => editSound(groupName, index, fields)}
                 onReload={(index) => reloadSound(groupName, index)}
+              />
+
+              <BulkFolderImportButton
+                groupName={groupName}
+                onBulkAdd={(soundType, subgroupName, useFolderNameAsSubgroup) =>
+                  bulkAddFromFolder(groupName, soundType, subgroupName, useFolderNameAsSubgroup)
+                }
               />
 
               <SoundForm groupName={groupName} subgroups={subgroups} onAddSound={addSound} />
@@ -337,6 +355,7 @@ function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTog
         <Select size="small" value={type} onChange={(e) => setType(e.target.value)}>
           <MenuItem value="SE">SE</MenuItem>
           <MenuItem value="BGM">BGM</MenuItem>
+          <MenuItem value="VOICE">VOICE</MenuItem>
         </Select>
         <FormControl size="small" sx={{ minWidth: 160 }}>
           <InputLabel>SubGroup</InputLabel>
@@ -375,6 +394,89 @@ function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTog
         Path: {sound.path}
       </Typography>
     </ListItem>
+  );
+}
+
+// VOICEのように大量にファイルがあるケースを想定し、フォルダを1つ選択する
+// だけで直下の音声ファイルをまとめて登録できるボタン＋ダイアログ。
+// SubGroup名はフォルダ名を自動採用（チェックを外せば手動指定も可能）。
+function BulkFolderImportButton({ groupName, onBulkAdd }) {
+  const [open, setOpen] = useState(false);
+  const [soundType, setSoundType] = useState('VOICE');
+  const [useFolderNameAsSubgroup, setUseFolderNameAsSubgroup] = useState(true);
+  const [subgroupName, setSubgroupName] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  const handleImport = async () => {
+    setImporting(true);
+    try {
+      const result = await onBulkAdd(
+        soundType,
+        useFolderNameAsSubgroup ? '' : subgroupName,
+        useFolderNameAsSubgroup
+      );
+      const lines = [
+        `フォルダ: ${result.folder}`,
+        `SubGroup: ${result.subgroup || '(なし)'}`,
+        `追加: ${result.added.length}件`,
+        result.skipped.length > 0 ? `スキップ（同名が既存）: ${result.skipped.length}件` : null,
+        result.failed.length > 0 ? `失敗: ${result.failed.length}件` : null,
+      ].filter(Boolean);
+      alert(lines.join('\n'));
+      setOpen(false);
+    } catch (error) {
+      alert('一括追加に失敗しました: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <>
+      <Button variant="outlined" size="small" onClick={() => setOpen(true)} sx={{ mb: 2 }}>
+        フォルダから一括追加（VOICE等）
+      </Button>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>フォルダから一括追加: {groupName}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            フォルダを1つ選択すると、直下にある音声ファイル（.mp3/.wav/.ogg/.aiff）を
+            まとめて登録します。同名のアイテムが既にある場合はスキップされます。
+          </Typography>
+          <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+            <InputLabel>種別</InputLabel>
+            <Select label="種別" value={soundType} onChange={(e) => setSoundType(e.target.value)}>
+              <MenuItem value="SE">SE</MenuItem>
+              <MenuItem value="BGM">BGM</MenuItem>
+              <MenuItem value="VOICE">VOICE</MenuItem>
+            </Select>
+          </FormControl>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={useFolderNameAsSubgroup}
+              onChange={(e) => setUseFolderNameAsSubgroup(e.target.checked)}
+            />
+            <span>SubGroup名としてフォルダ名を自動的に使う</span>
+          </label>
+          {!useFolderNameAsSubgroup && (
+            <TextField
+              label="SubGroup名（手動指定・任意）"
+              size="small"
+              fullWidth
+              value={subgroupName}
+              onChange={(e) => setSubgroupName(e.target.value)}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpen(false)}>キャンセル</Button>
+          <Button variant="contained" onClick={handleImport} disabled={importing}>
+            {importing ? '取り込み中...' : 'フォルダを選択して取り込み'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }
 
@@ -423,6 +525,7 @@ function SoundForm({ groupName, subgroups, onAddSound }) {
       <Select value={type} onChange={(e) => setType(e.target.value)} sx={{ mt: 1, mr: 2 }}>
         <MenuItem value="SE">SE</MenuItem>
         <MenuItem value="BGM">BGM</MenuItem>
+        <MenuItem value="VOICE">VOICE</MenuItem>
       </Select>
       <FormControl sx={{ minWidth: 160, mt: 1, mr: 2 }}>
         <InputLabel>SubGroup (optional)</InputLabel>

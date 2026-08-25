@@ -32,7 +32,10 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import RoleInputFactory from '../scenario/RoleInputFactory';
+import ScenarioTransactionCodeEditor from '../scenario/ScenarioTransactionCodeEditor';
+import { compileDocument, decompileRoles } from '../scenario/scenarioTransactionDsl';
 import { debounce } from 'lodash';
 
 // ============================================================
@@ -290,13 +293,103 @@ const ConnectionBadge = ({ nodeId, edges, onRemove }) => {
 // ============================================================
 const RoleDataDrawer = ({
   open, onClose, nodeId, roles, formDataState, setFormDataState,
-  roleFormSchemas, eventId, subId, onSave, onDeleteRole
+  roleFormSchemas, eventId, subId, onSave, onDeleteRole, onAddRole, flushStructureSave
 }) => {
   const [roleForms, setRoleForms] = useState({});
   const [formErrors, setFormErrors] = useState({});
   const [loadingForms, setLoadingForms] = useState({});
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
   const loadedRef = useRef({});
+
+  // ── テキスト(DSL)モード ──
+  // 「上から順にRoleを追加していく」GUI入力は残しつつ、迅速な入力向けに
+  // テキストDSL（1行1Role呼び出し）での編集モードを追加している。
+  // scenarioTransactionDsl.js が唯一の文法定義であり、シンタックス
+  // ハイライト・リンター・オートコンプリートもそこを共通の情報源として使う。
+  const [inputMode, setInputMode] = useState('gui'); // 'gui' | 'text'
+  const [dslText, setDslText] = useState('');
+  const [dslDiagnostics, setDslDiagnostics] = useState([]);
+  const [applying, setApplying] = useState(false);
+
+  const switchToTextMode = () => {
+    const rolesForDsl = roles.map((r) => ({
+      uniqueId: r.uniqueId,
+      name: r.name,
+      data: formDataState[r.uniqueId] || r.data || [],
+    }));
+    setDslText(decompileRoles(rolesForDsl, roleFormSchemas));
+    setDslDiagnostics([]);
+    setInputMode('text');
+  };
+
+  const switchToGuiMode = () => {
+    if (dslDiagnostics.some((d) => d.severity !== 'warning')) {
+      if (!window.confirm('未適用のエラーがあります。GUIモードへ切り替えると、テキストの変更内容は破棄されます。よろしいですか？')) {
+        return;
+      }
+    }
+    setInputMode('gui');
+  };
+
+  const handleApplyDsl = async () => {
+    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, roleFormSchemas, roles);
+    setDslDiagnostics(diagnostics);
+    const hasError = diagnostics.some((d) => d.severity === 'error');
+    if (hasError) {
+      showSnack('エラーがあるため適用できません。赤波線の箇所を確認してください。', 'error');
+      return;
+    }
+
+    setApplying(true);
+    try {
+      const existingIds = new Set(roles.map((r) => r.uniqueId));
+      const compiledIds = new Set(compiledRoles.map((r) => r.uniqueId));
+      const hasNewRole = compiledRoles.some((r) => !existingIds.has(r.uniqueId));
+
+      // 削除された行（既存にあったが、テキストから消えたRole呼び出し）
+      roles.forEach((r) => {
+        if (!compiledIds.has(r.uniqueId)) onDeleteRole(r.uniqueId);
+      });
+
+      // 新規追加された行（既存に無かった新しいRole呼び出し）
+      compiledRoles.forEach((r) => {
+        if (!existingIds.has(r.uniqueId)) {
+          onAddRole({ uniqueId: r.uniqueId, id: r.uniqueId, name: r.name, branchType: 'General', data: [] });
+        }
+      });
+
+      // ── バグ修正: 新規Role行の値が保存されない問題 ──
+      // onAddRoleによるノード構造(roles一覧)への追加は、通常は
+      // scheduleSave()経由の「デバウンスされた自動保存」でサーバーへ
+      // 反映される(600ms後)。一方、直後に呼んでいたonSave(=
+      // /api/save-role-data/...)はサーバー側の該当ノードに「そのuniqueId
+      // のRoleが既に存在する」前提で値を書き込むため、自動保存が間に
+      // 合っていないタイミングでは新規Roleの値が保存されずに消えていた。
+      // → 新規行が1つでもあれば、フィールド値の保存を行う前に構造の
+      //   保存を即時実行・完了を待ってから進める。
+      if (hasNewRole && flushStructureSave) {
+        await flushStructureSave();
+      }
+
+      // 各Roleのフィールド値を反映（新規・既存とも）
+      const nextFormDataState = { ...formDataState };
+      compiledRoles.forEach((r) => {
+        nextFormDataState[r.uniqueId] = r.data;
+      });
+      compiledRoles.forEach((r) => {
+        if (!existingIds.has(r.uniqueId)) delete loadedRef.current[r.uniqueId]; // 新規分はフォームを再読み込みさせる
+      });
+      setFormDataState(nextFormDataState);
+      compiledRoles.forEach((r) => onSave(r.uniqueId, r.data));
+
+      showSnack(`テキストの内容を適用しました（${compiledRoles.length}件）`);
+      setInputMode('gui');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const roleNamesForDsl = Object.keys(roleFormSchemas || {});
 
   // ロールフォーム読み込み（重複防止）
   useEffect(() => {
@@ -316,7 +409,8 @@ const RoleDataDrawer = ({
           role.name,
           formDataState[uid] || role.data || [],
           (formData) => setFormDataState(prev => ({ ...prev, [uid]: formData })),
-          schema
+          schema,
+          { eventId, subId }
         );
         setRoleForms(prev => ({ ...prev, [uid]: FormComp }));
       } catch (err) {
@@ -357,14 +451,53 @@ const RoleDataDrawer = ({
             <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId} / {roles.length} Role</Typography>
           </Box>
           <Box sx={{ display: 'flex', gap: 1 }}>
+            {inputMode === 'gui' ? (
+              <Button variant="outlined" size="small" color="inherit"
+                onClick={switchToTextMode}>
+                テキスト入力へ
+              </Button>
+            ) : (
+              <>
+                <Button variant="outlined" size="small" color="inherit" onClick={switchToGuiMode}>
+                  GUI入力へ
+                </Button>
+                <Button variant="contained" size="small" color="success"
+                  startIcon={<SaveIcon />} onClick={handleApplyDsl} disabled={applying}>
+                  {applying ? '適用中...' : '適用して保存'}
+                </Button>
+              </>
+            )}
             <Button variant="contained" size="small" color="success"
-              startIcon={<SaveIcon />} onClick={handleBatchSave}>
+              startIcon={<SaveIcon />} onClick={handleBatchSave} disabled={inputMode === 'text'}>
               一括保存
             </Button>
             <IconButton onClick={handleClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
           </Box>
         </Box>
 
+        {inputMode === 'text' ? (
+          <Box sx={{ flex: 1, overflow: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Alert severity="info" sx={{ py: 0.5 }}>
+              1行1コマンド形式: <code>RoleName field1=値 field2=値</code>。文字列は <code>"..."</code>、
+              ベクトルは <code>(x, y, z)</code>、配列は <code>[a, b, c]</code>、行頭 <code>#</code> はコメントです。
+              入力中はRole名・フィールド名・値の候補が自動的に表示されます。
+            </Alert>
+            <ScenarioTransactionCodeEditor
+              value={dslText}
+              onChange={setDslText}
+              roleNames={roleNamesForDsl}
+              roleSchemas={roleFormSchemas}
+              height="60vh"
+            />
+            {dslDiagnostics.length > 0 && (
+              <Alert severity={dslDiagnostics.some(d => d.severity === 'error') ? 'error' : 'warning'} sx={{ maxHeight: 160, overflow: 'auto' }}>
+                {dslDiagnostics.map((d, i) => (
+                  <div key={i}>{d.line + 1}行目: {d.message}</div>
+                ))}
+              </Alert>
+            )}
+          </Box>
+        ) : (
         <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
           {roles.length === 0 ? (
             <Alert severity="info">Roleがありません</Alert>
@@ -411,6 +544,7 @@ const RoleDataDrawer = ({
             </Accordion>
           ))}
         </Box>
+        )}
 
         <Snackbar open={snack.open} autoHideDuration={2000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
           <Alert onClose={hideSnack} severity={snack.severity} variant="filled">{snack.msg}</Alert>
@@ -458,7 +592,7 @@ const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => (
 // ============================================================
 const BlockCard = ({
   node, index, totalNodes, isSub, edges, allNodeIds,
-  globalRoles, roleDataCache, roleFormSchemas, eventId, subId,
+  globalRoles, roleDataCache, roleFormSchemas, eventId, subId, flushStructureSave,
   onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
@@ -747,6 +881,8 @@ const BlockCard = ({
         subId={subId}
         onSave={(uid, data) => onSaveRole(node.id, uid, data)}
         onDeleteRole={(uid) => onDeleteRole(node.id, uid)}
+        onAddRole={(newRole) => onAddRole(node.id, newRole)}
+        flushStructureSave={flushStructureSave}
       />
 
       {/* ── 接続追加ダイアログ ── */}
@@ -810,7 +946,7 @@ const BlockCard = ({
 // ============================================================
 const BlockCanvas = ({
   nodes, edges, isSub, globalRoles, roleDataCache, roleFormSchemas,
-  eventId, subId,
+  eventId, subId, flushStructureSave,
   onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
@@ -846,6 +982,7 @@ const BlockCanvas = ({
           roleFormSchemas={roleFormSchemas}
           eventId={eventId}
           subId={subId}
+          flushStructureSave={flushStructureSave}
           onMoveUp={() => onReorder(index, index - 1)}
           onMoveDown={() => onReorder(index, index + 1)}
           onDelete={onDelete}
@@ -892,6 +1029,168 @@ function ScenarioEventTransition() {
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
 
   // ============================================================
+  // 全体編集（イベント内の全Sub・全ノードのTransactionを1つのテキストで一括編集）
+  // ------------------------------------------------------------
+  // データの持ち方・保存先は既存のまま(各Subの nodes[].data.roles /
+  // nodes[].data.subgroups[...].nodes[].data.roles)。あくまで「編集画面」を
+  // 追加するだけで、新しいデータ構造や実行タイミングの変更は一切行わない。
+  // 既存の /api/scenario-event (一覧) と
+  // /api/scenario-event/<eventId>/sub/<subId>/transition (GET/POST) だけを使う。
+  //
+  // スコープ: 既存ノードのRole呼び出し内容(追加/削除/値変更)の一括編集のみ対応。
+  // 新しいノード自体の作成はこの画面では行えない(通常のGUI操作で追加してください)。
+  // ============================================================
+  const [showAllEditDialog, setShowAllEditDialog] = useState(false);
+  const [allEditLoading, setAllEditLoading] = useState(false);
+  const [allEditApplying, setAllEditApplying] = useState(false);
+  const [allEditText, setAllEditText] = useState('');
+  const [allEditDiagnostics, setAllEditDiagnostics] = useState([]); // [{message, subId, path}]
+  // subId -> { nodes, edges }  (取得時点の全ノードツリー。適用時にこれを直接書き換えて送り返す)
+  const allEditSubTreesRef = useRef({});
+  // "subId::path" -> ノードオブジェクトへの直接参照 (allEditSubTreesRef内のツリーの一部)
+  const allEditTargetsRef = useRef({});
+
+  const ALL_EDIT_HEADER_RE = /^#\s*====\s*SUB:(\S+)\s+NODE:(\S+).*?====\s*$/;
+
+  // node以下を再帰的に辿り、Roleを持ちうる全ノード(トップレベル + 入れ子のsubgroups)を収集する
+  const collectAllEditTargets = (nodes, pathIds, out) => {
+    (nodes || []).forEach((node) => {
+      const path = [...pathIds, String(node.id)];
+      out.push({ path, node, label: node.description || '' });
+      const subgroups = (node.data && node.data.subgroups) || {};
+      Object.keys(subgroups).forEach((sgId) => {
+        const innerNodes = (subgroups[sgId] && subgroups[sgId].nodes) || [];
+        collectAllEditTargets(innerNodes, path, out);
+      });
+    });
+  };
+
+  const handleOpenAllEditDialog = async () => {
+    if (!eventId) return;
+    setShowAllEditDialog(true);
+    setAllEditLoading(true);
+    setAllEditDiagnostics([]);
+    try {
+      // このイベントのSub一覧を取得
+      const listRes = await fetch('/api/scenario-event');
+      const list = listRes.ok ? await listRes.json() : [];
+      const eventEntry = (list || []).find((e) => e.id === eventId);
+      const subIds = (eventEntry?.subEvents || []).map((s) => String(s.subId));
+
+      allEditSubTreesRef.current = {};
+      allEditTargetsRef.current = {};
+      const lines = [];
+
+      for (const sid of subIds) {
+        const res = await fetch(`/api/scenario-event/${eventId}/sub/${sid}/transition`);
+        const tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+        allEditSubTreesRef.current[sid] = tree;
+
+        const targets = [];
+        collectAllEditTargets(tree.nodes, [], targets);
+        targets.forEach((t) => {
+          const pathKey = t.path.join('/');
+          allEditTargetsRef.current[`${sid}::${pathKey}`] = t.node;
+          const labelSuffix = t.label ? ` (${t.label})` : '';
+          lines.push(`# ==== SUB:${sid} NODE:${pathKey}${labelSuffix} ====`);
+          const roles = (t.node.data && t.node.data.roles) || [];
+          const bodyText = decompileRoles(roles, roleFormSchemas);
+          if (bodyText) lines.push(bodyText);
+          lines.push('');
+        });
+      }
+
+      setAllEditText(lines.join('\n'));
+    } catch (e) {
+      console.error('全体編集の読み込みエラー:', e);
+      showSnack('全体編集データの取得に失敗しました', 'error');
+    } finally {
+      setAllEditLoading(false);
+    }
+  };
+
+  const handleApplyAllEdit = async () => {
+    setAllEditApplying(true);
+    const diagnostics = [];
+    try {
+      // テキストをヘッダ行で分割し、セクションごとに再コンパイルする
+      const rawLines = allEditText.split('\n');
+      const sections = [];
+      let current = null;
+      rawLines.forEach((line) => {
+        const m = line.match(ALL_EDIT_HEADER_RE);
+        if (m) {
+          if (current) sections.push(current);
+          current = { subId: m[1], pathKey: m[2], bodyLines: [] };
+        } else if (current) {
+          current.bodyLines.push(line);
+        }
+      });
+      if (current) sections.push(current);
+
+      const touchedSubIds = new Set();
+
+      for (const section of sections) {
+        const key = `${section.subId}::${section.pathKey}`;
+        const targetNode = allEditTargetsRef.current[key];
+        if (!targetNode) {
+          diagnostics.push({
+            message: `見つからないセクションです(削除されたかIDが変更された可能性があります): SUB:${section.subId} NODE:${section.pathKey}`,
+            subId: section.subId, path: section.pathKey,
+          });
+          continue;
+        }
+        const existingRoles = (targetNode.data && targetNode.data.roles) || [];
+        const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
+          section.bodyLines.join('\n'), roleFormSchemas, existingRoles
+        );
+        sectionDiagnostics
+          .filter((d) => d.severity === 'error')
+          .forEach((d) => diagnostics.push({
+            message: `SUB:${section.subId} NODE:${section.pathKey} - ${d.message}`,
+            subId: section.subId, path: section.pathKey,
+          }));
+        if (sectionDiagnostics.some((d) => d.severity === 'error')) continue;
+
+        targetNode.data = targetNode.data || {};
+        targetNode.data.roles = compiledRoles;
+        touchedSubIds.add(section.subId);
+      }
+
+      setAllEditDiagnostics(diagnostics);
+      if (diagnostics.length > 0) {
+        showSnack('エラーがあるため一部(またはすべて)適用できませんでした。内容を確認してください。', 'error');
+        return;
+      }
+
+      // 変更のあったSubだけ、既存の /transition エンドポイントへそのまま書き戻す
+      // (ノード構造は変更しない=既存のノードグラフ・入れ子構造はそのまま、rolesの中身だけ更新)
+      for (const sid of touchedSubIds) {
+        const tree = allEditSubTreesRef.current[sid];
+        const res = await fetch(`/api/scenario-event/${eventId}/sub/${sid}/transition`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: tree.nodes, edges: tree.edges }),
+        });
+        if (!res.ok) throw new Error(`Sub ${sid} の保存に失敗しました (HTTP ${res.status})`);
+      }
+
+      showSnack(`全体編集を適用しました（${touchedSubIds.size}件のSubを更新）`);
+      setShowAllEditDialog(false);
+
+      // 現在開いているタブが今回更新対象に含まれていた場合、表示中データが古くなるため再読み込みする
+      if (touchedSubIds.has(String(subId))) {
+        window.location.reload();
+      }
+    } catch (e) {
+      console.error('全体編集の適用エラー:', e);
+      showSnack(`全体編集の適用に失敗しました: ${e.message}`, 'error');
+    } finally {
+      setAllEditApplying(false);
+    }
+  };
+
+
   // 保存バグ修正用の参照群
   // ------------------------------------------------------------
   // ・tabDataRef: setState は非同期なため、直後に保存処理を呼んでも
@@ -1036,11 +1335,15 @@ function ScenarioEventTransition() {
       ? `/api/scenario-event/${eventIdCur}/sub/${subIdCur}/transition/${pid}/subgroup`
       : `/api/scenario-event/${eventIdCur}/sub/${subIdCur}/transition`;
 
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveData) })
+    // 戻り値のPromiseはDSL適用時など「構造(node/role一覧)の保存が
+    // サーバー側に反映されたことを保証してから、続けてRoleのフィールド値を
+    // 保存したい」呼び出し元(handleApplyDsl)のために公開している。
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveData) })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
       .catch(e => {
         console.error('保存エラー:', e);
         showSnack('保存に失敗しました。再度お試しください', 'error');
+        throw e;
       })
       .finally(() => {
         savingRef.current = false;
@@ -1074,7 +1377,7 @@ function ScenarioEventTransition() {
   // 無いように見える」状態を無くし、クリックすれば必ず保存が実行される。
   const saveCurrentTab = useCallback(() => {
     debouncedAutoSaveRef.current.cancel();
-    performSave(activeTabRef.current);
+    return performSave(activeTabRef.current);
   }, [performSave]);
 
   // ── タブ切り替え ──
@@ -1508,6 +1811,16 @@ function ScenarioEventTransition() {
             </Button>
           </Tooltip>
 
+          <Tooltip title="このイベントに属する全Sub・全ノードのTransactionを1つのテキストでまとめて編集します（既存ノードの内容編集のみ。ノード自体の追加は不可）">
+            <Button variant="outlined" size="small"
+              startIcon={<EditNoteIcon />}
+              onClick={handleOpenAllEditDialog}
+              disabled={isLoading || !eventId}
+              sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+              全体編集(全Sub一括)
+            </Button>
+          </Tooltip>
+
           <Box sx={{ flex: 1 }} />
 
           {/* ノード数・接続数サマリー */}
@@ -1576,6 +1889,7 @@ function ScenarioEventTransition() {
           roleFormSchemas={roleFormSchemas}
           eventId={eventId}
           subId={subId}
+          flushStructureSave={saveCurrentTab}
           onReorder={handleReorder}
           onDelete={handleDeleteNode}
           onCopy={handleCopyNode}
@@ -1590,6 +1904,54 @@ function ScenarioEventTransition() {
           onMoveToGroup={handleMoveToGroup}
         />
       </Box>
+
+      {/* ── 全体編集ダイアログ(イベント内の全Sub・全ノードのTransactionを一括編集) ── */}
+      <Dialog open={showAllEditDialog} onClose={() => setShowAllEditDialog(false)} maxWidth="lg" fullWidth>
+        <DialogTitle>
+          全体編集（{eventId} / 全Sub一括）
+          <Typography variant="caption" display="block" color="text.secondary">
+            既存ノードのRole呼び出し内容(追加・削除・値の変更)をまとめて編集できます。ノード自体の新規作成はここでは行えません。
+            見出しコメント（# ==== SUB:.. NODE:.. ====）は削除・改変しないでください。
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          {allEditLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <>
+              <ScenarioTransactionCodeEditor
+                value={allEditText}
+                onChange={setAllEditText}
+                roleNames={globalRoles.map((r) => r.name)}
+                roleSchemas={roleFormSchemas}
+                height="60vh"
+              />
+              {allEditDiagnostics.length > 0 && (
+                <Box sx={{ p: 1, maxHeight: 160, overflow: 'auto', bgcolor: 'rgba(255,0,0,0.06)' }}>
+                  {allEditDiagnostics.map((d, i) => (
+                    <Typography key={i} variant="caption" color="error" display="block">
+                      {d.message}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowAllEditDialog(false)} disabled={allEditApplying}>閉じる</Button>
+          <Button onClick={handleOpenAllEditDialog} disabled={allEditLoading || allEditApplying}>再取得</Button>
+          <Button
+            variant="contained"
+            onClick={handleApplyAllEdit}
+            disabled={allEditLoading || allEditApplying}
+          >
+            {allEditApplying ? '適用中...' : '適用'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── ノード追加ダイアログ ── */}
       <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="xs" fullWidth>

@@ -17,6 +17,12 @@ CLASS_DATA_MATRIX_ID = 'class_data_matrix_id'
 STATE_DATA = 'state_data'
 CONST_CLASS_DATA = 'const_class_data'
 
+ASSETS_DATA = "assets_data"
+GAMEOBJECT_DATA = "gameobject"
+MATERIAL_DATA = "material"
+SOUND_DATA = "sound"
+TEXTURE_DATA = "texture"
+
 # --- Unity側 Script 出力フォルダ関連 ---
 SCRIPT = 'Script'
 OBJECTPOOL = 'ObjectPool'

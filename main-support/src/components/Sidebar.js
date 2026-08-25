@@ -13,6 +13,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
     {
       name: 'GenerateTool',
       subItems: [
+        {name: 'Git/Svn', key: 'vcs'},
         { name: 'Enum ID', key: 'enum-id' },
         { name: 'Const Class Data', key: 'const-class-data' },
         { name: 'Class Data', key: 'class-data' },

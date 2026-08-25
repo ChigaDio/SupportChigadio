@@ -19,6 +19,7 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
+import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 // Vector のラベル定義
@@ -27,6 +28,87 @@ const VECTOR_AXIS_LABELS = {
   vector3: ['X', 'Y', 'Z'],
   vector4: ['X', 'Y', 'Z', 'W'],
 };
+
+// ============================================================
+// voice_ref: Voice専用Role(VoiceLine)専用の特殊フィールド型。
+// そのサブイベントの物語設定(story_setting)で指定されたvoice_series_id
+// （Group+SubGroup）に属するSoundID（type=VOICE）だけへ絞り込んだ
+// ドロップダウンを表示する。eventId/subIdはScenarioEventTransition.js
+// から伝播される（無い場合はRole単体プレビュー等の文脈なので、その旨を表示）。
+// ============================================================
+function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
+  const [options, setOptions] = useState([]);
+  const [seriesLabel, setSeriesLabel] = useState('');
+  const [loadingVoice, setLoadingVoice] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (!eventId || !subId) {
+      setErrorMsg('このRoleはシナリオイベントの遷移編集画面からのみ使用できます（物語設定のvoice_series_idが必要）。');
+      setLoadingVoice(false);
+      return;
+    }
+    setLoadingVoice(true);
+    setErrorMsg('');
+    Promise.all([
+      fetch(`/api/scenario-event/${eventId}/sub/${subId}/story`).then((r) => r.json()),
+      fetch('/api/sound').then((r) => r.json()),
+    ])
+      .then(([story, soundData]) => {
+        const series = story.voiceSeriesId;
+        if (!series) {
+          setErrorMsg('このサブイベントの物語設定にvoice_series_idが設定されていません。先に物語設定画面でVoice系列を指定してください。');
+          setOptions([]);
+          return;
+        }
+        setSeriesLabel(`Sound_${series.group}_${series.subGroup}`);
+        const items = [];
+        Object.entries(soundData.groups || {}).forEach(([groupName, groupValue]) => {
+          if (groupName !== series.group) return;
+          (groupValue.items || []).forEach((item) => {
+            if (item.type === 'VOICE' && item.subgroup === series.subGroup) {
+              items.push({ name: item.name, enumName: `${groupName}_${item.name}` });
+            }
+          });
+        });
+        setOptions(items);
+      })
+      .catch((e) => setErrorMsg('取得エラー: ' + e.message))
+      .finally(() => setLoadingVoice(false));
+  }, [eventId, subId]);
+
+  if (loadingVoice) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={16} />
+        <Typography variant="caption" color="text.secondary">Voice候補を読み込み中...</Typography>
+      </Box>
+    );
+  }
+
+  if (errorMsg) {
+    return <Typography variant="caption" color="error">{errorMsg}</Typography>;
+  }
+
+  const selected = options.find((o) => o.enumName === value) || null;
+
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+        Voice系列: {seriesLabel}（{options.length}件）
+      </Typography>
+      <Autocomplete
+        size="small"
+        options={options}
+        value={selected}
+        onChange={(e, v) => onChange(v ? v.enumName : '')}
+        getOptionLabel={(o) => (o ? `SoundID.${o.enumName}` : '')}
+        isOptionEqualToValue={(a, b) => a.enumName === b.enumName}
+        renderInput={(params) => <TextField {...params} label="Voice" />}
+      />
+    </Box>
+  );
+}
 
 // ============================================================
 // bit / color / bezier 値エディタ
@@ -608,7 +690,7 @@ function DictionaryValueEditor({ value, options, onChange, enumValues, classData
   );
 }
 
-const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
+const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, roleName }) => {
   const [formData, setFormData] = useState(initialData || []);
   const [enumValues, setEnumValues] = useState({});
   const [classDataSchemas, setClassDataSchemas] = useState({});
@@ -652,9 +734,14 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
     if (!isLoading) {
       const formattedData = schema.fields.map(field => {
         const initialItem = (initialData || []).find(d => d.name === field.name);
+        // 優先順位: ①既存データの値 → ②Role側に保存済みのデフォルト値
+        // （「デフォルト保存」ボタンで保存されたもの） → ③型ごとの汎用初期値
+        const hasSavedDefault = field.default !== undefined && field.default !== null;
         return {
           name: field.name,
-          value: initialItem ? initialItem.value : getDefaultValue(field.type, field.arraySize),
+          value: initialItem
+            ? initialItem.value
+            : (hasSavedDefault ? field.default : getDefaultValue(field.type, field.arraySize)),
           arraySize: field.arraySize !== undefined ? field.arraySize : 0
         };
       });
@@ -764,6 +851,30 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
     });
   };
 
+  // ── フィールドの「デフォルト保存」 ──
+  // 今このフォームに入力されている値を、Role定義側(scenario_role/<Role>/<Role>.json)の
+  // そのフィールドの default として保存する。以後、このRoleを他のシナリオへ新規追加した
+  // 際の初期値として使われる(schema.fields[].default → BaseRoleInputForm冒頭のformattedData参照)。
+  const [savingDefaultField, setSavingDefaultField] = useState(null);
+  const handleSaveAsDefault = async (field) => {
+    if (!roleName) return;
+    const current = formData.find(d => d.name === field.name);
+    setSavingDefaultField(field.name);
+    try {
+      const res = await fetch(`/api/scenario-role/${encodeURIComponent(roleName)}/field-default`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fieldName: field.name, value: current ? current.value : null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      console.error('デフォルト値保存エラー:', e);
+      alert(`デフォルト値の保存に失敗しました: ${e.message}`);
+    } finally {
+      setSavingDefaultField(null);
+    }
+  };
+
   const renderField = (field, parentPath = '', indexPath = []) => {
     const key = parentPath ? `${parentPath}.${field.name}` : field.name;
     let currentValue = formData.find(d => d.name === (parentPath || field.name))?.value;
@@ -785,6 +896,9 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
 
     const renderSingle = (value, onValueChange) => {
       // bit / color / bezier (CustomClassDataの拡張型)
+      if (field.type === 'voice_ref') {
+        return <VoiceRefFieldEditor key={key} value={value} onChange={onValueChange} eventId={eventId} subId={subId} />;
+      }
       if (field.type === 'bit') {
         return <BitValueEditor key={key} value={value} options={field.options} onChange={onValueChange} />;
       }
@@ -1135,7 +1249,28 @@ const BaseRoleInputForm = ({ schema, initialData, onChange }) => {
     <Box sx={{ p: 1 }}>
       {schema.fields.map((field, index) => (
         <Box key={field.name}>
-          {renderField(field)}
+          <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              {renderField(field)}
+            </Box>
+            {roleName && (
+              <Tooltip title={field.default !== undefined && field.default !== null
+                ? `デフォルト保存済み（現在の値で更新できます）`
+                : `今の値をこのフィールドのデフォルト値として保存（次にこのRoleを追加した時の初期値になります）`}>
+                <span>
+                  <IconButton
+                    size="small"
+                    color={field.default !== undefined && field.default !== null ? 'primary' : 'default'}
+                    disabled={savingDefaultField === field.name}
+                    onClick={() => handleSaveAsDefault(field)}
+                    sx={{ mt: 0.5 }}
+                  >
+                    <BookmarkAddIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+          </Box>
           {index < schema.fields.length - 1 && field.arraySize !== 0 && (
             <Divider sx={{ mb: 1 }} />
           )}

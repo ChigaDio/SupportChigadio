@@ -27,6 +27,7 @@ import ScenarioRoleGrid from './components/ScenarioRoleGrid';
 import ScenarioRoleDetailGrid from './components/ScenarioRoleDetailGrid';
 import ScenarioEventGrid from './components/ScenarioEventGrid';
 import ScenarioEventTransition from './components/ScenarioEventTransition';
+import ScenarioStorySettingGrid from './components/ScenarioStorySettingGrid';
 import ScenarioConditionsGrid from './components/ScenarioConditionsGrid';
 import BehaviorGrid from './components/BehaviorGrid';
 import BehaviorDetailGrid from './components/BehaviorDetailGrid';
@@ -65,6 +66,8 @@ import AnnouncementEditor from './components/AnnouncementEditor';
 import VersionBadge from './components/VersionBadge';
 import ThemeSwitcher from './components/ThemeSwitcher';
 
+import GitSvnGrid from './components/GitSvnGrid';
+
 function TopBar() {
   const { user, serverMode, logout } = useAuth();
   const navigate = useNavigate();
@@ -100,6 +103,9 @@ function AppContent() {
     console.log('Menu clicked:', menu, 'SubMenu:', subMenu);
     if (menu === 'GenerateTool' && subMenu) {
       switch (subMenu) {
+        case 'vcs':
+          navigate('/vcs');
+          break;
         case 'enum-id':
           navigate('/enum-id');
           break;
@@ -227,6 +233,7 @@ function AppContent() {
         <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
           <Routes>
             <Route path="/" element={<Content />} />
+            <Route path="/vcs" element={<GitSvnGrid />} />
             <Route path="/enum-id" element={<EnumIdGrid />} />
             <Route path="/enum/:name" element={<EnumDetailGrid />} />
             <Route path="/const-class-data" element={<ConstClassDataGrid />} />
@@ -245,6 +252,7 @@ function AppContent() {
             <Route path="/scenario-role/:name" element={<ScenarioRoleDetailGrid />} />
             <Route path="/scenario-event" element={<ScenarioEventGrid />} />
             <Route path="/scenario-event/:eventId/sub/:subId/transition" element={<ScenarioEventTransition />} />
+            <Route path="/scenario-event/:eventId/sub/:subId/story" element={<ScenarioStorySettingGrid />} />
 
             <Route path="/custom-class-data" element={<CustomClassDataGrid />} />
             <Route path="/custom-class-data/:name" element={<CustomClassDataDetailGrid />} />

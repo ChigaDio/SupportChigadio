@@ -187,9 +187,13 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
         subgroup_dict = defaultdict(list)
         for item in group_value["items"]:
             subgroup_dict[item["subgroup"]].append(item)
+        # Group単位のSubGroupディスパッチャ生成用（Sound_NovelIDのようなSubGroup一覧enumの
+        # 値・intのどちらを受け取っても、対応するLoadSingle_{detail_enum_name}へ振り分ける）
+        group_dispatch_entries = []
         for key, value in subgroup_dict.items():
             detail_enum_name = generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, key, value)
             generated_names.append(detail_enum_name)
+            group_dispatch_entries.append((key, detail_enum_name))
 
             if generate_single_file:
                 table_name = f"_{detail_enum_name}To{id_enum_name}"
@@ -202,17 +206,81 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item.get("name",item.get("class_name",""))}")
                 single_lines.append("        };")
                 single_lines.append("")
+                # ---- 共有の実行部分（Internal）。enum版・int版どちらも
+                # ここに振り分けて実行する。ここに境界チェックを1箇所だけ
+                # 持たせることで、enum版も含めて安全にする
+                # （enumは通常範囲内のはずだが、明示キャストされた場合の保険）。
+                single_lines.append(f"        private void LoadSingle_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted)")
+                single_lines.append("        {")
+                single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
+                single_lines.append("            {")
+                single_lines.append(f"                Debug.LogError($\"[{class_name}] LoadSingle_{detail_enum_name}: index out of range ({{index}})\");")
+                single_lines.append("                onCompleted?.Invoke();")
+                single_lines.append("                return;")
+                single_lines.append("            }")
+                single_lines.append(f"            LoadSingle({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted);")
+                single_lines.append("        }")
+                single_lines.append("")
+                single_lines.append(f"        private async UniTask LoadSingleAsync_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted)")
+                single_lines.append("        {")
+                single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
+                single_lines.append("            {")
+                single_lines.append(f"                Debug.LogError($\"[{class_name}] LoadSingleAsync_{detail_enum_name}: index out of range ({{index}})\");")
+                single_lines.append("                onCompleted?.Invoke();")
+                single_lines.append("                return;")
+                single_lines.append("            }")
+                single_lines.append(f"            await LoadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted);")
+                single_lines.append("        }")
+                single_lines.append("")
+                single_lines.append(f"        private void UnloadSingle_{detail_enum_name}_Internal(int index, Action onCompleted)")
+                single_lines.append("        {")
+                single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
+                single_lines.append("            {")
+                single_lines.append(f"                Debug.LogError($\"[{class_name}] UnloadSingle_{detail_enum_name}: index out of range ({{index}})\");")
+                single_lines.append("                onCompleted?.Invoke();")
+                single_lines.append("                return;")
+                single_lines.append("            }")
+                single_lines.append(f"            UnloadSingle({group_enum_name}.{group_name}, {table_name}[index], onCompleted);")
+                single_lines.append("        }")
+                single_lines.append("")
+                single_lines.append(f"        private async UniTask UnloadSingleAsync_{detail_enum_name}_Internal(int index, Action onCompleted)")
+                single_lines.append("        {")
+                single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
+                single_lines.append("            {")
+                single_lines.append(f"                Debug.LogError($\"[{class_name}] UnloadSingleAsync_{detail_enum_name}: index out of range ({{index}})\");")
+                single_lines.append("                onCompleted?.Invoke();")
+                single_lines.append("                return;")
+                single_lines.append("            }")
+                single_lines.append(f"            await UnloadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], onCompleted);")
+                single_lines.append("        }")
+                single_lines.append("")
+
+                # ---- enum版：ちゃんとSubGroup詳細enumを使う。中身はInternalへ振り分け ----
                 single_lines.append(f"        public void LoadSingle({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => LoadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
+                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted);")
                 single_lines.append("")
                 single_lines.append(f"        public async UniTask LoadSingleAsync({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => await LoadSingleAsync({group_enum_name}.{group_name}, {table_name}[(int)id], groupCategory, onCompleted);")
+                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted);")
                 single_lines.append("")
                 single_lines.append(f"        public void UnloadSingle({detail_enum_name}ID id, Action onCompleted = null)")
-                single_lines.append(f"            => UnloadSingle({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
+                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal((int)id, onCompleted);")
                 single_lines.append("")
                 single_lines.append(f"       public async UniTask UnloadSingleAsync({detail_enum_name}ID id, Action onCompleted = null)")
-                single_lines.append(f"            => await UnloadSingleAsync({group_enum_name}.{group_name}, {table_name}[(int)id], onCompleted);")
+                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal((int)id, onCompleted);")
+                single_lines.append("")
+
+                # ---- int版：同じくInternalへ振り分け ----
+                single_lines.append(f"        public void LoadSingle_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal(index, groupCategory, onCompleted);")
+                single_lines.append("")
+                single_lines.append(f"        public async UniTask LoadSingleAsync_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal(index, groupCategory, onCompleted);")
+                single_lines.append("")
+                single_lines.append(f"        public void UnloadSingle_{detail_enum_name}(int index, Action onCompleted = null)")
+                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal(index, onCompleted);")
+                single_lines.append("")
+                single_lines.append(f"        public async UniTask UnloadSingleAsync_{detail_enum_name}(int index, Action onCompleted = null)")
+                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal(index, onCompleted);")
                 single_lines.append("")
                 
                 #各自のGetの修正
@@ -349,14 +417,52 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     )
                     pool_lines.append("    }")
                     pool_lines.append("")
-                        
 
-                        
-                                     
-                    
+        # ---- Group単位のSubGroupディスパッチャ ----
+        # {enum_name}ID（例: Sound_NovelID）のSubGroup一覧enum、またはintの
+        # SubGroupIndexを受け取り、該当するLoadSingle_{detail_enum_name}
+        # （SubGroupごとのInternal振り分けメソッド）へswitchでルーティングする。
+        if generate_single_file and group_dispatch_entries:
+            def _emit_dispatch(method_name, params_with_default, params_call, call_prefix, is_async):
+                async_kw = "async " if is_async else ""
+                return_type = "UniTask" if is_async else "void"
+                await_kw = "await " if is_async else ""
+                single_lines.append(f"        public {async_kw}{return_type} {method_name}({params_with_default})")
+                single_lines.append("        {")
+                single_lines.append(f"            switch ({call_prefix})")
+                single_lines.append("            {")
+                for key, detail in group_dispatch_entries:
+                    case_label = f"{enum_name}ID.{key}" if call_prefix == "subGroupId" else f"(int){enum_name}ID.{key}"
+                    single_lines.append(f"                case {case_label}:")
+                    single_lines.append(f"                    {await_kw}{method_name.split('_')[0]}_{detail}({params_call});")
+                    single_lines.append("                    return;")
+                single_lines.append("                default:")
+                single_lines.append(f"                    Debug.LogError($\"[{class_name}] {method_name}: unknown {call_prefix} ({{{call_prefix}}})\");")
+                single_lines.append("                    onCompleted?.Invoke();")
+                single_lines.append("                    return;")
+                single_lines.append("            }")
+                single_lines.append("        }")
+                single_lines.append("")
 
-    # 削除されたグループ／SubGroupが無くなった分の残骸ファイルを掃除
-    if os.path.isdir(target_dir):
+            # enum版（{enum_name}ID subGroupId を受け取る）
+            _emit_dispatch("LoadSingle", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
+                            "index, groupCategory, onCompleted", "subGroupId", is_async=False)
+            _emit_dispatch("LoadSingleAsync", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
+                            "index, groupCategory, onCompleted", "subGroupId", is_async=True)
+            _emit_dispatch("UnloadSingle", f"{enum_name}ID subGroupId, int index, Action onCompleted = null",
+                            "index, onCompleted", "subGroupId", is_async=False)
+            _emit_dispatch("UnloadSingleAsync", f"{enum_name}ID subGroupId, int index, Action onCompleted = null",
+                            "index, onCompleted", "subGroupId", is_async=True)
+
+            # int版（subGroupIndexをintで受け取る）。メソッド名はGroup毎にユニークにする
+            _emit_dispatch(f"LoadSingle_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
+                            "index, groupCategory, onCompleted", "subGroupIndex", is_async=False)
+            _emit_dispatch(f"LoadSingleAsync_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
+                            "index, groupCategory, onCompleted", "subGroupIndex", is_async=True)
+            _emit_dispatch(f"UnloadSingle_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null",
+                            "index, onCompleted", "subGroupIndex", is_async=False)
+            _emit_dispatch(f"UnloadSingleAsync_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null",
+                            "index, onCompleted", "subGroupIndex", is_async=True)
         for fname in os.listdir(target_dir):
             if fname.endswith("ID.cs") and fname not in expected_files:
                 try:
@@ -1100,7 +1206,8 @@ public class AddressableBinCustomizer
             SupportFiles.ALL_GAMEOBJECT_BIN_FILE,
             SupportFiles.ALL_TEXTURE_BIN_FILE,
             SupportFiles.ALL_SOUND_BIN_FILE,
-            SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE
+            SupportFiles.ALL_SCENARIO_EVENT_BIN_FILE,
+            SupportFiles.ALL_STORY_SETTING_BIN_FILE
         };
 
         var findData = fileDataPath.Find(x => x.Equals(fileNameWithExt));
@@ -1238,6 +1345,22 @@ def select_file(initial_dir, filetypes):
     root.destroy()
     return file_path if file_path else None
 
+
+def select_folder(initial_dir=None):
+    """
+    フォルダ選択ダイアログを表示。
+    VOICEのように大量のファイルを個別選択するのが非現実的なカテゴリで、
+    フォルダをまとめて指定するために使う。
+    """
+    root = tk.Tk()
+    root.withdraw()
+    folder_path = filedialog.askdirectory(initialdir=initial_dir) if initial_dir else filedialog.askdirectory()
+    root.destroy()
+    return folder_path if folder_path else None
+
+
+_AUDIO_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.aiff', '.aif'}
+
 # Sound data management
 def get_sound_data():
     """
@@ -1368,10 +1491,104 @@ def reload_sound_file(group_name, index):
     save_sound_data(data)
     return entry
 
+
+def bulk_add_sounds_from_folder(group_name, sound_type, subgroup_name=None, use_folder_name_as_subgroup=True):
+    """
+    フォルダを1つ選択し、直下にある音声ファイル（.mp3/.wav/.ogg/.aiff）を
+    まとめてグループへ登録する。
+
+    VOICEのようにファイル数が非常に多くなるカテゴリで、1件ずつファイル
+    選択ダイアログを開いて登録するのは現実的でないため、フォルダ単位で
+    一括登録できるようにしたもの。
+
+    - subgroup_name が指定されていれば、追加する全件のSubGroupとして使う
+      （手動指定）。
+    - subgroup_name が無く use_folder_name_as_subgroup=True の場合は、
+      選択したフォルダ名をそのままSubGroup名として使う（自動、フォルダ
+      直下の構成をそのままSubGroup分けとして再現できる）。
+    - 指定されたSubGroup名が既存の一覧に無ければ自動的に新設する。
+    - アイテム名（name）は拡張子を除いたファイル名を使う。同名が既に
+      グループ内にある場合は重複登録を避けるためスキップする
+      （volume等の上書きはせず、既存優先）。
+    - 直下（サブフォルダは辿らない）のみを対象にする。サブフォルダごとに
+      SubGroupを分けたい場合は、本関数をサブフォルダ単位で複数回呼び出す
+      想定（1フォルダ = 1SubGroupという対応関係を明確に保つため）。
+
+    戻り値: {"folder", "subgroup", "added": [...], "skipped": [...], "failed": [...]}
+    """
+    data = load_sound_data()
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+
+    project_path = get_unity_project_path()
+    if not project_path:
+        raise Exception("Unityプロジェクトのパスを取得できませんでした。")
+
+    folder_path = select_folder(project_path)
+    if not folder_path:
+        raise Exception("フォルダが選択されていません。")
+
+    subgroup = subgroup_name or (
+        os.path.basename(os.path.normpath(folder_path)) if use_folder_name_as_subgroup else None
+    )
+    if subgroup and subgroup not in data['groups'][group_name]['subgroups']:
+        data['groups'][group_name]['subgroups'].append(subgroup)
+
+    existing_names = {item['name'] for item in data['groups'][group_name]['items']}
+
+    added = []
+    skipped = []
+    failed = []
+    for fname in sorted(os.listdir(folder_path)):
+        full_path = os.path.join(folder_path, fname)
+        if not os.path.isfile(full_path):
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in _AUDIO_EXTENSIONS:
+            continue
+
+        item_name = os.path.splitext(fname)[0]
+        if item_name in existing_names:
+            skipped.append(item_name)
+            continue
+
+        addr_path = get_addressable_path(full_path)
+        if not addr_path:
+            failed.append(item_name)
+            continue
+
+        data['groups'][group_name]['items'].append({
+            'name': item_name,
+            'desc': '',
+            'path': addr_path,
+            'absolute_path': os.path.abspath(full_path),
+            'volume': 1.0,
+            'type': sound_type,
+            'subgroup': subgroup,
+        })
+        existing_names.add(item_name)
+        added.append(item_name)
+
+    save_sound_data(data)
+    return {
+        'folder': folder_path,
+        'subgroup': subgroup,
+        'added': added,
+        'skipped': skipped,
+        'failed': failed,
+    }
+
+def _group_is_lazy(group_value):
+    """グループの全アイテムがVOICEなら遅延ロード対象とみなす"""
+    items = group_value.get('items', [])
+    if not items:
+        return False
+    return all(item.get('type') == 'VOICE' for item in items)
+
 def generate_sound_csharp():
     """
     サウンド関連のC#コードとJSONを生成
-    - SoundEnums.cs, SoundCore.cs, SoundDatabase.cs を生成
+    - SoundEnums.cs, SoundLazyGroups.cs, SoundCore.cs, SoundDatabase.cs を生成
     - assets_sound.json を更新
     - ENUM_DIR/Sound/Sound.json を生成
     """
@@ -1384,16 +1601,29 @@ def generate_sound_csharp():
         for group in data['groups']:
             f.write(f', {group}')
         f.write(' ,Max\n  };\n')
-        f.write('    public enum SoundType { SE, BGM };\n')
+        f.write('    public enum SoundType { SE, BGM, VOICE };\n')
         sound_id_counter = 1
         sound_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound['subgroup']}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
                     sound_id_counter += 1
         f.write('}\n')
+
+    # SoundLazyGroups.cs（遅延ロード対象グループ一覧。データ変更のたび毎回上書きされる）
+    lazy_groups = [g for g, v in data['groups'].items() if _group_is_lazy(v)]
+    with open(os.path.join(SOUND_DATA, 'SoundLazyGroups.cs'), 'w', encoding='utf-8') as f:
+        f.write('// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。\n')
+        f.write('using System.Collections.Generic;\n\n')
+        f.write('namespace GameCore.Sound\n{\n')
+        f.write('    public static class SoundLazyGroups\n    {\n')
+        f.write('        // 全アイテムがVOICEタイプのグループのみ、起動時パースを遅延する\n')
+        f.write('        public static readonly HashSet<SoundGroup> Groups = new()\n        {\n')
+        for g in lazy_groups:
+            f.write(f'            SoundGroup.{g},\n')
+        f.write('        };\n    }\n}\n')
 
     # SubGroup用enum（Sound_{Group}ID）を各グループごとに生成／同期
     subgroup_enum_names = sync_subgroup_enum_files(
@@ -1406,6 +1636,7 @@ def generate_sound_csharp():
     # SoundCore.cs
     if not os.path.exists(os.path.join(SOUND_DATA, "SoundCore.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -1413,7 +1644,6 @@ using Cysharp.Threading.Tasks;
 using AddressableSystem;
 using GameCore.SaveSystem;
 using GameCore.Enums;
-using System.Linq;
 using System.Threading;
 
 namespace GameCore.Sound
@@ -1443,6 +1673,14 @@ namespace GameCore.Sound
         private readonly List<AudioSource> sePool = new();
         private const int PoolSize = 30;
         private int poolIndex = 0;
+
+        // ボイス専用プール。SEプールと共有すると、同時に鳴っているSEに
+        // よってボイス再生がプールから追い出されてしまう（あるいはその逆）
+        // ため、独立したプールを持たせている。同時に複数ボイスが重なる
+        // ケースは通常少ないため、SEよりは小さいプールサイズにしている。
+        private readonly List<AudioSource> voicePool = new();
+        private const int VoicePoolSize = 4;
+        private int voicePoolIndex = 0;
 
         private bool isCrossFading = false;
 
@@ -1476,6 +1714,13 @@ namespace GameCore.Sound
                 sePool.Add(source);
             }
 
+            for (int i = 0; i < VoicePoolSize; i++)
+            {
+                var source = gameObject.AddComponent<AudioSource>();
+                source.playOnAwake = false;
+                voicePool.Add(source);
+            }
+
             LoadDatabaseAsync().Forget();
         }
 
@@ -1501,6 +1746,15 @@ namespace GameCore.Sound
             combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
 
             foreach (var source in sePool)
+            {
+                if (source != null)
+                {
+                    if (source.isPlaying) source.Stop();
+                    source.clip = null;
+                }
+            }
+
+            foreach (var source in voicePool)
             {
                 if (source != null)
                 {
@@ -1566,12 +1820,18 @@ namespace GameCore.Sound
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
 
-            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            // VOICEのように件数が多く遅延ロード対象のグループだけ、
+            // ここで初めてバイナリからそのGroup分のメタデータを読み込む。
+            // SE/BGM等の非LazyグループはDB読み込み時に既にパース済み。
+            if (database.IsLazyGroup(group))
+                await database.EnsureGroupChunkLoadedAsync(group);
+
+            var groupData = database.GetGroupData(group);
             if (groupData == null) { onCompleted?.Invoke(); return; }
 
             var tasks = new List<UniTask>();
 
-            foreach (var sound in groupData.Sounds)
+            foreach (var sound in groupData.Sounds.Values)
             {
                 var key = (group, sound.SoundID);
                 if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
@@ -1622,8 +1882,63 @@ namespace GameCore.Sound
                 typeCache.Remove(key);
             }
 
+            // 非LazyグループならDB側で何もしない（SE/BGMは常時ロードのまま維持）
+            database?.UnloadGroupChunk(group);
+
             onCompleted?.Invoke();
             await UniTask.CompletedTask;
+        }
+
+        // =============================================================
+        // SubGroup単位のロード（Voice等、フォルダ＝SubGroup単位で大量に
+        // 存在するケースを想定）。既存のUnloadSubGroupInternalと対になる。
+        // Group全体を読み込む LoadGroupAsync と違い、対象SubGroupの
+        // サウンドだけをAddressableロードするため、無駄な同時ロードを避けられる。
+        // =============================================================
+        public void LoadSubGroup(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+            => LoadSubGroupAsync(group, subGroupId, category, onCompleted).Forget();
+
+        public async UniTask LoadSubGroupAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+        {
+            while (!IsLoadDatabase)
+                await UniTask.Yield(combinedToken);
+
+            if (database.IsLazyGroup(group))
+                await database.EnsureSubGroupChunkLoadedAsync(group, subGroupId);
+
+            var groupData = database.GetGroupData(group);
+            if (groupData == null) { onCompleted?.Invoke(); return; }
+
+            var tasks = new List<UniTask>();
+
+            foreach (var sound in groupData.GetSubGroup(subGroupId))
+            {
+                var key = (group, sound.SoundID);
+                if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
+
+                loadingKeys.Add(key);
+
+                var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
+
+                tasks.Add(addressable.LoadAsync(clip =>
+                {
+                    if (addressable.IsLoadedAndSetup)
+                    {
+                        clipCache[key] = clip;
+                        volumeCache[key] = sound.BaseVolume;
+                        typeCache[key] = sound.Type;
+                        soundAddressables[key] = addressable;
+                    }
+                    loadingKeys.Remove(key);
+                }, ex =>
+                {
+                    Debug.LogError($"[SoundCore] Load failed {sound.SoundID}: {ex.Message}");
+                    loadingKeys.Remove(key);
+                }).AttachExternalCancellation(combinedToken));
+            }
+
+            await UniTask.WhenAll(tasks);
+            onCompleted?.Invoke();
         }
 
         // =============================================================
@@ -1645,8 +1960,13 @@ namespace GameCore.Sound
                 return;
             }
 
-            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
-            var sound = groupData?.Sounds.FirstOrDefault(s => s.SoundID == id);
+            if (database.IsLazyGroup(group))
+                await database.EnsureItemLoadedAsync(group, id);
+
+            var groupData = database.GetGroupData(group);
+            SoundDatabase.SoundData sound = null;
+            if (groupData != null)
+                groupData.Sounds.TryGetValue(id, out sound);
             if (sound == null) { onCompleted?.Invoke(); return; }
 
             loadingKeys.Add(key);
@@ -1684,6 +2004,11 @@ namespace GameCore.Sound
                 volumeCache.Remove(key);
                 typeCache.Remove(key);
             }
+
+            // Lazyグループなら、このアイテムのメタデータ本体もメモリから解放する
+            // （非Lazyグループでは内部で何もしない）。
+            database?.UnloadItemChunk(group, id);
+
             onCompleted?.Invoke();
             await UniTask.CompletedTask;
         }
@@ -1704,13 +2029,15 @@ namespace GameCore.Sound
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
 
-            var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+            if (database.IsLazyGroup(group))
+                await database.EnsureSubGroupChunkLoadedAsync(group, subGroupId);
+
+            var groupData = database.GetGroupData(group);
             if (groupData == null) { onCompleted?.Invoke(); return; }
 
             var tasks = new List<UniTask>();
-            foreach (var sound in groupData.Sounds)
+            foreach (var sound in groupData.GetSubGroup(subGroupId))
             {
-                if (sound.SubGroupId != subGroupId) continue;
                 var key = (group, sound.SoundID);
                 if (clipCache.ContainsKey(key) || loadingKeys.Contains(key)) continue;
 
@@ -1745,12 +2072,11 @@ namespace GameCore.Sound
         {
             if (database != null)
             {
-                var groupData = database.GroupedSoundsList.FirstOrDefault(x => x.Group == group);
+                var groupData = database.GetGroupData(group);
                 if (groupData != null)
                 {
-                    foreach (var sound in groupData.Sounds)
+                    foreach (var sound in groupData.GetSubGroup(subGroupId))
                     {
-                        if (sound.SubGroupId != subGroupId) continue;
                         var key = (group, sound.SoundID);
                         if (soundAddressables.TryGetValue(key, out var addressable))
                         {
@@ -1762,6 +2088,10 @@ namespace GameCore.Sound
                         typeCache.Remove(key);
                     }
                 }
+
+                // Lazyグループなら、このSubGroupのメタデータ本体もメモリから
+                // 解放する（非Lazyグループでは内部で何もしない）。
+                database.UnloadSubGroupChunk(group, subGroupId);
             }
 
             onCompleted?.Invoke();
@@ -1822,6 +2152,86 @@ namespace GameCore.Sound
             } while (poolIndex != startIndex);
 
             var victim = sePool[0];
+            ResetSource(victim);
+            return victim;
+        }
+
+        // =============================================================
+        // VOICE再生（SEと同じ一発再生方式だが、専用プール・専用音量を使う）
+        // =============================================================
+        private AudioSource currentVoiceSource;
+
+        public void PlayVoice(SoundGroup group, SoundID id, float volume = 1f, Action action = null)
+            => PlayVoiceAsync(group, id, volume, action).Forget();
+
+        /// <summary>
+        /// 現在再生中のボイスを止めて次のボイスを再生したい場合はこちらを使う
+        /// （会話送り等、直前のセリフの発話中に次のセリフへ進むケースを想定）
+        /// </summary>
+        public void PlayVoiceInterrupt(SoundGroup group, SoundID id, float volume = 1f, Action action = null)
+        {
+            StopAllVoice();
+            PlayVoice(group, id, volume, action);
+        }
+
+        public void StopAllVoice()
+        {
+            foreach (var source in voicePool)
+            {
+                if (source != null && source.isPlaying)
+                    source.Stop();
+            }
+        }
+
+        private async UniTask PlayVoiceAsync(SoundGroup group, SoundID id, float volume, Action action = null)
+        {
+            var key = (group, id);
+
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.VOICE)
+                return;
+
+            var source = GetPooledVoiceSourceFast();
+            if (source == null) return;
+
+            currentVoiceSource = source;
+            source.clip = clip;
+            source.volume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.voiceVolume;
+            source.loop = false;
+            source.spatialBlend = 0f;
+
+            source.Play();
+
+            try
+            {
+                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken);
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                action?.Invoke();
+                ResetSource(source);
+                if (currentVoiceSource == source) currentVoiceSource = null;
+            }
+        }
+
+        private AudioSource GetPooledVoiceSourceFast()
+        {
+            int startIndex = voicePoolIndex;
+            do
+            {
+                var source = voicePool[voicePoolIndex];
+                if (!source.isPlaying)
+                {
+                    ResetSource(source);
+                    voicePoolIndex = (voicePoolIndex + 1) % VoicePoolSize;
+                    return source;
+                }
+                voicePoolIndex = (voicePoolIndex + 1) % VoicePoolSize;
+            } while (voicePoolIndex != startIndex);
+
+            var victim = voicePool[0];
             ResetSource(victim);
             return victim;
         }
@@ -1953,12 +2363,19 @@ namespace GameCore.Sound
             foreach (var s in sePool) s.volume = vol;
         }
 
+        public void SetSystemVoiceVolume()
+        {
+            float vol = SaveManagerCore.instance.SystemSettings.voiceVolume;
+            foreach (var s in voicePool) s.volume = vol;
+        }
+
         private void Update()
         {
             if (bgmSource == null && !isCrossFading)
                 bgmSource = gameObject.AddComponent<AudioSource>();
 
             sePool.RemoveAll(s => s == null);
+            voicePool.RemoveAll(s => s == null);
         }
 
         private void OnDestroy()
@@ -1977,6 +2394,8 @@ namespace GameCore.Sound
 }
 
 
+
+
 """
         with open(os.path.join(SOUND_DATA, "SoundCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
@@ -1987,6 +2406,7 @@ namespace GameCore.Sound
 
 using System.Collections.Generic;
 using GameCore.Enums;
+using Cysharp.Threading.Tasks;
 namespace GameCore.Sound
 {
     public class SoundDatabase
@@ -2021,21 +2441,299 @@ namespace GameCore.Sound
         public class GroupedSounds
         {
             private readonly SoundGroup group;
-            private readonly List<SoundData> sounds;
-            public GroupedSounds(SoundGroup group, List<SoundData> sounds)
+            // SoundID -> SoundData（個別アイテムのO(1)引き）
+            private readonly Dictionary<SoundID, SoundData> sounds = new();
+            // SubGroupId -> そのSubGroupに属するSoundDataのリスト（SubGroup単位のO(1)引き）
+            private readonly Dictionary<int, List<SoundData>> bySubGroup = new();
+            private static readonly List<SoundData> Empty = new();
+
+            public GroupedSounds(SoundGroup group)
             {
                 this.group = group;
-                this.sounds = sounds ?? new List<SoundData>();
             }
+
             public SoundGroup Group => group;
-            public List<SoundData> Sounds => sounds;
+            public IReadOnlyDictionary<SoundID, SoundData> Sounds => sounds;
+
+            public IReadOnlyList<SoundData> GetSubGroup(int subGroupId)
+                => bySubGroup.TryGetValue(subGroupId, out var list) ? list : Empty;
+
+            internal void Add(SoundData data)
+            {
+                sounds[data.SoundID] = data;
+                if (!bySubGroup.TryGetValue(data.SubGroupId, out var list))
+                {
+                    list = new List<SoundData>();
+                    bySubGroup[data.SubGroupId] = list;
+                }
+                list.Add(data);
+            }
+
+            internal void Remove(SoundID id)
+            {
+                if (!sounds.TryGetValue(id, out var data)) return;
+                sounds.Remove(id);
+                if (bySubGroup.TryGetValue(data.SubGroupId, out var list))
+                    list.Remove(data);
+            }
+
+            internal void Clear()
+            {
+                sounds.Clear();
+                bySubGroup.Clear();
+            }
         }
-        private readonly List<GroupedSounds> groupedSounds;
-        public SoundDatabase()
+
+        // 軽量インデックス1件分（soundId・SubGroupId・本体の位置）。
+        // これ自体は起動時に全Group分読み込んでしまって構わない軽さ
+        // （1件あたりint3つ=12バイト）。本体（path/volume/type）だけを
+        // Group/SubGroup/個別アイテム単位で必要な分だけ読み込む。
+        internal struct SoundIndexEntry
         {
-            groupedSounds = new List<GroupedSounds>();
+            public SoundID SoundID;
+            public int SubGroupId;
+            public int BodyOffset;
         }
-        public List<GroupedSounds> GroupedSoundsList => groupedSounds;
+
+        // Group -> GroupedSounds（O(1)引き。爆速キャッシュ方針に合わせてLINQは使わない）
+        private readonly Dictionary<SoundGroup, GroupedSounds> groupedSoundsMap = new();
+
+        // ---- 本体（path/volume/type）の遅延読み込みのための管理情報 ----
+        // SoundLazyGroups.Groupsに含まれるGroup（＝全アイテムがVOICEのGroup）
+        // だけがこの仕組みの対象。groupIndexByIdは起動時に全Group分読み込むが、
+        // これは軽量なインデックス（soundId/subGroupId/本体位置）だけであり、
+        // 本体自体はGroup/SubGroup/個別アイテム単位でEnsure系メソッドが
+        // 呼ばれて初めてバイナリから読み込まれる（loadedBodiesに記録）。
+        // それ以外（SE/BGM等）のGroupはDB読み込み時にRegisterEagerGroup経由で
+        // 本体まで即時パースされ、最初からloadedBodiesに入っている。
+        // SoundID・SubGroupId、どちらの単位でもO(1)で引けるよう2つ持つ。
+        private readonly Dictionary<SoundGroup, Dictionary<SoundID, SoundIndexEntry>> groupIndexById = new();
+        private readonly Dictionary<SoundGroup, Dictionary<int, List<SoundIndexEntry>>> groupIndexBySubGroup = new();
+        private readonly HashSet<(SoundGroup, SoundID)> loadedBodies = new();
+        private readonly Dictionary<SoundGroup, UniTask> pendingGroupLoads = new();
+        private readonly Dictionary<(SoundGroup, int), UniTask> pendingSubGroupLoads = new();
+        private readonly Dictionary<(SoundGroup, SoundID), UniTask> pendingItemLoads = new();
+        private byte[] sourceBytes;   // Addressable経由の場合、全バイト列をここに保持
+        private string sourceFilePath; // ファイル直読みの場合、パスをここに保持
+
+        // 全Groupを列挙したい場合用（デバッグ・エディタ用途を想定。ホットパスでは
+        // GetGroupData(group)のO(1)引きを使うこと）。
+        public IReadOnlyCollection<GroupedSounds> GroupedSoundsList => groupedSoundsMap.Values;
+
+        /// <summary>
+        /// 指定したGroupのデータをO(1)で取得する。存在しなければnull。
+        /// </summary>
+        public GroupedSounds GetGroupData(SoundGroup group)
+            => groupedSoundsMap.TryGetValue(group, out var entry) ? entry : null;
+
+        internal void SetSource(byte[] bytes, string filePath)
+        {
+            sourceBytes = bytes;
+            sourceFilePath = filePath;
+        }
+
+        /// <summary>
+        /// Lazyグループ用。軽量インデックス（soundId/subGroupId/本体位置）を
+        /// SoundID引き・SubGroupId引きの両方の形で登録するだけで、本体はまだ読み込まない。
+        /// </summary>
+        internal void SetGroupIndex(SoundGroup group, List<SoundIndexEntry> entries)
+        {
+            var byId = new Dictionary<SoundID, SoundIndexEntry>(entries.Count);
+            var bySubGroup = new Dictionary<int, List<SoundIndexEntry>>();
+
+            foreach (var e in entries)
+            {
+                byId[e.SoundID] = e;
+                if (!bySubGroup.TryGetValue(e.SubGroupId, out var list))
+                {
+                    list = new List<SoundIndexEntry>();
+                    bySubGroup[e.SubGroupId] = list;
+                }
+                list.Add(e);
+            }
+
+            groupIndexById[group] = byId;
+            groupIndexBySubGroup[group] = bySubGroup;
+        }
+
+        /// <summary>
+        /// このGroupが遅延ロード対象（＝SoundLazyGroups.Groupsに含まれる、
+        /// 全アイテムがVOICEのGroup）かどうか。
+        /// </summary>
+        public bool IsLazyGroup(SoundGroup group) => SoundLazyGroups.Groups.Contains(group);
+
+        /// <summary>
+        /// 非Lazyグループ（SE/BGM等）用。Reader側がDB読み込み時に
+        /// 本体まで即時パースした結果をそのまま登録する。
+        /// </summary>
+        internal void RegisterEagerGroup(SoundGroup group, List<SoundData> sounds)
+        {
+            var entry = new GroupedSounds(group);
+            foreach (var s in sounds)
+            {
+                entry.Add(s);
+                loadedBodies.Add((group, s.SoundID));
+            }
+            groupedSoundsMap[group] = entry;
+        }
+
+        /// <summary>
+        /// このGroup全体の本体がメモリに載っているか（Eagerグループは常にtrue）。
+        /// </summary>
+        public bool IsGroupChunkLoaded(SoundGroup group)
+        {
+            if (!IsLazyGroup(group)) return true;
+            if (!groupIndexById.TryGetValue(group, out var byId)) return false;
+            foreach (var soundId in byId.Keys)
+                if (!loadedBodies.Contains((group, soundId))) return false;
+            return true;
+        }
+
+        private GroupedSounds GetOrCreateGroupEntry(SoundGroup group)
+        {
+            if (!groupedSoundsMap.TryGetValue(group, out var entry))
+            {
+                entry = new GroupedSounds(group);
+                groupedSoundsMap[group] = entry;
+            }
+            return entry;
+        }
+
+        /// <summary>
+        /// このGroupの全アイテムの本体がまだ読み込まれていなければ読み込む。
+        /// 同一Groupへの同時呼び出しは同じタスクを待つだけにして、
+        /// 二重パースが起きないようにしている。
+        /// </summary>
+        public async UniTask EnsureGroupChunkLoadedAsync(SoundGroup group)
+        {
+            if (!groupIndexById.TryGetValue(group, out var byId)) return;
+
+            if (pendingGroupLoads.TryGetValue(group, out var pending))
+            {
+                await pending;
+                return;
+            }
+
+            var task = LoadEntriesAsync(group, byId.Values);
+            pendingGroupLoads[group] = task;
+            try { await task; }
+            finally { pendingGroupLoads.Remove(group); }
+        }
+
+        /// <summary>
+        /// このGroupのうち、指定したSubGroupに属するアイテムの本体だけを読み込む。
+        /// 同一(Group,SubGroup)への同時呼び出しは同じタスクを待つだけにする。
+        /// </summary>
+        public async UniTask EnsureSubGroupChunkLoadedAsync(SoundGroup group, int subGroupId)
+        {
+            if (!groupIndexBySubGroup.TryGetValue(group, out var bySubGroup)) return;
+            if (!bySubGroup.TryGetValue(subGroupId, out var targets)) return;
+
+            var key = (group, subGroupId);
+            if (pendingSubGroupLoads.TryGetValue(key, out var pending))
+            {
+                await pending;
+                return;
+            }
+
+            var task = LoadEntriesAsync(group, targets);
+            pendingSubGroupLoads[key] = task;
+            try { await task; }
+            finally { pendingSubGroupLoads.Remove(key); }
+        }
+
+        /// <summary>
+        /// このGroupのうち、指定した1アイテムの本体だけを読み込む。
+        /// 同一(Group,SoundID)への同時呼び出しは同じタスクを待つだけにする。
+        /// </summary>
+        public async UniTask EnsureItemLoadedAsync(SoundGroup group, SoundID id)
+        {
+            if (loadedBodies.Contains((group, id))) return;
+            if (!groupIndexById.TryGetValue(group, out var byId)) return;
+            if (!byId.TryGetValue(id, out var target)) return;
+
+            var key = (group, id);
+            if (pendingItemLoads.TryGetValue(key, out var pending))
+            {
+                await pending;
+                return;
+            }
+
+            var task = LoadEntriesAsync(group, new[] { target });
+            pendingItemLoads[key] = task;
+            try { await task; }
+            finally { pendingItemLoads.Remove(key); }
+        }
+
+        private async UniTask LoadEntriesAsync(SoundGroup group, IEnumerable<SoundIndexEntry> entries)
+        {
+            List<SoundIndexEntry> toLoad = null;
+            foreach (var e in entries)
+            {
+                if (loadedBodies.Contains((group, e.SoundID))) continue;
+                (toLoad ??= new List<SoundIndexEntry>()).Add(e);
+            }
+            if (toLoad == null || toLoad.Count == 0) return;
+
+            List<SoundData> loaded = await UniTask.RunOnThreadPool(
+                () => SoundBinaryReader.ReadItemBodies(sourceBytes, sourceFilePath, toLoad));
+
+            var groupEntry = GetOrCreateGroupEntry(group);
+            foreach (var sound in loaded)
+            {
+                if (loadedBodies.Add((group, sound.SoundID)))
+                    groupEntry.Add(sound);
+            }
+        }
+
+        /// <summary>
+        /// このGroupの本体（AudioClip本体ではなくメタデータ側）をメモリから
+        /// 解放する（AudioClip本体の解放とは別。UnloadGroupから呼ばれる想定）。
+        /// 非Lazyグループ（SE/BGM等）は常時ロードのままにしたいので、
+        /// ここでは何もしない。次に必要になった際はバイナリから読み直される
+        /// （軽量なインデックス自体は保持したままなので、読み直しは高速）。
+        /// </summary>
+        public void UnloadGroupChunk(SoundGroup group)
+        {
+            if (!IsLazyGroup(group)) return;
+            if (!groupedSoundsMap.TryGetValue(group, out var entry)) return;
+            foreach (var soundId in entry.Sounds.Keys)
+                loadedBodies.Remove((group, soundId));
+            entry.Clear();
+        }
+
+        /// <summary>
+        /// このGroupのうち、指定したSubGroupに属するアイテムの本体だけを解放する。
+        /// </summary>
+        public void UnloadSubGroupChunk(SoundGroup group, int subGroupId)
+        {
+            if (!IsLazyGroup(group)) return;
+            if (!groupedSoundsMap.TryGetValue(group, out var entry)) return;
+
+            var target = entry.GetSubGroup(subGroupId);
+            if (target.Count == 0) return;
+
+            // Remove中にリストが変化するのでID一覧を先にコピーしてから解放する
+            var ids = new List<SoundID>(target.Count);
+            foreach (var s in target) ids.Add(s.SoundID);
+
+            foreach (var id in ids)
+            {
+                entry.Remove(id);
+                loadedBodies.Remove((group, id));
+            }
+        }
+
+        /// <summary>
+        /// このGroupのうち、指定した1アイテムの本体だけを解放する。
+        /// </summary>
+        public void UnloadItemChunk(SoundGroup group, SoundID id)
+        {
+            if (!IsLazyGroup(group)) return;
+            if (!groupedSoundsMap.TryGetValue(group, out var entry)) return;
+            entry.Remove(id);
+            loadedBodies.Remove((group, id));
+        }
     }
 }
 """
@@ -2061,6 +2759,13 @@ namespace GameCore.Sound
 
         public static async UniTask<SoundDatabase> LoadSoundDatabaseFromBinaryAsync(string filePath, bool addressable = false)
         {
+            // ヘッダー（Group毎のインデックスブロック位置）を読み込んだ後、
+            // 各Groupのインデックス（soundId/subGroupId/本体位置。件数分の
+            // int3つだけなので軽量）は全Group分ここで読んでしまう。
+            // SoundLazyGroups.Groups（＝全アイテムがVOICEのGroup）に含まれる
+            // Groupは、この軽量インデックスだけを保持して本体（path等）の
+            // 読み込みを遅延させる。それ以外（SE/BGM等）のGroupは本体まで
+            // ここで即時パースし、従来通り起動時から使える状態にする。
             if (!addressable)
             {
                 if (!File.Exists(filePath))
@@ -2073,7 +2778,9 @@ namespace GameCore.Sound
                 {
                     using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                     {
-                        return ReadDatabase(reader);
+                        var database = ReadIndex(reader);
+                        database?.SetSource(null, filePath);
+                        return database;
                     }
                 });
             }
@@ -2097,13 +2804,15 @@ namespace GameCore.Sound
                 // ★★★ ここでメインスレッド上で .bytes を取得 ★★★
                 byte[] rawBytes = textAsset.bytes;        // ← これを先に取る！
 
-                // 解析だけ別スレッドに逃がす
+                // 解析だけ別スレッドに逃がす（ヘッダーのみ、軽量）
                 SoundDatabase database;
                 using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
-                    database = ReadDatabase(reader);
+                    database = ReadIndex(reader);
                 }
+
+                database?.SetSource(rawBytes, null);
 
                 Addressables.Release(handle);
 
@@ -2122,7 +2831,9 @@ namespace GameCore.Sound
 
                 using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
                 {
-                    return ReadDatabase(reader);
+                    var database = ReadIndex(reader);
+                    database?.SetSource(null, filePath);
+                    return database;
                 }
             }
             else
@@ -2143,28 +2854,34 @@ namespace GameCore.Sound
                 }
 
                 TextAsset textAsset = handle.Result;
+                byte[] rawBytes = textAsset.bytes;
 
-                using (MemoryStream ms = new MemoryStream(textAsset.bytes))
+                using (MemoryStream ms = new MemoryStream(rawBytes))
                 using (BinaryReader reader = new BinaryReader(ms))
                 {
-                    SoundDatabase database = ReadDatabase(reader);
+                    SoundDatabase database = ReadIndex(reader);
+                    database?.SetSource(rawBytes, null);
                     Addressables.Release(handle);
                     return database;
                 }
             }
         }
 
-        // 共通読み込みロジック
-        private static SoundDatabase ReadDatabase(BinaryReader reader)
+        // ヘッダー（groupCount + Group毎のインデックスブロック位置）を読み込む。
+        // 各Groupのインデックス（soundId/subGroupId/本体位置）は軽量なので
+        // Lazy/Eager問わず全Group分ここで読む。本体（path/volume/type）は
+        // 非Lazyグループだけここで即時パースし、Lazyグループはインデックスのみ
+        // 保持して読み込みを遅延させる。
+        private static SoundDatabase ReadIndex(BinaryReader reader)
         {
             SoundDatabase database = new SoundDatabase();
 
             int groupCount = reader.ReadInt32();
-            int[] offsets = new int[groupCount];
+            int[] groupIndexOffsets = new int[groupCount];
 
             for (int i = 0; i < groupCount; i++)
             {
-                offsets[i] = reader.ReadInt32();
+                groupIndexOffsets[i] = reader.ReadInt32();
             }
 
             string[] groupNames = Enum.GetNames(typeof(SoundGroup));
@@ -2176,38 +2893,105 @@ namespace GameCore.Sound
 
             for (int i = 0; i < groupCount; i++)
             {
-                reader.BaseStream.Seek(offsets[i], SeekOrigin.Begin);
-                int soundCount = reader.ReadInt32();
-                List<SoundDatabase.SoundData> sounds = new List<SoundDatabase.SoundData>();
+                // グループ書き込み順とSoundGroup enumの対応は、Noneが0番なので+1する
+                // （generate_sound_bin側の書き込み順と揃える必要がある）。
+                var group = (SoundGroup)(i + 1);
 
-                for (int j = 0; j < soundCount; j++)
+                reader.BaseStream.Seek(groupIndexOffsets[i], SeekOrigin.Begin);
+                int itemCount = reader.ReadInt32();
+                var entries = new List<SoundDatabase.SoundIndexEntry>(itemCount);
+                for (int j = 0; j < itemCount; j++)
                 {
-                    int id = reader.ReadInt32();
-                    string addressablePath = ReadNullTerminatedString(reader);
-                    float volume = reader.ReadSingle();
-                    byte typeByte = reader.ReadByte();
-                    SoundType type = (typeByte == 0) ? SoundType.SE : SoundType.BGM;
+                    int soundId = reader.ReadInt32();
                     int subGroupId = reader.ReadInt32();
-
-                    string enumName = Enum.GetName(typeof(SoundID), id) ?? $"Unknown_{id}";
-
-                    sounds.Add(new SoundDatabase.SoundData(
-                        idName: enumName,
-                        addressablePath: addressablePath,
-                        baseVolume: volume,
-                        type: type,
-                        soundID: (SoundID)id,
-                        subGroupId: subGroupId
-                    ));
+                    int bodyOffset = reader.ReadInt32();
+                    entries.Add(new SoundDatabase.SoundIndexEntry
+                    {
+                        SoundID = (SoundID)soundId,
+                        SubGroupId = subGroupId,
+                        BodyOffset = bodyOffset
+                    });
                 }
 
-                database.GroupedSoundsList.Add(new SoundDatabase.GroupedSounds(
-                    group: (SoundGroup)(i + 1),
-                    sounds: sounds
-                ));
+                if (SoundLazyGroups.Groups.Contains(group))
+                {
+                    // VOICE等はインデックスだけ保持し、本体はEnsure系メソッド
+                    // が呼ばれるまで読まない。
+                    database.SetGroupIndex(group, entries);
+                }
+                else
+                {
+                    // SE/BGM等は従来通り起動時に本体まで即時パースしてしまう。
+                    var sounds = ReadBodiesForEntries(reader, entries);
+                    database.RegisterEagerGroup(group, sounds);
+                }
             }
 
             return database;
+        }
+
+        /// <summary>
+        /// 指定したインデックスエントリ群それぞれのbodyOffsetへシークして、
+        /// 本体（path/volume/type）を読み込む。
+        /// </summary>
+        private static List<SoundDatabase.SoundData> ReadBodiesForEntries(BinaryReader reader, List<SoundDatabase.SoundIndexEntry> entries)
+        {
+            var sounds = new List<SoundDatabase.SoundData>(entries.Count);
+            foreach (var e in entries)
+            {
+                reader.BaseStream.Seek(e.BodyOffset, SeekOrigin.Begin);
+                sounds.Add(ReadBody(reader, e.SoundID, e.SubGroupId));
+            }
+            return sounds;
+        }
+
+        private static SoundDatabase.SoundData ReadBody(BinaryReader reader, SoundID soundId, int subGroupId)
+        {
+            string addressablePath = ReadNullTerminatedString(reader);
+            float volume = reader.ReadSingle();
+            byte typeByte = reader.ReadByte();
+            SoundType type = typeByte switch
+            {
+                0 => SoundType.SE,
+                1 => SoundType.BGM,
+                2 => SoundType.VOICE,
+                _ => SoundType.SE,
+            };
+
+            string enumName = Enum.GetName(typeof(SoundID), (int)soundId) ?? $"Unknown_{(int)soundId}";
+
+            return new SoundDatabase.SoundData(
+                idName: enumName,
+                addressablePath: addressablePath,
+                baseVolume: volume,
+                type: type,
+                soundID: soundId,
+                subGroupId: subGroupId
+            );
+        }
+
+        /// <summary>
+        /// 指定された複数アイテムの本体（path/volume/type）だけを、それぞれの
+        /// bodyOffsetへシークして読み込む。rawBytesが渡されていればメモリ上の
+        /// バイト列から、そうでなければfilePathを直接開いて読む
+        /// （addressable有無に対応する2通りのデータソースを両対応させている）。
+        /// SoundDatabase.LoadEntriesAsync() から呼ばれる。
+        /// </summary>
+        internal static List<SoundDatabase.SoundData> ReadItemBodies(byte[] rawBytes, string filePath, List<SoundDatabase.SoundIndexEntry> entries)
+        {
+            if (rawBytes != null)
+            {
+                using (MemoryStream ms = new MemoryStream(rawBytes))
+                using (BinaryReader reader = new BinaryReader(ms))
+                {
+                    return ReadBodiesForEntries(reader, entries);
+                }
+            }
+
+            using (BinaryReader reader = new BinaryReader(File.Open(filePath, FileMode.Open)))
+            {
+                return ReadBodiesForEntries(reader, entries);
+            }
         }
 
         private static string ReadNullTerminatedString(BinaryReader reader)
@@ -2776,7 +3560,7 @@ namespace GameCore.Sound
         sound_id_list = []
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound['subgroup']}_{sound['name']}"
                 sound_id_list.append({
                     'description': sound['desc'],
                     'id': sound_id_map[sound_id],
@@ -2814,11 +3598,29 @@ def generate_sound_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Sound_{group_name}ID"
+
+        # 共有の実行部分（Internal）。enum版・int版どちらもここに振り分けて実行する。
+        lines.append(f"        private void LoadSubGroup_{group_name}_Internal(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted)")
+        lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, category, onCompleted);")
+        lines.append("")
+        lines.append(f"        private void UnloadSubGroup_{group_name}_Internal(int subGroupIndex, Action onCompleted)")
+        lines.append(f"            => UnloadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, onCompleted);")
+        lines.append("")
+
+        # enum版：ちゃんとSubGroup ID enumを使う。中身はInternalへ振り分け
         lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted);")
+        lines.append(f"            => LoadSubGroup_{group_name}_Internal((int)subGroupId, category, onCompleted);")
         lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroupInternal(SoundGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"            => UnloadSubGroup_{group_name}_Internal((int)subGroupId, onCompleted);")
+        lines.append("")
+
+        # int版：同じくInternalへ振り分け
+        lines.append(f"        public void LoadSubGroup_{group_name}(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted = null)")
+        lines.append(f"            => LoadSubGroup_{group_name}_Internal(subGroupIndex, category, onCompleted);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup_{group_name}(int subGroupIndex, Action onCompleted = null)")
+        lines.append(f"            => UnloadSubGroup_{group_name}_Internal(subGroupIndex, onCompleted);")
         lines.append("")
 
     lines.append("    }")
@@ -2831,45 +3633,84 @@ def generate_sound_core_subgroups(data):
 def generate_sound_bin():
     """
     サウンドデータのバイナリファイルを生成
+
+    フォーマット（Group / SubGroup / 個別アイテム、それぞれ単位で
+    シークして読み込めるように、インデックスと本体を分離している）:
+
+        [int32] groupCount
+        [int32 x groupCount] グループ毎のインデックスブロック位置
+
+        Group毎のインデックスブロック（上記の位置に書き込まれる）:
+            [int32] itemCount
+            [int32, int32, int32] x itemCount  (soundId, subGroupId, bodyOffset)
+
+        各アイテムの本体（インデックスのbodyOffsetが指す位置に書き込まれる）:
+            [utf8 + \\0] addressablePath
+            [float32] volume
+            [byte] type   (SE=0, BGM=1, VOICE=2)
+
+    Group単位のインデックス（soundId/subGroupId/位置）は件数分のint3つだけ
+    なので軽く、遅延ロード対象のGroupでも起動時に読み込んでしまって構わない。
+    本体（パス文字列など）だけをGroup/SubGroup/個別アイテム単位で
+    必要な分だけ読み込む・解放する、という制御をC#側で行う。
     """
     data = load_sound_data()
     with open(os.path.join(SOUND_DATA, 'sound_data.bytes'), 'wb') as f:
         groups = list(data['groups'].keys())
         group_count = len(groups)
         f.write(struct.pack('i', group_count))
-        offsets = [0] * group_count
-        offset_pos = f.tell()
-        f.write(struct.pack('i' * group_count, *offsets))
-        current_offset = f.tell()
+        group_index_offsets = [0] * group_count
+        group_index_offsets_pos = f.tell()
+        f.write(struct.pack('i' * group_count, *group_index_offsets))
 
         sound_id_map = {'None': 0}
         sound_id_counter = 1
         for group, group_value in data['groups'].items():
             for sound in group_value['items']:
-                sound_id = f"{group}_{sound['name']}"
+                sound_id = f"{group}_{sound["subgroup"]}_{sound['name']}"
                 if sound_id not in sound_id_map:
                     sound_id_map[sound_id] = sound_id_counter
                     sound_id_counter += 1
 
         for i, group in enumerate(groups):
-            offsets[i] = current_offset
             group_value = data['groups'][group]
             sounds = group_value['items']
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
-            f.write(struct.pack('i', len(sounds)))
-            for sound in sounds:
-                sound_id = sound_id_map.get(f"{group}_{sound['name']}", 0)
-                f.write(struct.pack('i', sound_id))
+            item_count = len(sounds)
+
+            group_index_offsets[i] = f.tell()
+
+            # インデックス部分（soundId, subGroupId, bodyOffset）を0埋めで確保し、
+            # 本体を書き終えた後にbodyOffsetだけ書き戻す。
+            f.write(struct.pack('i', item_count))
+            index_entry_pos = f.tell()
+            f.write(struct.pack('i' * (item_count * 3), *([0] * (item_count * 3))))
+
+            sound_ids = [0] * item_count
+            sub_group_ids = [0] * item_count
+            body_offsets = [0] * item_count
+
+            for j, sound in enumerate(sounds):
+                sound_ids[j] = sound_id_map.get(f"{group}_{sound['subgroup']}_{sound['name']}", 0)
+                sub_group_ids[j] = subgroup_map.get(sound.get('subgroup'), 0)
+
+                body_offsets[j] = f.tell()
                 path_bytes = sound['path'].encode('utf-8') + b'\0'
                 f.write(path_bytes)
                 f.write(struct.pack('f', sound['volume']))
-                type_byte = 0 if sound['type'] == 'SE' else 1
+                # SE=0, BGM=1, VOICE=2（既存データとの後方互換のため、
+                # 未知の値は従来通りSE(0)として書き込む）
+                type_byte = {'SE': 0, 'BGM': 1, 'VOICE': 2}.get(sound['type'], 0)
                 f.write(struct.pack('B', type_byte))
-                sub_group_id = subgroup_map.get(sound.get('subgroup'), 0)
-                f.write(struct.pack('i', sub_group_id))
-            current_offset = f.tell()
-        f.seek(offset_pos)
-        f.write(struct.pack('i' * group_count, *offsets))
+
+            end_pos = f.tell()
+            f.seek(index_entry_pos)
+            for j in range(item_count):
+                f.write(struct.pack('iii', sound_ids[j], sub_group_ids[j], body_offsets[j]))
+            f.seek(end_pos)
+
+        f.seek(group_index_offsets_pos)
+        f.write(struct.pack('i' * group_count, *group_index_offsets))
 
 # Texture data management
 def get_texture_data():
@@ -3048,7 +3889,7 @@ def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     
     #json作成
     json_dict: list[dict[str, object]] = []
-    js_path = os.path.join(target_dir, f"{group_name}_{group_name}_{subgroup_name}.json")
+    js_path = os.path.join(target_dir, f"{group_name}_{subgroup_name}_{sprite_name}.json")
     with open(js_path,'w',encoding='utf-8') as f:
         for i, item in enumerate(sprites, start=1):
             json_dict.append({
@@ -3080,7 +3921,7 @@ def generate_texture_csharp():
         texture_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
@@ -3090,13 +3931,13 @@ def generate_texture_csharp():
         sprite_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if len(texture.get('sprites', [])) <= 1:
                     # EnumクラスやJsonを作成
                     enum_name = generate_texture_sprite_enum(group,texture['subgroup'],texture['name'],texture.get('sprites', []))
                     register_enum_names(ENUM_DIR,enum_name)
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['name']}_{sprite}"
+                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -3110,7 +3951,7 @@ def generate_texture_csharp():
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
                 if len(texture.get('sprites', [])) > 1:
-                    sprite_enum_name = f"{group}_{texture['name']}"
+                    sprite_enum_name = f"{group}_{texture['subgroup']}_{texture['name']}"
                     sprite_id_counter = 0
                     for sprite in texture.get('sprites', []):
                         sprite_id_counter += 1
@@ -3839,7 +4680,7 @@ namespace GameCore.Texture
             texture_id_list = []
             for group, group_value in data['groups'].items():
                 for texture in group_value['items']:
-                    texture_id = f"{group}_{texture['name']}"
+                    texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
                     texture_id_list.append({
                         'description': texture['desc'],
                         'id': texture_id_map[texture_id],
@@ -3854,7 +4695,7 @@ namespace GameCore.Texture
     for group, group_value in data['groups'].items():
         for texture in group_value['items']:
             if len(texture.get('sprites', [])) > 1:
-                name = f"{group}_{texture['name']}"
+                name = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if not os.path.exists(os.path.join(ENUM_DIR, f"{name}")):
                     os.makedirs(os.path.join(ENUM_DIR, f"{name}"))
                 with open(os.path.join(ENUM_DIR, f"{name}", f"{name}.json"), 'w', encoding='utf-8') as f:
@@ -3949,13 +4790,13 @@ def generate_texture_bin():
         sprite_id_counter = 1
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['name']}"
+                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
                 if len(texture.get('sprites', [])) <= 1:
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['name']}_{sprite}"
+                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -3972,7 +4813,7 @@ def generate_texture_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(textures)))
             for texture in textures:
-                texture_id = texture_id_map.get(f"{group}_{texture['name']}", 0)
+                texture_id = texture_id_map.get(f"{group}_{texture["subgroup"]}_{texture['name']}", 0)
                 f.write(struct.pack('i', texture_id))
                 id_name = texture['name'].encode('utf-8') + b'\0'
                 f.write(id_name)
@@ -3984,7 +4825,7 @@ def generate_texture_bin():
                 sprite_count = len(sprites)
                 f.write(struct.pack('i', sprite_count))
                 for sprite in sprites:
-                    sprite_id = sprite_id_map.get(f"{group}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['name']}", 0))
+                    sprite_id = sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}", 0))
                     f.write(struct.pack('i', sprite_id))
                     sprite_name = sprite.encode('utf-8') + b'\0'
                     f.write(sprite_name)
@@ -4143,7 +4984,7 @@ def generate_gameobject_csharp():
         gameobject_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
@@ -5094,7 +5935,7 @@ namespace GameCore.Gameobject
         gameobject_id_list = []
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 gameobject_id_list.append({
                     'description': go['desc'],
                     'id': gameobject_id_map[go_id],
@@ -5162,7 +6003,7 @@ def generate_gameobject_bin():
         gameobject_id_counter = 1
         for group, group_value in data['groups'].items():
             for go in group_value['items']:
-                go_id = f"{group}_{go['name']}"
+                go_id = f"{group}_{go['subgroup']}_{go['name']}"
                 if go_id not in gameobject_id_map:
                     gameobject_id_map[go_id] = gameobject_id_counter
                     gameobject_id_counter += 1
@@ -5174,7 +6015,7 @@ def generate_gameobject_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(gameobjects)))
             for go in gameobjects:
-                go_id = gameobject_id_map.get(f"{group}_{go['name']}", 0)
+                go_id = gameobject_id_map.get(f"{group}_{go['subgroup']}_{go['name']}", 0)
                 f.write(struct.pack('i', go_id))
                 id_name = go['name'].encode('utf-8') + b'\0'
                 f.write(id_name)
