@@ -73,6 +73,8 @@ import pythonSrc.story_setting as story_setting
 import pythonSrc.upload as upload_module
 
 import pythonSrc.vcs as vcs
+import pythonSrc.documents as documents
+import pythonSrc.wiki_bridge as wiki_bridge
 
 
 # `python app.py Server` で起動した場合のみサーバー専用モード（ログイン必須・権限制御）になる。
@@ -3281,6 +3283,8 @@ if __name__ == '__main__':
     story_setting.register(app, DATA_DIR)
     upload_module.register(app, DATA_DIR)
     vcs.register(app, DATA_DIR, SERVER_MODE)
+    documents.register(app, DATA_DIR, SERVER_MODE)
+    wiki_bridge.register(app, DATA_DIR, SERVER_MODE)
 
     # バージョン管理（DATA_DIR＝Unityデータのみを対象に、他の初期化が終わった最後に登録する）
     versioning.register(app, DATA_DIR, BASE_DIR, SERVER_MODE)

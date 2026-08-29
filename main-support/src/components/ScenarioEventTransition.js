@@ -9,7 +9,7 @@ import {
   Backdrop, CircularProgress, Chip, Tooltip, Paper, Divider,
   Alert, Snackbar, InputAdornment, List, ListItem, ListItemButton,
   ListItemText, Drawer, Badge, Menu, MenuItem, Select, FormControl,
-  InputLabel, Stack
+  InputLabel, Stack, Checkbox, FormControlLabel
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -317,7 +317,7 @@ const RoleDataDrawer = ({
       name: r.name,
       data: formDataState[r.uniqueId] || r.data || [],
     }));
-    setDslText(decompileRoles(rolesForDsl, roleFormSchemas));
+    setDslText(decompileRoles(rolesForDsl, effectiveSchemas));
     setDslDiagnostics([]);
     setInputMode('text');
   };
@@ -332,7 +332,7 @@ const RoleDataDrawer = ({
   };
 
   const handleApplyDsl = async () => {
-    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, roleFormSchemas, roles);
+    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, effectiveSchemas, roles);
     setDslDiagnostics(diagnostics);
     const hasError = diagnostics.some((d) => d.severity === 'error');
     if (hasError) {
@@ -389,7 +389,33 @@ const RoleDataDrawer = ({
     }
   };
 
-  const roleNamesForDsl = Object.keys(roleFormSchemas || {});
+  // ── Role定義の最新化（テキストDSL用） ──
+  // GUIモードの各Roleフォームは、Drawerを開くたびに fetchSchemaOnce(name, true) で
+  // 強制的に最新スキーマを取ってきている(下のuseEffect)。だが、そこで取得した
+  // 最新スキーマは従来「フォームコンポーネントの生成」にしか使われておらず、
+  // テキストDSL側(roleNamesForDsl / switchToTextMode / handleApplyDsl / 予測変換)は
+  // 親から渡された roleFormSchemas prop（マウント時にキャッシュされたまま更新されない）
+  // をそのまま使っていたため、「Roleに新しい変数を追加した直後にLua記法で書いても
+  // その変数が出てこない」「新しく作ったRoleを追加してすぐLua記法を使おうとしても
+  // 補完が一切出ない」という不具合が起きていた。
+  // → ここで取得した最新スキーマを freshSchemas に貯め、DSL側はこちらを優先して使う。
+  const [freshSchemas, setFreshSchemas] = useState({});
+  const effectiveSchemas = { ...roleFormSchemas, ...freshSchemas };
+
+  // ── フォームの初期化完了フラグ ──
+  // BaseRoleInputFormは、propsのinitialDataを元に「既存値 → 保存済みデフォルト値 →
+  // 型の汎用初期値」の優先順位で最終的な値を組み立ててから、初回に一度onChangeを
+  // 呼んで親(このコンポーネント)のformDataStateへ反映する（非同期）。
+  // この初期化が完了する前に「保存」ボタンを押すと、formDataStateにはまだ
+  // roleDataCache由来の(新規Roleなら空の)値しか入っておらず、その空データで
+  // 上書き保存してしまっていた。これが「保存ボタンが1回目は効かない
+  // （＝空で保存される）。データを一部変更して初めてformDataStateに実データが
+  // 入るので、2回目以降はちゃんと保存される」という不具合の原因だった。
+  // → 初期化完了(＝最初のonChange)まではformReady[uid]をfalseにし、保存ボタンを
+  // 無効化することで、空データでの保存を防ぐ。
+  const [formReady, setFormReady] = useState({});
+
+  const roleNamesForDsl = Object.keys(effectiveSchemas || {});
 
   // ロールフォーム読み込み（重複防止）
   useEffect(() => {
@@ -399,16 +425,21 @@ const RoleDataDrawer = ({
       if (loadedRef.current[uid]) return;
       loadedRef.current[uid] = true;
       setLoadingForms(prev => ({ ...prev, [uid]: true }));
+      setFormReady(prev => ({ ...prev, [uid]: false }));
       try {
         // Drawerを開くたびに必ず最新のスキーマを取得する。
         // roleFormSchemas(キャンバス側のキャッシュ)は初回ロード時のまま更新されないため、
         // Role定義(型・bit/color/bezierのoptionsなど)を編集した直後でも
         // 確実に反映されるよう、ここではキャッシュを使わない。
         const schema = await fetchSchemaOnce(role.name, true);
+        setFreshSchemas(prev => ({ ...prev, [role.name]: schema }));
         const FormComp = await RoleInputFactory.getForm(
           role.name,
           formDataState[uid] || role.data || [],
-          (formData) => setFormDataState(prev => ({ ...prev, [uid]: formData })),
+          (formData) => {
+            setFormDataState(prev => ({ ...prev, [uid]: formData }));
+            setFormReady(prev => ({ ...prev, [uid]: true }));
+          },
           schema,
           { eventId, subId }
         );
@@ -421,19 +452,36 @@ const RoleDataDrawer = ({
     });
   }, [open, roles, roleFormSchemas]);
 
-  // Drawer閉じたらキャッシュリセット（次回再ロード用）
+  // Drawer閉じたらキャッシュリセット（次回再ロード用）。
+  // 閉じる際、初期化済み(formReady)のRoleについては未保存の変更を自動保存してから閉じる
+  // （「モーダルを閉じたら保存されているはず」という期待に応えるため）。
   const handleClose = () => {
+    roles.forEach((r) => {
+      if (formReady[r.uniqueId] && formDataState[r.uniqueId] !== undefined) {
+        onSave(r.uniqueId, formDataState[r.uniqueId]);
+      }
+    });
     loadedRef.current = {};
     setRoleForms({});
     setFormErrors({});
+    setFormReady({});
     onClose();
   };
 
   const handleSave = (uniqueId) => {
+    if (!formReady[uniqueId]) {
+      showSnack('フォームの読み込み中です。少し待ってから保存してください', 'warning');
+      return;
+    }
     onSave(uniqueId, formDataState[uniqueId]);
     showSnack('保存しました');
   };
   const handleBatchSave = () => {
+    const notReady = roles.some((r) => !formReady[r.uniqueId]);
+    if (notReady) {
+      showSnack('フォームの読み込み中のRoleがあります。少し待ってから保存してください', 'warning');
+      return;
+    }
     roles.forEach(r => onSave(r.uniqueId, formDataState[r.uniqueId]));
     showSnack('一括保存しました');
   };
@@ -486,7 +534,7 @@ const RoleDataDrawer = ({
               value={dslText}
               onChange={setDslText}
               roleNames={roleNamesForDsl}
-              roleSchemas={roleFormSchemas}
+              roleSchemas={effectiveSchemas}
               height="60vh"
             />
             {dslDiagnostics.length > 0 && (
@@ -592,7 +640,7 @@ const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => (
 // ============================================================
 const BlockCard = ({
   node, index, totalNodes, isSub, edges, allNodeIds,
-  globalRoles, roleDataCache, roleFormSchemas, eventId, subId, flushStructureSave,
+  globalRoles, roleDataCache, roleFormSchemas, eventId, subId, flushStructureSave, onRefreshRoles,
   onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
@@ -607,6 +655,13 @@ const BlockCard = ({
   const [moveTargetId, setMoveTargetId] = useState('');
   const [anchorEl, setAnchorEl] = useState(null);
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
+
+  // Role追加ダイアログ・データ入力ドロワーを開くたびに、Role一覧・全スキーマを
+  // 強制的に最新化する(新規作成したばかりのRoleや、追加したばかりのフィールドが
+  // 反映されない不具合の対策)。
+  useEffect(() => {
+    if (showRoleSelect || showDataInput) onRefreshRoles?.();
+  }, [showRoleSelect, showDataInput]);
 
   const roles = node.data.roles || [];
   const isGroup = !isSub;
@@ -946,7 +1001,7 @@ const BlockCard = ({
 // ============================================================
 const BlockCanvas = ({
   nodes, edges, isSub, globalRoles, roleDataCache, roleFormSchemas,
-  eventId, subId, flushStructureSave,
+  eventId, subId, flushStructureSave, onRefreshRoles,
   onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
@@ -983,6 +1038,7 @@ const BlockCanvas = ({
           eventId={eventId}
           subId={subId}
           flushStructureSave={flushStructureSave}
+          onRefreshRoles={onRefreshRoles}
           onMoveUp={() => onReorder(index, index - 1)}
           onMoveDown={() => onReorder(index, index + 1)}
           onDelete={onDelete}
@@ -1045,12 +1101,36 @@ function ScenarioEventTransition() {
   const [allEditApplying, setAllEditApplying] = useState(false);
   const [allEditText, setAllEditText] = useState('');
   const [allEditDiagnostics, setAllEditDiagnostics] = useState([]); // [{message, subId, path}]
+  // 見出しに一致しない(＝未知の)行があった場合に、新しいグループとして
+  // 自動作成することを許可するかどうか。デフォルトはOFF。
+  // これにより、案内コメントの消し忘れや見出しの書き間違いだけで
+  // 意図せずグループが増えてしまう事故を防ぐ(明示的にチェックした場合のみ作成する)。
+  const [allEditAllowNewGroups, setAllEditAllowNewGroups] = useState(false);
   // subId -> { nodes, edges }  (取得時点の全ノードツリー。適用時にこれを直接書き換えて送り返す)
   const allEditSubTreesRef = useRef({});
   // "subId::path" -> ノードオブジェクトへの直接参照 (allEditSubTreesRef内のツリーの一部)
   const allEditTargetsRef = useRef({});
 
+  // ------------------------------------------------------------
+  // 現在開いているSubだけをLua形式で編集するための状態
+  // (「全体編集」と全く同じ仕組み・同じヘルパー関数を、対象Subを1件だけに
+  //  限定して使う。データの持ち方・保存先・API呼び出しは既存のまま)
+  // ------------------------------------------------------------
+  const [showSubEditDialog, setShowSubEditDialog] = useState(false);
+  const [subEditLoading, setSubEditLoading] = useState(false);
+  const [subEditApplying, setSubEditApplying] = useState(false);
+  const [subEditText, setSubEditText] = useState('');
+  const [subEditDiagnostics, setSubEditDiagnostics] = useState([]);
+  const [subEditAllowNewGroups, setSubEditAllowNewGroups] = useState(false);
+  const subEditSubTreesRef = useRef({});
+  const subEditTargetsRef = useRef({});
+
   const ALL_EDIT_HEADER_RE = /^#\s*====\s*SUB:(\S+)\s+NODE:(\S+).*?====\s*$/;
+  // 「# 例: ...」で始まる行は、あくまで書き方の案内・記入例であり、
+  // 実際の見出しやTransaction本文としては絶対に解釈しない。
+  // ユーザーが消し忘れたまま適用しても、見出し扱いにも他ノードの本文への
+  // 混入にもならないよう、パースの最初の段階で丸ごと読み飛ばす。
+  const GUIDE_LINE_RE = /^#\s*例\s*[:：]/;
 
   // node以下を再帰的に辿り、Roleを持ちうる全ノード(トップレベル + 入れ子のsubgroups)を収集する
   const collectAllEditTargets = (nodes, pathIds, out) => {
@@ -1063,6 +1143,147 @@ function ScenarioEventTransition() {
         collectAllEditTargets(innerNodes, path, out);
       });
     });
+  };
+
+  // pathSegments(例: ['3','new1']) が指すノードを返す。存在しない場合は、
+  // 途中の階層も含めて新しいグループ/サブグループとして作成する。
+  // (Lua/テキスト側から「新しいグループを追加」「そのグループの中にさらに
+  //   サブグループを追加」できるようにするための処理。既存ノードには一切触れない)
+  const ensureAllEditNodePath = (tree, pathSegments) => {
+    let list = tree.nodes;
+    if (!Array.isArray(list)) { list = []; tree.nodes = list; }
+    let node = null;
+    for (let i = 0; i < pathSegments.length; i++) {
+      const id = pathSegments[i];
+      node = list.find((n) => String(n.id) === id);
+      if (!node) {
+        node = {
+          id,
+          description: '',
+          position: { x: 120 + (list.length % 5) * 180, y: 120 + Math.floor(list.length / 5) * 140 },
+          data: { roles: [] },
+        };
+        list.push(node);
+      }
+      if (i < pathSegments.length - 1) {
+        // さらに深い階層(サブグループ)へ進む準備。サブグループは自分自身の
+        // idをキーとして「自分の中身」を持つ、という既存の規約(handle_subgroup系)に合わせる。
+        node.data = node.data || {};
+        node.data.subgroups = node.data.subgroups || {};
+        const sgKey = String(node.id);
+        node.data.subgroups[sgKey] = node.data.subgroups[sgKey] || { nodes: [], edges: [] };
+        if (!Array.isArray(node.data.subgroups[sgKey].nodes)) node.data.subgroups[sgKey].nodes = [];
+        list = node.data.subgroups[sgKey].nodes;
+      }
+    }
+    return node;
+  };
+
+  // 指定した1つのSubのツリーから、Lua形式編集用のテキスト行を組み立てる。
+  // 「全体編集(全Sub)」「Sub編集(現在のSubのみ)」の両方から共通で使う。
+  // targetsOut には "subId::path" -> ノード の対応表を書き込む。
+  const buildEditLinesForSub = (sid, tree, targetsOut) => {
+    const lines = [];
+    const targets = [];
+    collectAllEditTargets(tree.nodes, [], targets);
+    targets.forEach((t) => {
+      const pathKey = t.path.join('/');
+      targetsOut[`${sid}::${pathKey}`] = t.node;
+      const labelSuffix = t.label ? ` (${t.label})` : '';
+      lines.push(`# ==== SUB:${sid} NODE:${pathKey}${labelSuffix} ====`);
+      const roles = (t.node.data && t.node.data.roles) || [];
+      const bodyText = decompileRoles(roles, roleFormSchemas);
+      if (bodyText) lines.push(bodyText);
+      lines.push('');
+    });
+    // 新しいグループを追加する際の書き方の案内。
+    // 「# 例:」で始まる行はGUIDE_LINE_REにより保存時に必ず無視されるため、
+    // 消し忘れて適用してもグループが作られたり内容が化けたりすることはない。
+    lines.push(`# 例: 新しいグループを追加したい場合は、下の「新しいグループの追加を許可する」に`);
+    lines.push(`# 例: チェックを入れたうえで、下記のような見出しを書いてください（この案内行自体は無視されます）`);
+    lines.push(`# 例: ==== SUB:${sid} NODE:新しいノードID ====`);
+    lines.push(`# 例: ==== SUB:${sid} NODE:既存または新規の親ID/新しいサブグループのノードID ====`);
+    lines.push('');
+    return lines;
+  };
+
+  // Lua形式テキストをヘッダ行で分割し、セクション(見出し+本文)の配列にする。
+  // 案内・記入例コメント("# 例: ...")は見出しとしても本文としても解釈せず、
+  // その場で読み飛ばす。
+  const parseEditSections = (text) => {
+    const rawLines = text.split('\n');
+    const sections = [];
+    let current = null;
+    rawLines.forEach((line) => {
+      if (GUIDE_LINE_RE.test(line)) return; // 案内コメント行は無視する
+      const m = line.match(ALL_EDIT_HEADER_RE);
+      if (m) {
+        if (current) sections.push(current);
+        current = { subId: m[1], pathKey: m[2], bodyLines: [] };
+      } else if (current) {
+        current.bodyLines.push(line);
+      }
+    });
+    if (current) sections.push(current);
+
+    // パスが短い(=階層が浅い)順に処理する。新規グループの中にさらに新規サブグループを
+    // 追加するようなケースで、親を先に作ってから子を作れるようにするため。
+    sections.sort((a, b) => a.pathKey.split('/').length - b.pathKey.split('/').length);
+    return sections;
+  };
+
+  // セクション列を、対応するツリーへ実際に適用する。
+  // 「全体編集」「Sub編集」どちらの適用処理からも呼ばれる共通ロジック。
+  // allowNewGroups が false の場合、見出しに対応する既存ノードが見つからなくても
+  // 新しいグループは作成せず、警告としてdiagnosticsに積むだけに留める
+  // (案内コメントの消し忘れや見出しの書き間違いだけで、意図せずグループが
+  //  増えてしまう事故を防ぐため)。
+  const applyEditSections = (sections, subTreesRef, targetsRef, allowNewGroups) => {
+    const diagnostics = [];
+    const touchedSubIds = new Set();
+
+    for (const section of sections) {
+      const key = `${section.subId}::${section.pathKey}`;
+      let targetNode = targetsRef.current[key];
+      if (!targetNode) {
+        const tree = subTreesRef.current[section.subId];
+        if (!tree) {
+          diagnostics.push({
+            message: `存在しないSubです: SUB:${section.subId}`,
+            subId: section.subId, path: section.pathKey,
+          });
+          continue;
+        }
+        if (!allowNewGroups) {
+          diagnostics.push({
+            message: `未知の見出しです（新しいグループは作成されません）: SUB:${section.subId} NODE:${section.pathKey} ／ 新しいグループを追加したい場合は「新しいグループの追加を許可する」にチェックを入れてから適用してください`,
+            subId: section.subId, path: section.pathKey,
+          });
+          continue;
+        }
+        // 見出しに対応する既存ノードが無く、かつ新規グループ作成が許可されている
+        // 場合のみ、新しいグループ(または新しいサブグループ)として作成する。
+        targetNode = ensureAllEditNodePath(tree, section.pathKey.split('/'));
+        targetsRef.current[key] = targetNode;
+      }
+      const existingRoles = (targetNode.data && targetNode.data.roles) || [];
+      const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
+        section.bodyLines.join('\n'), roleFormSchemas, existingRoles
+      );
+      sectionDiagnostics
+        .filter((d) => d.severity === 'error')
+        .forEach((d) => diagnostics.push({
+          message: `SUB:${section.subId} NODE:${section.pathKey} - ${d.message}`,
+          subId: section.subId, path: section.pathKey,
+        }));
+      if (sectionDiagnostics.some((d) => d.severity === 'error')) continue;
+
+      targetNode.data = targetNode.data || {};
+      targetNode.data.roles = compiledRoles;
+      touchedSubIds.add(section.subId);
+    }
+
+    return { diagnostics, touchedSubIds };
   };
 
   const handleOpenAllEditDialog = async () => {
@@ -1085,19 +1306,7 @@ function ScenarioEventTransition() {
         const res = await fetch(`/api/scenario-event/${eventId}/sub/${sid}/transition`);
         const tree = res.ok ? await res.json() : { nodes: [], edges: [] };
         allEditSubTreesRef.current[sid] = tree;
-
-        const targets = [];
-        collectAllEditTargets(tree.nodes, [], targets);
-        targets.forEach((t) => {
-          const pathKey = t.path.join('/');
-          allEditTargetsRef.current[`${sid}::${pathKey}`] = t.node;
-          const labelSuffix = t.label ? ` (${t.label})` : '';
-          lines.push(`# ==== SUB:${sid} NODE:${pathKey}${labelSuffix} ====`);
-          const roles = (t.node.data && t.node.data.roles) || [];
-          const bodyText = decompileRoles(roles, roleFormSchemas);
-          if (bodyText) lines.push(bodyText);
-          lines.push('');
-        });
+        lines.push(...buildEditLinesForSub(sid, tree, allEditTargetsRef.current));
       }
 
       setAllEditText(lines.join('\n'));
@@ -1111,51 +1320,11 @@ function ScenarioEventTransition() {
 
   const handleApplyAllEdit = async () => {
     setAllEditApplying(true);
-    const diagnostics = [];
     try {
-      // テキストをヘッダ行で分割し、セクションごとに再コンパイルする
-      const rawLines = allEditText.split('\n');
-      const sections = [];
-      let current = null;
-      rawLines.forEach((line) => {
-        const m = line.match(ALL_EDIT_HEADER_RE);
-        if (m) {
-          if (current) sections.push(current);
-          current = { subId: m[1], pathKey: m[2], bodyLines: [] };
-        } else if (current) {
-          current.bodyLines.push(line);
-        }
-      });
-      if (current) sections.push(current);
-
-      const touchedSubIds = new Set();
-
-      for (const section of sections) {
-        const key = `${section.subId}::${section.pathKey}`;
-        const targetNode = allEditTargetsRef.current[key];
-        if (!targetNode) {
-          diagnostics.push({
-            message: `見つからないセクションです(削除されたかIDが変更された可能性があります): SUB:${section.subId} NODE:${section.pathKey}`,
-            subId: section.subId, path: section.pathKey,
-          });
-          continue;
-        }
-        const existingRoles = (targetNode.data && targetNode.data.roles) || [];
-        const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
-          section.bodyLines.join('\n'), roleFormSchemas, existingRoles
-        );
-        sectionDiagnostics
-          .filter((d) => d.severity === 'error')
-          .forEach((d) => diagnostics.push({
-            message: `SUB:${section.subId} NODE:${section.pathKey} - ${d.message}`,
-            subId: section.subId, path: section.pathKey,
-          }));
-        if (sectionDiagnostics.some((d) => d.severity === 'error')) continue;
-
-        targetNode.data = targetNode.data || {};
-        targetNode.data.roles = compiledRoles;
-        touchedSubIds.add(section.subId);
-      }
+      const sections = parseEditSections(allEditText);
+      const { diagnostics, touchedSubIds } = applyEditSections(
+        sections, allEditSubTreesRef, allEditTargetsRef, allEditAllowNewGroups
+      );
 
       setAllEditDiagnostics(diagnostics);
       if (diagnostics.length > 0) {
@@ -1164,7 +1333,8 @@ function ScenarioEventTransition() {
       }
 
       // 変更のあったSubだけ、既存の /transition エンドポイントへそのまま書き戻す
-      // (ノード構造は変更しない=既存のノードグラフ・入れ子構造はそのまま、rolesの中身だけ更新)
+      // (新規作成したノード/サブグループも、このtreeオブジェクトに直接追加済みなので
+      //  そのまま送るだけでよい)
       for (const sid of touchedSubIds) {
         const tree = allEditSubTreesRef.current[sid];
         const res = await fetch(`/api/scenario-event/${eventId}/sub/${sid}/transition`, {
@@ -1187,6 +1357,78 @@ function ScenarioEventTransition() {
       showSnack(`全体編集の適用に失敗しました: ${e.message}`, 'error');
     } finally {
       setAllEditApplying(false);
+    }
+  };
+
+  // ------------------------------------------------------------
+  // Sub編集(現在開いているSubのみをLua形式で編集)
+  // 「全体編集」と同じ仕組みを、対象Subを現在のsubId 1件だけに限定して使う。
+  // ------------------------------------------------------------
+  const handleOpenSubEditDialog = async () => {
+    if (!eventId || !subId) return;
+    setShowSubEditDialog(true);
+    setSubEditLoading(true);
+    setSubEditDiagnostics([]);
+    try {
+      subEditSubTreesRef.current = {};
+      subEditTargetsRef.current = {};
+
+      const res = await fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`);
+      const tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+      subEditSubTreesRef.current[subId] = tree;
+
+      const lines = buildEditLinesForSub(subId, tree, subEditTargetsRef.current);
+      setSubEditText(lines.join('\n'));
+    } catch (e) {
+      console.error('Sub編集の読み込みエラー:', e);
+      showSnack('Sub編集データの取得に失敗しました', 'error');
+    } finally {
+      setSubEditLoading(false);
+    }
+  };
+
+  const handleApplySubEdit = async () => {
+    if (!eventId || !subId) return;
+    setSubEditApplying(true);
+    try {
+      const allSections = parseEditSections(subEditText);
+      // このダイアログは現在のSub専用。念のため、他Subの見出しが紛れ込んでいた場合は
+      // 適用せずエラーとして扱う(全体編集ダイアログを使うよう案内する)。
+      const sections = allSections.filter((s) => String(s.subId) === String(subId));
+      const foreignSections = allSections.filter((s) => String(s.subId) !== String(subId));
+
+      const { diagnostics, touchedSubIds } = applyEditSections(
+        sections, subEditSubTreesRef, subEditTargetsRef, subEditAllowNewGroups
+      );
+      foreignSections.forEach((s) => diagnostics.push({
+        message: `このSub編集では別Subの見出しは扱えません（SUB:${s.subId} NODE:${s.pathKey}）。複数Subをまたいで編集する場合は「全体編集(全Sub一括)」を使ってください`,
+        subId: s.subId, path: s.pathKey,
+      }));
+
+      setSubEditDiagnostics(diagnostics);
+      if (diagnostics.length > 0) {
+        showSnack('エラーがあるため適用できませんでした。内容を確認してください。', 'error');
+        return;
+      }
+
+      if (touchedSubIds.has(String(subId))) {
+        const tree = subEditSubTreesRef.current[subId];
+        const res = await fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: tree.nodes, edges: tree.edges }),
+        });
+        if (!res.ok) throw new Error(`Sub ${subId} の保存に失敗しました (HTTP ${res.status})`);
+      }
+
+      showSnack('このSubの編集内容を適用しました');
+      setShowSubEditDialog(false);
+      window.location.reload();
+    } catch (e) {
+      console.error('Sub編集の適用エラー:', e);
+      showSnack(`Sub編集の適用に失敗しました: ${e.message}`, 'error');
+    } finally {
+      setSubEditApplying(false);
     }
   };
 
@@ -1225,6 +1467,30 @@ function ScenarioEventTransition() {
       .then(res => res.json())
       .then(d => setGlobalRoles(d))
       .catch(err => console.error('Role取得エラー:', err));
+  }, []);
+
+  // Role一覧・全Roleスキーマを強制的に再取得する共通関数。
+  // 「Roleスキーマ再取得」ボタンに加え、Role追加ダイアログ／データ入力ダイアログを
+  // 開くタイミングでも自動的に呼び、新規作成したばかりのRole種別が一覧に出ない、
+  // 新しく追加したフィールドがLua記法の補完に出ない、といった不具合を防ぐ。
+  const refreshGlobalRolesAndSchemas = useCallback(async () => {
+    try {
+      const res = await fetch('/api/scenario-role');
+      const rolesList = res.ok ? await res.json() : [];
+      setGlobalRoles(rolesList);
+      const fresh = {};
+      for (const role of rolesList) {
+        invalidateRoleSchemaCache(role.name);
+        try {
+          fresh[role.name] = await fetchSchemaOnce(role.name, true);
+        } catch (e) {
+          console.error(`スキーマ再取得エラー (${role.name}):`, e);
+        }
+      }
+      setRoleFormSchemas(fresh);
+    } catch (e) {
+      console.error('Role一覧再取得エラー:', e);
+    }
   }, []);
 
   // ── スキーマ一括ロード（重複排除済み） ──
@@ -1793,16 +2059,7 @@ function ScenarioEventTransition() {
             <Button variant="outlined" size="small"
               startIcon={<RefreshIcon />}
               onClick={async () => {
-                const fresh = {};
-                for (const role of globalRoles) {
-                  invalidateRoleSchemaCache(role.name);
-                  try {
-                    fresh[role.name] = await fetchSchemaOnce(role.name, true);
-                  } catch (e) {
-                    console.error(`スキーマ再取得エラー (${role.name}):`, e);
-                  }
-                }
-                setRoleFormSchemas(fresh);
+                await refreshGlobalRolesAndSchemas();
                 showSnack('Roleスキーマを再取得しました');
               }}
               disabled={isLoading}
@@ -1811,13 +2068,23 @@ function ScenarioEventTransition() {
             </Button>
           </Tooltip>
 
-          <Tooltip title="このイベントに属する全Sub・全ノードのTransactionを1つのテキストでまとめて編集します（既存ノードの内容編集のみ。ノード自体の追加は不可）">
+          <Tooltip title="このイベントに属する全Sub・全ノードのTransactionを1つのテキストでまとめて編集します（既存ノードの内容編集のみ。ノード自体の追加は初期状態では不可）">
             <Button variant="outlined" size="small"
               startIcon={<EditNoteIcon />}
               onClick={handleOpenAllEditDialog}
               disabled={isLoading || !eventId}
               sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
               全体編集(全Sub一括)
+            </Button>
+          </Tooltip>
+
+          <Tooltip title="現在開いているSubだけを、Lua形式のテキストで編集します（既存ノードの内容編集のみ。ノード自体の追加は初期状態では不可）">
+            <Button variant="outlined" size="small"
+              startIcon={<EditNoteIcon />}
+              onClick={handleOpenSubEditDialog}
+              disabled={isLoading || !eventId || !subId}
+              sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', borderColor: 'rgba(255,255,255,0.3)' }}>
+              このSubのみ編集
             </Button>
           </Tooltip>
 
@@ -1890,6 +2157,7 @@ function ScenarioEventTransition() {
           eventId={eventId}
           subId={subId}
           flushStructureSave={saveCurrentTab}
+          onRefreshRoles={refreshGlobalRolesAndSchemas}
           onReorder={handleReorder}
           onDelete={handleDeleteNode}
           onCopy={handleCopyNode}
@@ -1910,8 +2178,14 @@ function ScenarioEventTransition() {
         <DialogTitle>
           全体編集（{eventId} / 全Sub一括）
           <Typography variant="caption" display="block" color="text.secondary">
-            既存ノードのRole呼び出し内容(追加・削除・値の変更)をまとめて編集できます。ノード自体の新規作成はここでは行えません。
-            見出しコメント（# ==== SUB:.. NODE:.. ====）は削除・改変しないでください。
+            既存ノードのRole呼び出し内容(追加・削除・値の変更)をまとめて編集できます。
+            「# 例:」で始まる行はあくまで書き方の案内・記入例であり、そのまま残して適用しても無視されるだけで、
+            グループが増えたり内容が化けたりすることはありません。
+            新しいグループを追加したい場合は、下のチェックを入れたうえで
+            新しい見出し（# ==== SUB:番号 NODE:新しいID ====）を書き足してください。
+            NODE:親ID/子ID のように "/" で区切ると、親グループの中に新しいサブグループを作成できます。
+            ただし新規作成したグループは他のノードと接続されていない状態で追加されるため、必要に応じて
+            通常のGUI操作で他のノードと接続してください。既存の見出しコメントは削除・改変しないでください。
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>
@@ -1921,6 +2195,22 @@ function ScenarioEventTransition() {
             </Box>
           ) : (
             <>
+              <Box sx={{ px: 2, pt: 1 }}>
+                <FormControlLabel
+                  control={(
+                    <Checkbox
+                      size="small"
+                      checked={allEditAllowNewGroups}
+                      onChange={(e) => setAllEditAllowNewGroups(e.target.checked)}
+                    />
+                  )}
+                  label={(
+                    <Typography variant="caption">
+                      新しいグループの追加を許可する（未知の見出しを新規ノードとして作成します。OFFの場合、未知の見出しは作成されず警告になります）
+                    </Typography>
+                  )}
+                />
+              </Box>
               <ScenarioTransactionCodeEditor
                 value={allEditText}
                 onChange={setAllEditText}
@@ -1949,6 +2239,74 @@ function ScenarioEventTransition() {
             disabled={allEditLoading || allEditApplying}
           >
             {allEditApplying ? '適用中...' : '適用'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Sub編集ダイアログ(現在開いているSubだけをLua形式でまとめて編集) ── */}
+      <Dialog open={showSubEditDialog} onClose={() => setShowSubEditDialog(false)} maxWidth="lg" fullWidth>
+        <DialogTitle>
+          Sub編集（{eventId} / SUB:{subId} のみ）
+          <Typography variant="caption" display="block" color="text.secondary">
+            現在開いているSubだけを対象に、既存ノードのRole呼び出し内容(追加・削除・値の変更)を
+            まとめて編集できます。「# 例:」で始まる行はあくまで書き方の案内・記入例であり、
+            そのまま残して適用しても無視されるだけで、グループが増えたり内容が化けたりすることはありません。
+            新しいグループを追加したい場合は、下のチェックを入れたうえで
+            新しい見出し（# ==== SUB:{subId} NODE:新しいID ====）を書き足してください。
+            他のSubの内容をまとめて編集したい場合は「全体編集(全Sub一括)」を使ってください。
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          {subEditLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <>
+              <Box sx={{ px: 2, pt: 1 }}>
+                <FormControlLabel
+                  control={(
+                    <Checkbox
+                      size="small"
+                      checked={subEditAllowNewGroups}
+                      onChange={(e) => setSubEditAllowNewGroups(e.target.checked)}
+                    />
+                  )}
+                  label={(
+                    <Typography variant="caption">
+                      新しいグループの追加を許可する（未知の見出しを新規ノードとして作成します。OFFの場合、未知の見出しは作成されず警告になります）
+                    </Typography>
+                  )}
+                />
+              </Box>
+              <ScenarioTransactionCodeEditor
+                value={subEditText}
+                onChange={setSubEditText}
+                roleNames={globalRoles.map((r) => r.name)}
+                roleSchemas={roleFormSchemas}
+                height="60vh"
+              />
+              {subEditDiagnostics.length > 0 && (
+                <Box sx={{ p: 1, maxHeight: 160, overflow: 'auto', bgcolor: 'rgba(255,0,0,0.06)' }}>
+                  {subEditDiagnostics.map((d, i) => (
+                    <Typography key={i} variant="caption" color="error" display="block">
+                      {d.message}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowSubEditDialog(false)} disabled={subEditApplying}>閉じる</Button>
+          <Button onClick={handleOpenSubEditDialog} disabled={subEditLoading || subEditApplying}>再取得</Button>
+          <Button
+            variant="contained"
+            onClick={handleApplySubEdit}
+            disabled={subEditLoading || subEditApplying}
+          >
+            {subEditApplying ? '適用中...' : '適用'}
           </Button>
         </DialogActions>
       </Dialog>

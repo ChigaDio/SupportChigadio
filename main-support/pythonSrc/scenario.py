@@ -1461,7 +1461,7 @@ def _get_class_data_id_options(table_name, data_dir=None):
     try:
         with open(class_id_path, 'r', encoding='utf-8') as f:
             table_data = json.load(f)
-        return [r.get('enum_property') for r in table_data.get('rows', []) if r.get('enum_property')]
+        return [r.get('enum_property') + "ID" for r in table_data.get('rows', []) if r.get('enum_property')]
     except Exception:
         return []
 
@@ -1536,9 +1536,14 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
                 # "name"というキーは存在しない(class_data.py の generate_enum_files 参照)。
                 # 以前はitem.get('name', '')としていたため候補が常に空文字列になり、
                 # Transaction DSL(Lua風テキスト)の予測変換に一切出てこなかった。
-                field['options'] = [item.get('property', '') for item in enum_values[var_type] if item.get('property')]
+                #
+                # 値は "TypeName.Property"（例: FadeID.In）の完全修飾形式で保存する規約
+                # (GUI側のAutocomplete・C#生成側もこの形式を前提としているため)。
+                # 未選択を表す "TypeName.None" を先頭に必ず含める。
+                properties = [item.get('property', '') for item in enum_values[var_type] if item.get('property')]
+                field['options'] = [f"{var_type}ID.None"] + [f"{var_type}ID.{p}" for p in properties]
             else:
-                field['options'] = []
+                field['options'] = [f"{var_type}ID.None"]
                 field['warning'] = 'Enum options not found'
 
         # CustomClassDataID: class_data_id と同じくID参照。値候補はフロント側が
@@ -1564,7 +1569,10 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
             # Transaction DSL(Lua風テキスト)側の予測変換・値検証用に、現在の行の
             # 識別子一覧(enum_property)をoptionsとして渡す(GUI側は従来通り
             # /api/class-data-idから取得するため、ここを追加してもGUI側の挙動は変わらない)。
-            field['options'] = _get_class_data_id_options(var_type, data_dir)
+            # enumと同じく "TypeName.Property"(例: FadeID.In) の完全修飾形式で保存する。
+            # 未選択を表す "TypeName.None" を先頭に必ず含める。
+            raw_options = _get_class_data_id_options(var_type, data_dir)
+            field['options'] = [f"{var_type}ID.None"] + [f"{var_type}.{o}" for o in raw_options]
 
         # class_data: ネストしたClassData
         elif var_type in class_names:
@@ -1906,8 +1914,6 @@ def fix_all_events():
             if len(schema_data) == 0:
                 continue
             fields = schema_data.get('data', [])
-            if fields is None:
-                continue
             role_schemas[role_name] = {
                 field['name']: {'type': field['type'], 'default': field.get('default')}
                 for field in fields

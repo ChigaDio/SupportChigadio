@@ -64,6 +64,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
     { name: 'Announcements' },
     { name: 'Trash' },
     { name: 'PermissionMatrix' },
+    {name : 'Documents'},
   ];
 
   return (
@@ -91,6 +92,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
                 : item.name === 'Trash' ? 'ゴミ箱'
                 : item.name === 'ProjectStats' ? 'プロジェクト統計'
                 : item.name === 'PermissionMatrix' ? '権限マトリクス'
+                : item.name === 'Documents' ? '仕様書'
                 : 'お知らせ'
             } />
           </ListItem>

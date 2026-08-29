@@ -77,8 +77,36 @@ def _find_repo_root(start_dir):
         cur = parent
 
 
+_EXE_CACHE = {}
+
+
+def _resolve_exe(name):
+    """git/svn実行ファイルの絶対パスを解決してキャッシュする。
+    見つからない場合は素の名前をそのまま返す（_run側でFileNotFoundErrorとして
+    捕捉され、詳細なエラーメッセージに変換される）。PATH環境変数の変更は
+    プロセス起動後には反映されないため、PATHを変更した場合はサーバー
+    プロセス自体の再起動が必要な点に注意。"""
+    cached = _EXE_CACHE.get(name)
+    if cached:
+        return cached
+    found = shutil.which(name)
+    if found:
+        _EXE_CACHE[name] = found
+        return found
+    return name
+
+
+def _git_cmd(*args):
+    return [_resolve_exe("git"), *args]
+
+
+def _svn_cmd(*args):
+    return [_resolve_exe("svn"), *args]
+
+
 def _vcs_available(vcs_type):
-    return shutil.which("git" if vcs_type == "git" else "svn") is not None
+    exe = "git" if vcs_type == "git" else "svn"
+    return os.path.isabs(_resolve_exe(exe)) or shutil.which(exe) is not None
 
 
 def detect_repo():
@@ -92,6 +120,7 @@ def detect_repo():
         "root": root,
         "dataRelPath": os.path.relpath(DATA_DIR, root).replace("\\", "/"),
         "available": _vcs_available(vcs_type),
+        "resolvedExecutable": _resolve_exe("git" if vcs_type == "git" else "svn"),
     }
 
 
@@ -107,9 +136,19 @@ def _run(cmd, cwd, timeout=25):
         )
         return result.returncode, result.stdout, result.stderr
     except FileNotFoundError:
-        return -1, "", f"コマンドが見つかりません: {cmd[0]}"
+        return -1, "", (
+            f"実行ファイルが見つかりません: {cmd[0]}\n"
+            f"（作業ディレクトリ: {cwd}）\n"
+            "サーバープロセスから見えるPATHに git/svn の実行ファイルが含まれているか確認してください。"
+            "PATHをインストール後や変更後に追加した場合は、環境変数の変更はサーバープロセスの再起動後にしか"
+            "反映されないため、Flaskサーバー自体を再起動してください。"
+        )
+    except PermissionError as e:
+        return -1, "", f"実行権限がありません: {cmd[0]} ({e})"
     except subprocess.TimeoutExpired:
-        return -1, "", "コマンドがタイムアウトしました"
+        return -1, "", f"コマンドがタイムアウトしました: {' '.join(cmd)}"
+    except OSError as e:
+        return -1, "", f"コマンド実行時にエラーが発生しました: {cmd[0]} ({e})"
 
 
 # ---------------------------------------------------------------
@@ -158,6 +197,29 @@ def _to_rel_from_data(repo_root, rel_or_abs_path):
     return os.path.relpath(abs_path, DATA_DIR).replace("\\", "/")
 
 
+def _extra_owner_check(rel_from_data, user):
+    """CATEGORY_DIRSに含まれないパス（wiki/documents配下など）について、
+    各機能モジュール自身が持つページ/フォルダ単位の権限判定に委譲する。
+    対象外のパスならNoneを返す（＝呼び出し側は従来通り非表示のまま扱う）。
+    pythonSrc/wiki.py, pythonSrc/documents.py が未登録の環境でも
+    ImportErrorを無視して動作を継続する。"""
+    try:
+        import pythonSrc.wiki as wiki
+        result = wiki.can_manage_path(rel_from_data, user)
+        if result is not None:
+            return result
+    except ImportError:
+        pass
+    try:
+        import pythonSrc.documents as documents
+        result = documents.can_manage_path(rel_from_data, user)
+        if result is not None:
+            return result
+    except ImportError:
+        pass
+    return None
+
+
 def _filter_and_annotate(entries, repo_root, user):
     """変更ファイルエントリ(dict, "path"キーがrepo_root相対)のリストに
     category/item/selectableを付与し、サーバーモード時は非表示にすべき
@@ -186,12 +248,12 @@ def _filter_and_annotate(entries, repo_root, user):
 # ---------------------------------------------------------------
 
 def _git_current_branch(root):
-    code, out, _ = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], root)
+    code, out, _ = _run(_git_cmd("rev-parse", "--abbrev-ref", "HEAD"), root)
     return out.strip() if code == 0 else None
 
 
 def _git_ahead_behind(root):
-    code, out, _ = _run(["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"], root)
+    code, out, _ = _run(_git_cmd("rev-list", "--left-right", "--count", "HEAD...@{u}"), root)
     if code != 0:
         return None
     try:
@@ -202,7 +264,7 @@ def _git_ahead_behind(root):
 
 
 def _git_status(root):
-    code, out, err = _run(["git", "status", "--porcelain=v1", "-uall"], root)
+    code, out, err = _run(_git_cmd("status", "--porcelain=v1", "-uall"), root)
     if code != 0:
         raise RuntimeError(err or "git status に失敗しました")
     entries = []
@@ -223,7 +285,7 @@ def _git_status(root):
 
 
 def _git_branches(root):
-    code, out, err = _run(["git", "branch", "-a", "--format=%(refname:short)|%(HEAD)"], root)
+    code, out, err = _run(_git_cmd("branch", "-a", "--format=%(refname:short)|%(HEAD)"), root)
     if code != 0:
         raise RuntimeError(err or "ブランチ一覧の取得に失敗しました")
     branches = []
@@ -270,7 +332,7 @@ def _assign_lanes(commits):
 def _git_log(root, branch=None, limit=200):
     sep = "\x1f"
     fmt = sep.join(["%H", "%P", "%an", "%ad", "%s", "%D"])
-    cmd = ["git", "log", f"--pretty=format:{fmt}", "--date=iso-strict", f"-n{limit}"]
+    cmd = _git_cmd("log", f"--pretty=format:{fmt}", "--date=iso-strict", f"-n{limit}")
     cmd.append(branch if branch else "--all")
     code, out, err = _run(cmd, root, timeout=25)
     if code != 0:
@@ -292,30 +354,30 @@ def _git_log(root, branch=None, limit=200):
 
 
 def _git_diff(root, rel_path):
-    code, out, err = _run(["git", "diff", "HEAD", "--", rel_path], root)
+    code, out, err = _run(_git_cmd("diff", "HEAD", "--", rel_path), root)
     if code == 0 and out:
         return out
     # 新規追跡ファイル等でHEAD比較が空になる場合のフォールバック
-    code2, out2, _ = _run(["git", "diff", "--no-index", "--", os.devnull, rel_path], root)
+    code2, out2, _ = _run(_git_cmd("diff", "--no-index", "--", os.devnull, rel_path), root)
     return out2 or "差分はありません（新規ファイル、またはバイナリの可能性があります）"
 
 
 def _git_fetch(root, log):
-    code, out, err = _run(["git", "fetch", "--all", "--prune"], root, timeout=120)
+    code, out, err = _run(_git_cmd("fetch", "--all", "--prune"), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "fetchに失敗しました")
 
 
 def _git_pull(root, log):
-    code, out, err = _run(["git", "pull"], root, timeout=120)
+    code, out, err = _run(_git_cmd("pull"), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "pullに失敗しました（コンフリクトの可能性があります）")
 
 
 def _git_push(root, log, set_upstream=False, branch=None):
-    cmd = ["git", "push", "--set-upstream", "origin", branch] if (set_upstream and branch) else ["git", "push"]
+    cmd = _git_cmd("push", "--set-upstream", "origin", branch) if (set_upstream and branch) else _git_cmd("push")
     code, out, err = _run(cmd, root, timeout=120)
     log(out + err)
     if code != 0:
@@ -327,25 +389,25 @@ def _git_commit(root, log, message, paths):
         raise ValueError("コミットメッセージは必須です")
     if not paths:
         raise ValueError("コミット対象のファイルが選択されていません")
-    code, out, err = _run(["git", "add", "--"] + paths, root)
+    code, out, err = _run(_git_cmd("add", "--", *paths), root)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "git add に失敗しました")
-    code, out, err = _run(["git", "commit", "-m", message], root)
+    code, out, err = _run(_git_cmd("commit", "-m", message), root)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "commitに失敗しました")
 
 
 def _git_merge(root, log, branch):
-    code, out, err = _run(["git", "merge", branch], root, timeout=120)
+    code, out, err = _run(_git_cmd("merge", branch), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or f"{branch} のマージに失敗しました（コンフリクトの可能性があります）")
 
 
 def _git_branch_create(root, log, name, start_point=None, checkout=False):
-    cmd = ["git", "branch", name] + ([start_point] if start_point else [])
+    cmd = _git_cmd("branch", name, *([start_point] if start_point else []))
     code, out, err = _run(cmd, root)
     log(out + err)
     if code != 0:
@@ -355,7 +417,7 @@ def _git_branch_create(root, log, name, start_point=None, checkout=False):
 
 
 def _git_checkout(root, log, name):
-    code, out, err = _run(["git", "checkout", name], root, timeout=60)
+    code, out, err = _run(_git_cmd("checkout", name), root, timeout=60)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or f"{name} への切り替えに失敗しました")
@@ -366,7 +428,7 @@ def _git_checkout(root, log, name):
 # ---------------------------------------------------------------
 
 def _svn_status(root):
-    code, out, err = _run(["svn", "status"], root)
+    code, out, err = _run(_svn_cmd("status"), root)
     if code != 0:
         raise RuntimeError(err or "svn status に失敗しました")
     entries = []
@@ -387,7 +449,7 @@ def _svn_status(root):
 
 
 def _svn_info(root):
-    code, out, _ = _run(["svn", "info"], root)
+    code, out, _ = _run(_svn_cmd("info"), root)
     info = {}
     if code == 0:
         for line in out.splitlines():
@@ -411,7 +473,7 @@ def _parse_svn_log_block(block_lines):
 
 
 def _svn_log(root, limit=200):
-    code, out, err = _run(["svn", "log", "-l", str(limit)], root, timeout=25)
+    code, out, err = _run(_svn_cmd("log", "-l", str(limit)), root, timeout=25)
     if code != 0:
         raise RuntimeError(err or "svn log の取得に失敗しました")
     commits, block = [], []
@@ -435,7 +497,7 @@ def _svn_log(root, limit=200):
 
 
 def _svn_diff(root, rel_path):
-    code, out, err = _run(["svn", "diff", rel_path], root)
+    code, out, err = _run(_svn_cmd("diff", rel_path), root)
     if code != 0:
         raise RuntimeError(err or "diffの取得に失敗しました")
     return out or "差分はありません"
@@ -451,7 +513,7 @@ def _svn_branches(root):
         return []
     current_url = info.get("URL", "")
     branches = [{"name": "trunk", "url": f"{repo_root_url}/trunk", "current": current_url == f"{repo_root_url}/trunk"}]
-    code, out, _ = _run(["svn", "list", f"{repo_root_url}/branches"], root, timeout=15)
+    code, out, _ = _run(_svn_cmd("list", f"{repo_root_url}/branches"), root, timeout=15)
     if code == 0:
         for line in out.splitlines():
             name = line.strip().rstrip("/")
@@ -462,7 +524,7 @@ def _svn_branches(root):
 
 
 def _svn_update(root, log):
-    code, out, err = _run(["svn", "update"], root, timeout=120)
+    code, out, err = _run(_svn_cmd("update"), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "updateに失敗しました")
@@ -473,14 +535,14 @@ def _svn_commit(root, log, message, paths):
         raise ValueError("コミットメッセージは必須です")
     if not paths:
         raise ValueError("コミット対象のファイルが選択されていません")
-    code, out, err = _run(["svn", "commit", "-m", message, "--"] + paths, root, timeout=120)
+    code, out, err = _run(_svn_cmd("commit", "-m", message, "--", *paths), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "commitに失敗しました")
 
 
 def _svn_merge(root, log, source_url):
-    code, out, err = _run(["svn", "merge", source_url], root, timeout=120)
+    code, out, err = _run(_svn_cmd("merge", source_url), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "マージに失敗しました（コンフリクトの可能性があります）")
@@ -492,7 +554,7 @@ def _svn_branch_create(root, log, name):
     if not repo_root_url:
         raise RuntimeError("リポジトリURLの取得に失敗しました")
     code, out, err = _run(
-        ["svn", "copy", f"{repo_root_url}/trunk", f"{repo_root_url}/branches/{name}", "-m", f"Create branch {name}"],
+        _svn_cmd("copy", f"{repo_root_url}/trunk", f"{repo_root_url}/branches/{name}", "-m", f"Create branch {name}"),
         root, timeout=60,
     )
     log(out + err)
@@ -501,7 +563,7 @@ def _svn_branch_create(root, log, name):
 
 
 def _svn_switch(root, log, url):
-    code, out, err = _run(["svn", "switch", url], root, timeout=120)
+    code, out, err = _run(_svn_cmd("switch", url), root, timeout=120)
     log(out + err)
     if code != 0:
         raise RuntimeError(err or "switchに失敗しました")
@@ -597,7 +659,10 @@ def register(app, data_dir, server_mode=False):
         user = auth.current_user() if SERVER_MODE else None
         result = {"repo": repo}
         if not repo["available"]:
-            result["error"] = f"{repo['type']} コマンドが見つかりません"
+            result["error"] = (
+                f"{repo['type']} コマンドが見つかりません"
+                f"（探索したパス: {repo.get('resolvedExecutable')}）"
+            )
             result["files"] = []
         else:
             try:

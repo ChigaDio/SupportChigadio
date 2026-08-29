@@ -67,6 +67,7 @@ import VersionBadge from './components/VersionBadge';
 import ThemeSwitcher from './components/ThemeSwitcher';
 
 import GitSvnGrid from './components/GitSvnGrid';
+import DocumentsGrid from './components/DocumentsGrid';
 
 function TopBar() {
   const { user, serverMode, logout } = useAuth();
@@ -206,7 +207,11 @@ function AppContent() {
       navigate('/project-stats');
     } else if (menu === 'PermissionMatrix') {
       navigate('/permission-matrix');
+    } else if(menu == 'Documents')
+    {
+      navigate('/documents')
     }
+    
     else {
       navigate('/');
     }
@@ -288,6 +293,8 @@ function AppContent() {
             <Route path="/announcements/new" element={<AnnouncementEditor />} />
             <Route path="/announcements/:id" element={<AnnouncementDetail />} />
             <Route path="/announcements/:id/edit" element={<AnnouncementEditor />} />
+
+            <Route path="/documents" element={<DocumentsGrid />} />
 
           </Routes>
         </Box>

@@ -187,6 +187,7 @@ imports:
  &#8226;   <a href="#pythonSrc.data_utils">pythonSrc.data_utils</a>
  &#8226;   <a href="#pythonSrc.dbgServer">pythonSrc.dbgServer</a>
  &#8226;   <a href="#pythonSrc.debugcommand">pythonSrc.debugcommand</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.download">pythonSrc.download</a>
  &#8226;   <a href="#pythonSrc.expansion">pythonSrc.expansion</a>
  &#8226;   <a href="#pythonSrc.file_locator">pythonSrc.file_locator</a>
@@ -207,6 +208,7 @@ imports:
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#pythonSrc.workspace_routes">pythonSrc.workspace_routes</a>
  &#8226;   <a href="#re">re</a>
  &#8226;   <a href="#re._casefix">re._casefix</a>
@@ -362,6 +364,8 @@ imported by:
     <a href="#_colorize">_colorize</a>
  &#8226;   <a href="#_pyrepl.readline">_pyrepl.readline</a>
  &#8226;   <a href="#_pyrepl.types">_pyrepl.types</a>
+ &#8226;   <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.coroutines">asyncio.coroutines</a>
  &#8226;   <a href="#blinker._utilities">blinker._utilities</a>
@@ -2531,7 +2535,8 @@ imported by:
   <a target="code" href="" type="text/plain"><tt>_typeshed</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
-    <a href="#click.testing">click.testing</a>
+    <a href="#asgiref.sync">asgiref.sync</a>
+ &#8226;   <a href="#click.testing">click.testing</a>
  &#8226;   <a href="#setuptools._distutils.dist">setuptools._distutils.dist</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#setuptools.command.bdist_egg">setuptools.command.bdist_egg</a>
@@ -2787,8 +2792,84 @@ imported by:
 
 <div class="node">
   <a name="asgiref"></a>
-  <a target="code" href="" type="text/plain"><tt>asgiref</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
+  <a target="code" href="///C:/Users/hetar/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages/asgiref/__init__.py" type="text/plain"><tt>asgiref</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imported by:
+    <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="asgiref.current_thread_executor"></a>
+  <a target="code" href="///C:/Users/hetar/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages/asgiref/current_thread_executor.py" type="text/plain"><tt>asgiref.current_thread_executor</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#'collections.abc'">'collections.abc'</a>
+ &#8226;   <a href="#asgiref">asgiref</a>
+ &#8226;   <a href="#collections">collections</a>
+ &#8226;   <a href="#concurrent.futures">concurrent.futures</a>
+ &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#asgiref.sync">asgiref.sync</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="asgiref.local"></a>
+  <a target="code" href="///C:/Users/hetar/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages/asgiref/local.py" type="text/plain"><tt>asgiref.local</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#asgiref">asgiref</a>
+ &#8226;   <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#contextlib">contextlib</a>
+ &#8226;   <a href="#contextvars">contextvars</a>
+ &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#asgiref.sync">asgiref.sync</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="asgiref.sync"></a>
+  <a target="code" href="///C:/Users/hetar/AppData/Local/Python/pythoncore-3.14-64/Lib/site-packages/asgiref/sync.py" type="text/plain"><tt>asgiref.sync</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#'collections.abc'">'collections.abc'</a>
+ &#8226;   <a href="#_typeshed">_typeshed</a>
+ &#8226;   <a href="#asgiref">asgiref</a>
+ &#8226;   <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#asyncio.coroutines">asyncio.coroutines</a>
+ &#8226;   <a href="#concurrent.futures">concurrent.futures</a>
+ &#8226;   <a href="#contextvars">contextvars</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#warnings">warnings</a>
+ &#8226;   <a href="#weakref">weakref</a>
+
+  </div>
+  <div class="import">
 imported by:
     <a href="#flask.app">flask.app</a>
 
@@ -2872,7 +2953,9 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#asyncio">asyncio</a>
+    <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
+ &#8226;   <a href="#asyncio">asyncio</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.base_futures">asyncio.base_futures</a>
  &#8226;   <a href="#asyncio.base_subprocess">asyncio.base_subprocess</a>
@@ -3085,7 +3168,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#asyncio">asyncio</a>
+    <a href="#asgiref.sync">asgiref.sync</a>
+ &#8226;   <a href="#asyncio">asyncio</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.base_tasks">asyncio.base_tasks</a>
  &#8226;   <a href="#asyncio.runners">asyncio.runners</a>
@@ -3872,6 +3956,7 @@ imported by:
  &#8226;   <a href="#http.server">http.server</a>
  &#8226;   <a href="#itsdangerous.encoding">itsdangerous.encoding</a>
  &#8226;   <a href="#multiprocessing.resource_tracker">multiprocessing.resource_tracker</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#secrets">secrets</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#ssl">ssl</a>
@@ -4918,6 +5003,7 @@ imported by:
  &#8226;   <a href="#_pyrepl.input">_pyrepl.input</a>
  &#8226;   <a href="#_pyrepl.utils">_pyrepl.utils</a>
  &#8226;   <a href="#app.py">app.py</a>
+ &#8226;   <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
  &#8226;   <a href="#ast">ast</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.base_subprocess">asyncio.base_subprocess</a>
@@ -5267,7 +5353,9 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#asyncio.base_events">asyncio.base_events</a>
+    <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
+ &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.futures">asyncio.futures</a>
  &#8226;   <a href="#asyncio.tasks">asyncio.tasks</a>
  &#8226;   <a href="#concurrent.futures">concurrent.futures</a>
@@ -5495,6 +5583,7 @@ imported by:
  &#8226;   <a href="#_pyrepl.historical_reader">_pyrepl.historical_reader</a>
  &#8226;   <a href="#_pyrepl.reader">_pyrepl.reader</a>
  &#8226;   <a href="#_threading_local">_threading_local</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
  &#8226;   <a href="#asyncio.staggered">asyncio.staggered</a>
  &#8226;   <a href="#bdb">bdb</a>
  &#8226;   <a href="#blinker.base">blinker.base</a>
@@ -5568,6 +5657,8 @@ imports:
   <div class="import">
 imported by:
     <a href="#_pydecimal">_pydecimal</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.events">asyncio.events</a>
  &#8226;   <a href="#asyncio.futures">asyncio.futures</a>
  &#8226;   <a href="#asyncio.runners">asyncio.runners</a>
@@ -5847,9 +5938,11 @@ imported by:
  &#8226;   <a href="#pythonSrc.activity_log">pythonSrc.activity_log</a>
  &#8226;   <a href="#pythonSrc.announcements">pythonSrc.announcements</a>
  &#8226;   <a href="#pythonSrc.auth">pythonSrc.auth</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.history">pythonSrc.history</a>
  &#8226;   <a href="#pythonSrc.trash">pythonSrc.trash</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#setuptools._vendor.tomli._re">setuptools._vendor.tomli._re</a>
  &#8226;   <a href="#setuptools.warnings">setuptools.warnings</a>
  &#8226;   <a href="#tomllib._re">tomllib._re</a>
@@ -5909,6 +6002,7 @@ imported by:
  &#8226;   <a href="#click.exceptions">click.exceptions</a>
  &#8226;   <a href="#pythonSrc.history">pythonSrc.history</a>
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#traceback">traceback</a>
  &#8226;   <a href="#unittest.case">unittest.case</a>
  &#8226;   <a href="#werkzeug.routing.exceptions">werkzeug.routing.exceptions</a>
@@ -9176,6 +9270,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.csproj_sync">pythonSrc.csproj_sync</a>
  &#8226;   <a href="#pythonSrc.customclassdata">pythonSrc.customclassdata</a>
  &#8226;   <a href="#pythonSrc.debugcommand">pythonSrc.debugcommand</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.download">pythonSrc.download</a>
  &#8226;   <a href="#pythonSrc.file_locator">pythonSrc.file_locator</a>
  &#8226;   <a href="#pythonSrc.generate_all">pythonSrc.generate_all</a>
@@ -9191,6 +9286,8 @@ imported by:
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#pythonSrc.workspace_routes">pythonSrc.workspace_routes</a>
 
   </div>
@@ -9205,7 +9302,7 @@ imports:
     <a href="#'_typeshed.wsgi'">'_typeshed.wsgi'</a>
  &#8226;   <a href="#'collections.abc'">'collections.abc'</a>
  &#8226;   <a href="#__future__">__future__</a>
- &#8226;   <a href="#asgiref">asgiref</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#click">click</a>
  &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#flask">flask</a>
@@ -9981,6 +10078,7 @@ imported by:
  &#8226;   <a href="#_pyrepl.simple_interact">_pyrepl.simple_interact</a>
  &#8226;   <a href="#_pyrepl.utils">_pyrepl.utils</a>
  &#8226;   <a href="#app.py">app.py</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.format_helpers">asyncio.format_helpers</a>
  &#8226;   <a href="#asyncio.runners">asyncio.runners</a>
  &#8226;   <a href="#asyncio.selector_events">asyncio.selector_events</a>
@@ -10311,6 +10409,7 @@ imported by:
  &#8226;   <a href="#itsdangerous.signer">itsdangerous.signer</a>
  &#8226;   <a href="#jinja2.bccache">jinja2.bccache</a>
  &#8226;   <a href="#jinja2.loaders">jinja2.loaders</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#random">random</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
@@ -10363,6 +10462,7 @@ imports:
 imported by:
     <a href="#itsdangerous.signer">itsdangerous.signer</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#secrets">secrets</a>
  &#8226;   <a href="#websockets.asyncio.server">websockets.asyncio.server</a>
  &#8226;   <a href="#websockets.legacy.auth">websockets.legacy.auth</a>
@@ -11160,6 +11260,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#_py_warnings">_py_warnings</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#ast">ast</a>
  &#8226;   <a href="#asyncio.coroutines">asyncio.coroutines</a>
  &#8226;   <a href="#asyncio.format_helpers">asyncio.format_helpers</a>
@@ -11270,6 +11371,7 @@ imported by:
  &#8226;   <a href="#pydoc">pydoc</a>
  &#8226;   <a href="#pythonSrc.class_data">pythonSrc.class_data</a>
  &#8226;   <a href="#pythonSrc.customclassdata">pythonSrc.customclassdata</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.matrix">pythonSrc.matrix</a>
  &#8226;   <a href="#pythonSrc.scenario">pythonSrc.scenario</a>
  &#8226;   <a href="#pythonSrc.spreadsheet_io">pythonSrc.spreadsheet_io</a>
@@ -12358,6 +12460,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.data_utils">pythonSrc.data_utils</a>
  &#8226;   <a href="#pythonSrc.dbgServer">pythonSrc.dbgServer</a>
  &#8226;   <a href="#pythonSrc.debugcommand">pythonSrc.debugcommand</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.generators">pythonSrc.generators</a>
  &#8226;   <a href="#pythonSrc.history">pythonSrc.history</a>
  &#8226;   <a href="#pythonSrc.lint_check">pythonSrc.lint_check</a>
@@ -12371,6 +12474,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.story_setting">pythonSrc.story_setting</a>
  &#8226;   <a href="#pythonSrc.trash">pythonSrc.trash</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools.config._validate_pyproject.error_reporting">setuptools.config._validate_pyproject.error_reporting</a>
  &#8226;   <a href="#setuptools.msvc">setuptools.msvc</a>
@@ -12754,6 +12858,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#http.server">http.server</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#werkzeug.datastructures.file_storage">werkzeug.datastructures.file_storage</a>
  &#8226;   <a href="#werkzeug.middleware.shared_data">werkzeug.middleware.shared_data</a>
@@ -13836,6 +13941,7 @@ imported by:
  &#8226;   <a href="#_strptime">_strptime</a>
  &#8226;   <a href="#app.py">app.py</a>
  &#8226;   <a href="#argparse">argparse</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.base_subprocess">asyncio.base_subprocess</a>
  &#8226;   <a href="#asyncio.coroutines">asyncio.coroutines</a>
@@ -13944,6 +14050,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.customclassdata">pythonSrc.customclassdata</a>
  &#8226;   <a href="#pythonSrc.data_utils">pythonSrc.data_utils</a>
  &#8226;   <a href="#pythonSrc.debugcommand">pythonSrc.debugcommand</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.download">pythonSrc.download</a>
  &#8226;   <a href="#pythonSrc.expansion">pythonSrc.expansion</a>
  &#8226;   <a href="#pythonSrc.file_locator">pythonSrc.file_locator</a>
@@ -13963,6 +14070,8 @@ imported by:
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#random">random</a>
  &#8226;   <a href="#runpy">runpy</a>
  &#8226;   <a href="#setuptools">setuptools</a>
@@ -15122,6 +15231,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.data_utils">pythonSrc.data_utils</a>
  &#8226;   <a href="#pythonSrc.dbgServer">pythonSrc.dbgServer</a>
  &#8226;   <a href="#pythonSrc.debugcommand">pythonSrc.debugcommand</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.download">pythonSrc.download</a>
  &#8226;   <a href="#pythonSrc.expansion">pythonSrc.expansion</a>
  &#8226;   <a href="#pythonSrc.file_locator">pythonSrc.file_locator</a>
@@ -15142,6 +15252,8 @@ imported by:
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#pythonSrc.workspace_routes">pythonSrc.workspace_routes</a>
 
   </div>
@@ -15297,10 +15409,13 @@ imported by:
     <a href="#app.py">app.py</a>
  &#8226;   <a href="#pythonSrc.announcements">pythonSrc.announcements</a>
  &#8226;   <a href="#pythonSrc.csproj_sync">pythonSrc.csproj_sync</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.download">pythonSrc.download</a>
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
 
   </div>
 
@@ -15564,6 +15679,33 @@ imports:
   <div class="import">
 imported by:
     <a href="#app.py">app.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="pythonSrc.documents"></a>
+  <a target="code" href="///D:/Desk/Tool/Chigadio/SupportChigadio/main-support/pythonSrc/documents.py" type="text/plain"><tt>pythonSrc.documents</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#datetime">datetime</a>
+ &#8226;   <a href="#flask">flask</a>
+ &#8226;   <a href="#io">io</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#mimetypes">mimetypes</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#pythonSrc">pythonSrc</a>
+ &#8226;   <a href="#pythonSrc.auth">pythonSrc.auth</a>
+ &#8226;   <a href="#pythonSrc.trash">pythonSrc.trash</a>
+ &#8226;   <a href="#werkzeug.utils">werkzeug.utils</a>
+ &#8226;   <a href="#zipfile">zipfile</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#app.py">app.py</a>
+ &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
 
   </div>
 
@@ -15955,6 +16097,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.class_data">pythonSrc.class_data</a>
  &#8226;   <a href="#pythonSrc.class_data_id">pythonSrc.class_data_id</a>
  &#8226;   <a href="#pythonSrc.customclassdata">pythonSrc.customclassdata</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.matrix">pythonSrc.matrix</a>
  &#8226;   <a href="#pythonSrc.state">pythonSrc.state</a>
 
@@ -15994,7 +16137,9 @@ imports:
  &#8226;   <a href="#pythonSrc">pythonSrc</a>
  &#8226;   <a href="#pythonSrc.activity_log">pythonSrc.activity_log</a>
  &#8226;   <a href="#pythonSrc.auth">pythonSrc.auth</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#pythonSrc.reference_check">pythonSrc.reference_check</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#re">re</a>
  &#8226;   <a href="#shutil">shutil</a>
  &#8226;   <a href="#subprocess">subprocess</a>
@@ -16033,6 +16178,54 @@ imports:
 imported by:
     <a href="#app.py">app.py</a>
  &#8226;   <a href="#pythonSrc.workspace_routes">pythonSrc.workspace_routes</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="pythonSrc.wiki"></a>
+  <a target="code" href="///D:/Desk/Tool/Chigadio/SupportChigadio/main-support/pythonSrc/wiki.py" type="text/plain"><tt>pythonSrc.wiki</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#datetime">datetime</a>
+ &#8226;   <a href="#difflib">difflib</a>
+ &#8226;   <a href="#flask">flask</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#pythonSrc">pythonSrc</a>
+ &#8226;   <a href="#pythonSrc.auth">pythonSrc.auth</a>
+ &#8226;   <a href="#re">re</a>
+ &#8226;   <a href="#shutil">shutil</a>
+ &#8226;   <a href="#threading">threading</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="pythonSrc.wiki_bridge"></a>
+  <a target="code" href="///D:/Desk/Tool/Chigadio/SupportChigadio/main-support/pythonSrc/wiki_bridge.py" type="text/plain"><tt>pythonSrc.wiki_bridge</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#base64">base64</a>
+ &#8226;   <a href="#flask">flask</a>
+ &#8226;   <a href="#hashlib">hashlib</a>
+ &#8226;   <a href="#hmac">hmac</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#pythonSrc">pythonSrc</a>
+ &#8226;   <a href="#pythonSrc.auth">pythonSrc.auth</a>
+ &#8226;   <a href="#time">time</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#app.py">app.py</a>
 
   </div>
 
@@ -16263,6 +16456,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.scenario">pythonSrc.scenario</a>
  &#8226;   <a href="#pythonSrc.state">pythonSrc.state</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#re">re</a>
  &#8226;   <a href="#re._casefix">re._casefix</a>
  &#8226;   <a href="#re._compiler">re._compiler</a>
@@ -20439,6 +20633,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.upload">pythonSrc.upload</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#setuptools._distutils.spawn">setuptools._distutils.spawn</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
  &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
@@ -20983,6 +21178,7 @@ imported by:
  &#8226;   <a href="#annotationlib">annotationlib</a>
  &#8226;   <a href="#app.py">app.py</a>
  &#8226;   <a href="#argparse">argparse</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#ast">ast</a>
  &#8226;   <a href="#asyncio">asyncio</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
@@ -21435,6 +21631,9 @@ imported by:
  &#8226;   <a href="#_pyrepl.unix_console">_pyrepl.unix_console</a>
  &#8226;   <a href="#_threading_local">_threading_local</a>
  &#8226;   <a href="#app.py">app.py</a>
+ &#8226;   <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.events">asyncio.events</a>
  &#8226;   <a href="#asyncio.mixins">asyncio.mixins</a>
@@ -21476,6 +21675,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.trash">pythonSrc.trash</a>
  &#8226;   <a href="#pythonSrc.vcs">pythonSrc.vcs</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki">pythonSrc.wiki</a>
  &#8226;   <a href="#queue">queue</a>
  &#8226;   <a href="#socketserver">socketserver</a>
  &#8226;   <a href="#subprocess">subprocess</a>
@@ -21538,6 +21738,7 @@ imported by:
  &#8226;   <a href="#pythonSrc.generate_all">pythonSrc.generate_all</a>
  &#8226;   <a href="#pythonSrc.trash">pythonSrc.trash</a>
  &#8226;   <a href="#pythonSrc.versioning">pythonSrc.versioning</a>
+ &#8226;   <a href="#pythonSrc.wiki_bridge">pythonSrc.wiki_bridge</a>
  &#8226;   <a href="#queue">queue</a>
  &#8226;   <a href="#random">random</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
@@ -22133,6 +22334,9 @@ imported by:
  &#8226;   <a href="#_pyrepl.utils">_pyrepl.utils</a>
  &#8226;   <a href="#_pyrepl.windows_console">_pyrepl.windows_console</a>
  &#8226;   <a href="#annotationlib">annotationlib</a>
+ &#8226;   <a href="#asgiref.current_thread_executor">asgiref.current_thread_executor</a>
+ &#8226;   <a href="#asgiref.local">asgiref.local</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#blinker._utilities">blinker._utilities</a>
  &#8226;   <a href="#blinker.base">blinker.base</a>
  &#8226;   <a href="#click._compat">click._compat</a>
@@ -23029,6 +23233,7 @@ imported by:
  &#8226;   <a href="#annotationlib">annotationlib</a>
  &#8226;   <a href="#app.py">app.py</a>
  &#8226;   <a href="#argparse">argparse</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio">asyncio</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.base_subprocess">asyncio.base_subprocess</a>
@@ -23181,6 +23386,7 @@ imports:
 imported by:
     <a href="#_threading_local">_threading_local</a>
  &#8226;   <a href="#app.py">app.py</a>
+ &#8226;   <a href="#asgiref.sync">asgiref.sync</a>
  &#8226;   <a href="#asyncio.base_events">asyncio.base_events</a>
  &#8226;   <a href="#asyncio.selector_events">asyncio.selector_events</a>
  &#8226;   <a href="#asyncio.streams">asyncio.streams</a>
@@ -26067,6 +26273,7 @@ imported by:
  &#8226;   <a href="#flask.helpers">flask.helpers</a>
  &#8226;   <a href="#flask.sansio.app">flask.sansio.app</a>
  &#8226;   <a href="#flask.sansio.scaffold">flask.sansio.scaffold</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#werkzeug.debug">werkzeug.debug</a>
  &#8226;   <a href="#werkzeug.debug.tbtools">werkzeug.debug.tbtools</a>
  &#8226;   <a href="#werkzeug.middleware.shared_data">werkzeug.middleware.shared_data</a>
@@ -26516,6 +26723,7 @@ imported by:
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#jinja2.environment">jinja2.environment</a>
  &#8226;   <a href="#pyi_rth_inspect.py">pyi_rth_inspect.py</a>
+ &#8226;   <a href="#pythonSrc.documents">pythonSrc.documents</a>
  &#8226;   <a href="#setuptools._distutils.archive_util">setuptools._distutils.archive_util</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#setuptools._vendor.zipp">setuptools._vendor.zipp</a>

@@ -183,9 +183,60 @@ const VECTOR_SIZES = { vector2: 2, vector3: 3, vector4: 4 };
  * リンター/コンパイラ双方から使い回せるようにするため）。
  * lineText: bit/color/bezier/dictionary（JSONリテラル）の復元に使う元の行文字列。
  */
-export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText) {
+export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText, subFields) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
+
+  // 配列型([] 付き)は、まず [ 値, 値, ... ] を分解してから、各要素を
+  // baseType(=[]を外した型)としてcoerceValueTokensに再帰させる。
+  // class_data型の配列(例: MyItem[])の場合、各要素が { フィールド名: 値, ... } になる。
+  if (isArrayType) {
+    if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACKET') {
+      return { value: undefined, error: `配列は [値, 値, ...] の形式で指定してください` };
+    }
+    const inner = valueTokens.slice(1, -1);
+    const items = splitByComma(inner);
+    const result = [];
+    for (const itemTokens of items) {
+      const { value, error } = coerceValueTokens(itemTokens, baseType, fieldOptions, lineText, subFields);
+      if (error) return { value: undefined, error };
+      result.push(value);
+    }
+    return { value: result, error: null };
+  }
+
+  // class_data型(ネストした構造体): { フィールド名: 値, フィールド名2: 値2, ... } の
+  // 独自オブジェクトリテラルとして扱う(JSON.parseではなく、subFieldsのスキーマに従って
+  // 1つ1つcoerceValueTokensを再帰適用する。フィールド名の予測変換もこれに合わせて
+  // getCompletionsAt側で対応している)。
+  if (Array.isArray(subFields) && subFields.length > 0) {
+    if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
+      return { value: undefined, error: `${fieldType}は { フィールド名: 値, ... } の形式で指定してください` };
+    }
+    if (valueTokens[valueTokens.length - 1].type !== 'RBRACE') {
+      return { value: undefined, error: '{ が閉じられていません' };
+    }
+    const inner = valueTokens.slice(1, -1);
+    const groups = splitByComma(inner);
+    const subFieldByName = new Map(subFields.map((f) => [f.name, f]));
+    const result = {};
+    for (const g of groups) {
+      if (g.length === 0) continue;
+      if (g[0].type !== 'IDENT' || g[1]?.type !== 'COLON') {
+        return { value: undefined, error: `{ フィールド名: 値 } の形式で指定してください（例: { x: 1, y: 2 }）` };
+      }
+      const subName = g[0].value;
+      const subField = subFieldByName.get(subName);
+      if (!subField) {
+        return { value: undefined, error: `存在しないフィールドです: ${subName}` };
+      }
+      const subValueTokens = g.slice(2);
+      const { value, error } = coerceValueTokens(subValueTokens, subField.type, subField.options, lineText, subField.subFields);
+      if (error) return { value: undefined, error: `${subName}: ${error}` };
+      result[subName] = value;
+    }
+    return { value: result, error: null };
+  }
 
   if (baseType === 'bit' || baseType === 'color' || baseType === 'bezier' || baseType === 'dictionary') {
     if (valueTokens.length === 0) return { value: undefined, error: '値が指定されていません' };
@@ -197,21 +248,6 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     } catch (e) {
       return { value: undefined, error: `${baseType}はJSON形式で指定してください（例: {"size":8,"bits":[0,2]}）` };
     }
-  }
-
-  if (isArrayType) {
-    if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACKET') {
-      return { value: undefined, error: `配列は [値, 値, ...] の形式で指定してください` };
-    }
-    const inner = valueTokens.slice(1, -1);
-    const items = splitByComma(inner);
-    const result = [];
-    for (const itemTokens of items) {
-      const { value, error } = coerceValueTokens(itemTokens, baseType, fieldOptions, lineText);
-      if (error) return { value: undefined, error };
-      result.push(value);
-    }
-    return { value: result, error: null };
   }
 
   if (baseType in VECTOR_SIZES) {
@@ -261,9 +297,24 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
 
   // string / enum / class_data_id / custom_class_data_id / voice_ref など:
   // 文字列としてそのまま扱う。field.optionsがあれば候補チェックする。
+  // enum / class_data_id は "TypeName.Property"（例: FadeID.In）の完全修飾形式で
+  // 保存する規約になっている(GUI側のAutocompleteやC#生成側もこの形式を前提としている)。
+  // DSL側では入力の手間を減らすため "In" のような短縮形も許容し、内部的には
+  // 完全修飾形式へ正規化してから保存する。
   const raw = tok.type === 'STRING' ? stripQuotes(tok.value) : tok.value;
-  if (Array.isArray(fieldOptions) && fieldOptions.length > 0 && !fieldOptions.includes(raw)) {
-    return { value: raw, error: `候補にありません: ${raw}（候補: ${fieldOptions.slice(0, 5).join(', ')}${fieldOptions.length > 5 ? '...' : ''}）`, warningOnly: true };
+  if (Array.isArray(fieldOptions) && fieldOptions.length > 0) {
+    if (fieldOptions.includes(raw)) {
+      return { value: raw, error: null };
+    }
+    const qualified = `${fieldType}.${raw}`;
+    if (fieldOptions.includes(qualified)) {
+      return { value: qualified, error: null };
+    }
+    return {
+      value: raw,
+      error: `候補にありません: ${raw}（候補: ${fieldOptions.slice(0, 5).join(', ')}${fieldOptions.length > 5 ? '...' : ''}）`,
+      warningOnly: true,
+    };
   }
   return { value: raw, error: null };
 }
@@ -273,8 +324,8 @@ function splitByComma(tokens) {
   let current = [];
   let depth = 0;
   for (const t of tokens) {
-    if (t.type === 'LPAREN' || t.type === 'LBRACKET') depth += 1;
-    if (t.type === 'RPAREN' || t.type === 'RBRACKET') depth -= 1;
+    if (t.type === 'LPAREN' || t.type === 'LBRACKET' || t.type === 'LBRACE') depth += 1;
+    if (t.type === 'RPAREN' || t.type === 'RBRACKET' || t.type === 'RBRACE') depth -= 1;
     if (t.type === 'COMMA' && depth === 0) {
       groups.push(current);
       current = [];
@@ -290,9 +341,19 @@ function splitByComma(tokens) {
 // 値のシリアライズ（実値 → DSLソーステキスト）。decompile用。
 // ============================================================
 
-function serializeValue(value, fieldType) {
+function serializeValue(value, fieldType, subFields) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
+
+  if (Array.isArray(subFields) && subFields.length > 0) {
+    if (isArrayType) {
+      const arr = Array.isArray(value) ? value : [];
+      return `[${arr.map((v) => serializeValue(v, baseType, subFields)).join(', ')}]`;
+    }
+    const obj = value && typeof value === 'object' ? value : {};
+    const parts = subFields.map((f) => `${f.name}: ${serializeValue(obj[f.name], f.type, f.subFields)}`);
+    return `{ ${parts.join(', ')} }`;
+  }
 
   if (isArrayType) {
     const arr = Array.isArray(value) ? value : [];
@@ -372,7 +433,7 @@ export function compileDocument(text, roleSchemas, existingRoles = []) {
       }
       seenFields.add(fieldName);
 
-      const { value, error, warningOnly } = coerceValueTokens(arg.valueTokens, field.type, field.options, node.raw);
+      const { value, error, warningOnly } = coerceValueTokens(arg.valueTokens, field.type, field.options, node.raw, field.subFields);
       if (error) {
         diagnostics.push(new DslIssue(error, arg.from, arg.to, node.line, warningOnly ? 'warning' : 'error'));
       }
@@ -402,7 +463,7 @@ export function decompileRoles(roles, roleSchemas) {
     for (const field of role.data || []) {
       const fieldDef = schema?.fields?.find((f) => f.name === field.name);
       const type = fieldDef?.type || field.type || 'string';
-      parts.push(`${field.name}=${serializeValue(field.value, type)}`);
+      parts.push(`${field.name}=${serializeValue(field.value, type, fieldDef?.subFields)}`);
     }
     lines.push(parts.join(' '));
   }
@@ -422,6 +483,160 @@ export function lintDocument(text, roleSchemas) {
 // 補完候補の算出（Autocomplete用）
 // cursorLine: 0-indexed行番号, cursorCh: 行内の文字位置
 // ============================================================
+
+// class_data型(ネストした構造体)の { フィールド名: 値, ... } リテラルの中で、
+// カーソル位置に応じてフィールド名 or 値の候補を返す(入れ子のclass_dataにも再帰対応)。
+// valueTokens: このフィールドの値領域全体のトークン列（先頭が '{' のはず）。
+// regionEnd: この値がまだ閉じられていない('}'が無い)場合に、どこまでを
+//   「入力中の領域」とみなすかの文字位置(行末、または親の領域の終端)。
+function completeObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd) {
+  if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
+    // '{' を打つ前の位置。ここでは候補を出さない({の入力を促す形)。
+    return [];
+  }
+
+  // 対応する '}' を探す(depthを見て、ネストした{}を跨がないようにする)
+  let depth = 0;
+  let closeIdx = -1;
+  for (let k = 0; k < valueTokens.length; k++) {
+    if (valueTokens[k].type === 'LBRACE') depth += 1;
+    if (valueTokens[k].type === 'RBRACE') {
+      depth -= 1;
+      if (depth === 0) { closeIdx = k; break; }
+    }
+  }
+  const effectiveEnd = closeIdx >= 0 ? valueTokens[closeIdx].from : regionEnd;
+  const inner = valueTokens.slice(1, closeIdx >= 0 ? closeIdx : valueTokens.length);
+
+  // トップレベルのカンマで区切り、各エントリの [start, end) をカンマの位置を基準に求める。
+  // (カンマの直後〜次エントリの手前は、どのエントリにも属さない「新しいキーの入力開始位置」になる)
+  const entries = [];
+  let current = [];
+  let entryStart = null;
+  let braceDepth = 0;
+  for (const tok of inner) {
+    if (entryStart === null) entryStart = tok.from;
+    if (tok.type === 'LPAREN' || tok.type === 'LBRACKET' || tok.type === 'LBRACE') braceDepth += 1;
+    if (tok.type === 'RPAREN' || tok.type === 'RBRACKET' || tok.type === 'RBRACE') braceDepth -= 1;
+    if (tok.type === 'COMMA' && braceDepth === 0) {
+      entries.push({ tokens: current, start: entryStart, end: tok.from });
+      current = [];
+      entryStart = null;
+    } else {
+      current.push(tok);
+    }
+  }
+  if (current.length > 0) {
+    entries.push({ tokens: current, start: entryStart, end: effectiveEnd });
+  }
+
+  const usedNames = new Set(entries.map((e) => e.tokens[0]?.value).filter(Boolean));
+
+  const cursorEntry = entries.find((e) => cursorCh >= e.start && cursorCh <= e.end);
+
+  if (!cursorEntry) {
+    // カンマの直後や { の直後など、新しいキーを入力し始める位置 → フィールド名候補
+    return subFields
+      .filter((f) => !usedNames.has(f.name))
+      .map((f) => ({ label: `${f.name}: `, type: 'field', detail: f.type }));
+  }
+
+  const cursorGroup = cursorEntry.tokens;
+  const keyTok = cursorGroup[0];
+  if (!keyTok) {
+    return subFields
+      .filter((f) => !usedNames.has(f.name))
+      .map((f) => ({ label: `${f.name}: `, type: 'field', detail: f.type }));
+  }
+  const colonTok = cursorGroup[1];
+  if (keyTok.type !== 'IDENT' || !colonTok || colonTok.type !== 'COLON' || cursorCh <= keyTok.to
+    || (cursorCh > keyTok.to && cursorCh <= colonTok.from)) {
+    // ':' より前(キー名を入力中) → フィールド名候補
+    const prefix = cursorCh > keyTok.from ? line.slice(keyTok.from, cursorCh) : '';
+    return subFields
+      .filter((f) => f.name === keyTok.value || !usedNames.has(f.name))
+      .filter((f) => f.name.toLowerCase().startsWith(prefix.toLowerCase()))
+      .map((f) => ({ label: `${f.name}: `, type: 'field', detail: f.type }));
+  }
+
+  // ':' より後ろ(値を入力中) → そのサブフィールドの型に応じた値候補
+  const subField = subFields.find((f) => f.name === keyTok.value);
+  if (!subField) return [];
+  const subValueTokens = cursorGroup.slice(2);
+
+  if (Array.isArray(subField.subFields) && subField.subFields.length > 0) {
+    if ((subField.type || '').endsWith('[]')) {
+      return completeArrayOfObjectLiteral(line, subValueTokens, cursorCh, subField.subFields, cursorEntry.end);
+    }
+    return completeObjectLiteral(line, subValueTokens, cursorCh, subField.subFields, cursorEntry.end);
+  }
+  return completeScalarValue(line, subValueTokens, cursorCh, subField);
+}
+
+// class_data型の配列(例: MyItem[])向け: [ {...}, {...} ] の中で、カーソルが
+// どの要素の中にいるかを判定し、その要素の { フィールド名: 値, ... } をcompleteObjectLiteralに委譲する。
+function completeArrayOfObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd) {
+  if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACKET') return [];
+
+  let depth = 0;
+  let closeIdx = -1;
+  for (let k = 0; k < valueTokens.length; k++) {
+    if (valueTokens[k].type === 'LBRACKET') depth += 1;
+    if (valueTokens[k].type === 'RBRACKET') {
+      depth -= 1;
+      if (depth === 0) { closeIdx = k; break; }
+    }
+  }
+  const effectiveEnd = closeIdx >= 0 ? valueTokens[closeIdx].from : regionEnd;
+  const inner = valueTokens.slice(1, closeIdx >= 0 ? closeIdx : valueTokens.length);
+
+  const entries = [];
+  let current = [];
+  let entryStart = null;
+  let braceDepth = 0;
+  for (const tok of inner) {
+    if (entryStart === null) entryStart = tok.from;
+    if (tok.type === 'LPAREN' || tok.type === 'LBRACKET' || tok.type === 'LBRACE') braceDepth += 1;
+    if (tok.type === 'RPAREN' || tok.type === 'RBRACKET' || tok.type === 'RBRACE') braceDepth -= 1;
+    if (tok.type === 'COMMA' && braceDepth === 0) {
+      entries.push({ tokens: current, start: entryStart, end: tok.from });
+      current = [];
+      entryStart = null;
+    } else {
+      current.push(tok);
+    }
+  }
+  if (current.length > 0) entries.push({ tokens: current, start: entryStart, end: effectiveEnd });
+
+  const cursorEntry = entries.find((e) => cursorCh >= e.start && cursorCh <= e.end);
+  if (!cursorEntry) return []; // 新しい要素の先頭( "{" をまだ打っていない) → 候補なし
+  return completeObjectLiteral(line, cursorEntry.tokens, cursorCh, subFields, cursorEntry.end);
+}
+
+// enum / class_data_id 等、"TypeName.Property" の完全修飾形式で保存するフィールドの
+// 値予測変換・boolの true/false 候補などをまとめて処理する。
+function completeScalarValue(line, valueTokens, cursorCh, field) {
+  const lastTok = valueTokens[valueTokens.length - 1];
+  const typedPrefix = lastTok && cursorCh > lastTok.from ? line.slice(lastTok.from, cursorCh) : '';
+  if (field.options?.length) {
+    // field.options は既に "TypeName.Property" の完全修飾形式で渡ってくる
+    // (generate_role_form_schema参照)。"In" のように短縮して打っている途中でも
+    // 補完候補としては完全修飾形式("FadeID.In")を出す。
+    const prefixLower = typedPrefix.toLowerCase();
+    return field.options
+      .filter((o) => {
+        const bare = o.includes('.') ? o.slice(o.indexOf('.') + 1) : o;
+        return o.toLowerCase().startsWith(prefixLower) || bare.toLowerCase().startsWith(prefixLower);
+      })
+      .map((o) => ({ label: o, type: 'value' }));
+  }
+  if (field.type === 'bool') {
+    return ['true', 'false']
+      .filter((o) => o.startsWith(typedPrefix))
+      .map((o) => ({ label: o, type: 'value' }));
+  }
+  return [];
+}
 
 export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas) {
   const lines = text.split('\n');
@@ -446,30 +661,33 @@ export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSche
   const schema = roleSchemas[roleName];
   if (!schema) return [];
 
-  // "fieldName=値" の値部分（=の直後〜値トークンの終わりまで）にカーソルがあれば値候補を返す
+  // "fieldName=値" の値部分にカーソルがあれば値候補を返す。
+  // 値領域は collectValueTokens と同じ括弧マッチングで求める(閉じている場合は
+  // 対応する閉じ括弧まで、閉じていない場合は行末までを「入力中の値」とみなす)。
   for (let i = 1; i < tokens.length; i++) {
     const t = tokens[i];
     if (t.type !== 'EQUALS') continue;
-    const valueToken = tokens[i + 1];
-    const regionStart = t.to;
-    const regionEnd = valueToken ? valueToken.to : Infinity;
-    if (cursorCh < regionStart || cursorCh > regionEnd) continue;
-
     const fieldName = tokens[i - 1]?.value;
     const field = schema.fields.find((f) => f.name === fieldName);
-    if (!field) return [];
-    const prefix = valueToken && cursorCh > valueToken.from ? line.slice(valueToken.from, cursorCh) : '';
-    if (field.options?.length) {
-      return field.options
-        .filter((o) => o.toLowerCase().startsWith(prefix.toLowerCase()))
-        .map((o) => ({ label: o, type: 'value' }));
+    if (!field) continue;
+
+    const { valueTokens, error: spanError } = collectValueTokens(tokens, i + 1);
+    const isUnclosed = !!spanError && spanError.includes('閉じられていません');
+    const regionStart = t.to;
+    const regionEnd = isUnclosed
+      ? line.length
+      : (valueTokens.length > 0 ? valueTokens[valueTokens.length - 1].to : regionStart);
+    if (cursorCh < regionStart || cursorCh > regionEnd) continue;
+
+    // class_data型(ネストした構造体): { フィールド名: 値, ... } の中を予測変換する
+    if (Array.isArray(field.subFields) && field.subFields.length > 0) {
+      if ((field.type || '').endsWith('[]')) {
+        return completeArrayOfObjectLiteral(line, valueTokens, cursorCh, field.subFields, regionEnd);
+      }
+      return completeObjectLiteral(line, valueTokens, cursorCh, field.subFields, regionEnd);
     }
-    if (field.type === 'bool') {
-      return ['true', 'false']
-        .filter((o) => o.startsWith(prefix))
-        .map((o) => ({ label: o, type: 'value' }));
-    }
-    return [];
+
+    return completeScalarValue(line, valueTokens, cursorCh, field);
   }
 
   // それ以外（Role名の後、いずれの"="の値域にも該当しない）→ フィールド名を補完
