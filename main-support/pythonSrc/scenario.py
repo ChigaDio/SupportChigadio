@@ -1158,16 +1158,19 @@ namespace GameCore.Scenario
             
     if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioExecuteData.cs")):
         code_str = """
-using UnityEngine;
 
+using UnityEngine;
+using GameCore.Scenario.StorySetting;
 
 /// <summary>
 /// ExecuteData
 /// </summary>
-public class ScenarioExecuteData
+public class ScenarioExecuteData : BaseScenarioExecuteData
 {
     
 }
+
+        
 
         """
         
@@ -1176,7 +1179,6 @@ public class ScenarioExecuteData
     
     if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioManagerCore.cs")):
         code_str = """
-
 using Cysharp.Threading.Tasks;
 using GameCore;
 using GameCore.Scenario;
@@ -1277,6 +1279,10 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         {
             while ((!master.IsExecuteFinish || (is_event_change || is_event_group_change)) && !linkedCts.IsCancellationRequested)
             {
+                if(value_execute_data != null)
+                {
+                    await value_execute_data.LoadDatabase(event_play_name,event_sub_name);
+                }
                 master.AllRelease();
                 is_event_change = is_event_group_change = is_event_sub_group_change = false;
 
@@ -1289,6 +1295,11 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
                 else
                 {
                     await LoadAndExecuteWithFileStream(seekPos, linkedCts);
+                }
+
+                if(value_execute_data != null)
+                {
+                    await value_execute_data.UnLoadDatabase();
                 }
 
                 await UniTask.Yield(PlayerLoopTiming.Update, linkedCts.Token);
@@ -1368,14 +1379,42 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
     }
 }
 
-
-        
-
-
         """
         with open(os.path.join(parent_path,SCENARIO_DATA,"script","ScenarioManagerCore.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
+
+    if not os.path.exists(os.path.join(parent_path,SCENARIO_DATA,"script", "BaseScenarioExecuteData.cs")):
+        code_str = """
+
+
+using UnityEngine;
+using GameCore.Scenario.StorySetting;
+using System.Threading;
+using Cysharp.Threading.Tasks;
+public class BaseScenarioExecuteData
+{
+    private StorySettingDatabase database;
+    public  StorySettingDatabase DataBase => database;
+
+    public void LoadDatabase(string eventId, string subId, GroupCategory category = GroupCategory.Game)
+    {
+        await StorySettingCore.Instance.LoadForSubEventAsync(eventId,subId,category);
+
+        database =.DataBase;
+    }
+
+    public void UnLoadDatabase()
+    {
+        database = null;
+
+        StorySettingCore.Instance.UnloadAll();
+    }
+}
+
+"""
+        with open(os.path.join(parent_path,SCENARIO_DATA,"script", "BaseScenarioExecuteData.cs"), 'w', encoding='utf-8') as f:
+            f.write(code_str)
 # app.pyから借用/統合するための関数 (実際はapp.pyからインポート)
 def get_enum_values():
     enum_dir = os.path.join(DATA_DIR, 'enum')  # app.pyのENUM
@@ -1461,7 +1500,7 @@ def _get_class_data_id_options(table_name, data_dir=None):
     try:
         with open(class_id_path, 'r', encoding='utf-8') as f:
             table_data = json.load(f)
-        return [r.get('enum_property') + "ID" for r in table_data.get('rows', []) if r.get('enum_property')]
+        return [r.get('enum_property') for r in table_data.get('rows', []) if r.get('enum_property')]
     except Exception:
         return []
 
@@ -1572,7 +1611,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
             # enumと同じく "TypeName.Property"(例: FadeID.In) の完全修飾形式で保存する。
             # 未選択を表す "TypeName.None" を先頭に必ず含める。
             raw_options = _get_class_data_id_options(var_type, data_dir)
-            field['options'] = [f"{var_type}ID.None"] + [f"{var_type}.{o}" for o in raw_options]
+            field['options'] = [f"{var_type}ID.None"] + [f"{var_type}ID.{o}" for o in raw_options]
 
         # class_data: ネストしたClassData
         elif var_type in class_names:
