@@ -271,7 +271,14 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   }
 
   if (valueTokens.length !== 1) {
-    return { value: undefined, error: `値の形式が不正です` };
+    if (baseType === 'string') {
+      return {
+        value: undefined,
+        error: '文字列は "" で囲んでください（例: text="Hello {name}"）。{ } , ( ) # = などの記号を含む文字列は、'
+          + '必ず "" で囲む必要があります',
+      };
+    }
+    return { value: undefined, error: `値の形式が不正です（"" で囲んでいない文字列に、区切り記号として扱われる文字（{ } , ( ) # = など）が含まれていませんか？）` };
   }
   const tok = valueTokens[0];
 
@@ -301,6 +308,17 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   // 保存する規約になっている(GUI側のAutocompleteやC#生成側もこの形式を前提としている)。
   // DSL側では入力の手間を減らすため "In" のような短縮形も許容し、内部的には
   // 完全修飾形式へ正規化してから保存する。
+  // ただし素の "string"型(自由入力のテキストフィールド)だけは、必ず ""
+  // で囲むことを必須にする。バレワードのまま許してしまうと、値の中に
+  // { } , ( ) # = のようなDSL予約記号が含まれた瞬間に複数トークンへ分裂して
+  // しまい、原因の分かりにくい構文エラーになるため（enum等は元々候補が
+  // 短い識別子中心なので、この問題が起きにくくバレワードを許容し続ける）。
+  if (baseType === 'string' && tok.type !== 'STRING') {
+    return {
+      value: undefined,
+      error: '文字列は "" で囲んでください（例: text="Hello {name}"）',
+    };
+  }
   const raw = tok.type === 'STRING' ? stripQuotes(tok.value) : tok.value;
   if (Array.isArray(fieldOptions) && fieldOptions.length > 0) {
     if (fieldOptions.includes(raw)) {
@@ -374,7 +392,16 @@ function serializeValue(value, fieldType, subFields) {
   }
   // string / enum / ID参照 / char 等
   const s = value === undefined || value === null ? '' : String(value);
-  if (s === '' || /[\s"#=()[\],]/.test(s)) {
+  // fieldType(baseType)が素の "string"（自由入力のテキストフィールド）の場合は、
+  // 中身に関わらず必ず "" で囲む。中に { } , ( ) 等のDSL予約記号が含まれていても
+  // 安全に往復できるようにするため（例: talk_text="こんにちは{name}さん"）。
+  if (baseType === 'string') {
+    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+  // enum / class_data_id / voice_ref / char など、通常は素のまま（無引用）で
+  // 保存したい型については、DSLの予約記号（空白 " # = ( ) [ ] , { } :）を
+  // 1つでも含む場合のみ "" で囲む。
+  if (s === '' || /[\s"#=()[\]{},:]/.test(s)) {
     return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   }
   return s;
@@ -620,15 +647,29 @@ function completeScalarValue(line, valueTokens, cursorCh, field) {
   const typedPrefix = lastTok && cursorCh > lastTok.from ? line.slice(lastTok.from, cursorCh) : '';
   if (field.options?.length) {
     // field.options は既に "TypeName.Property" の完全修飾形式で渡ってくる
-    // (generate_role_form_schema参照)。"In" のように短縮して打っている途中でも
-    // 補完候補としては完全修飾形式("FadeID.In")を出す。
+    // (generate_role_form_schema参照)。例えば "CharacterID.Test" に対して、
+    //   ・"Character" のように型名側から打ち始めた場合(前方一致)
+    //   ・"Test" のようにプロパティ名(ドットの後ろ)だけを打った場合(前方一致の省略形)
+    //   ・"est" のように途中の文字列だけを打った場合(部分一致。あいまい補完)
+    // のいずれでも "CharacterID.Test" が候補に出るようにする。
+    // 前方一致のほうが精度が高いので、部分一致より前に並べる。
     const prefixLower = typedPrefix.toLowerCase();
-    return field.options
-      .filter((o) => {
-        const bare = o.includes('.') ? o.slice(o.indexOf('.') + 1) : o;
-        return o.toLowerCase().startsWith(prefixLower) || bare.toLowerCase().startsWith(prefixLower);
-      })
-      .map((o) => ({ label: o, type: 'value' }));
+    if (!prefixLower) {
+      return field.options.map((o) => ({ label: o, type: 'value' }));
+    }
+    const startsWithMatches = [];
+    const containsMatches = [];
+    field.options.forEach((o) => {
+      const oLower = o.toLowerCase();
+      const bare = o.includes('.') ? o.slice(o.indexOf('.') + 1) : o;
+      const bareLower = bare.toLowerCase();
+      if (oLower.startsWith(prefixLower) || bareLower.startsWith(prefixLower)) {
+        startsWithMatches.push(o);
+      } else if (oLower.includes(prefixLower) || bareLower.includes(prefixLower)) {
+        containsMatches.push(o);
+      }
+    });
+    return [...startsWithMatches, ...containsMatches].map((o) => ({ label: o, type: 'value' }));
   }
   if (field.type === 'bool') {
     return ['true', 'false']

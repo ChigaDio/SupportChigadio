@@ -400,7 +400,16 @@ const RoleDataDrawer = ({
   // 補完が一切出ない」という不具合が起きていた。
   // → ここで取得した最新スキーマを freshSchemas に貯め、DSL側はこちらを優先して使う。
   const [freshSchemas, setFreshSchemas] = useState({});
-  const effectiveSchemas = { ...roleFormSchemas, ...freshSchemas };
+  // effectiveSchemas / roleNamesForDsl は、スプレッド演算子やmap()で毎レンダー
+  // 新しいオブジェクト/配列を作ってしまうと、ScenarioTransactionCodeEditorの
+  // extensions(useMemo)の依存配列が毎回変化してしまい、1文字入力するたびに
+  // CodeMirrorの拡張機能(リンター・補完)がまるごと再構築されてキー入力が
+  // もたつく原因になる。roleFormSchemas/freshSchemasの中身が変わった時だけ
+  // 再生成されるようメモ化する。
+  const effectiveSchemas = useMemo(
+    () => ({ ...roleFormSchemas, ...freshSchemas }),
+    [roleFormSchemas, freshSchemas]
+  );
 
   // ── フォームの初期化完了フラグ ──
   // BaseRoleInputFormは、propsのinitialDataを元に「既存値 → 保存済みデフォルト値 →
@@ -415,7 +424,10 @@ const RoleDataDrawer = ({
   // 無効化することで、空データでの保存を防ぐ。
   const [formReady, setFormReady] = useState({});
 
-  const roleNamesForDsl = Object.keys(effectiveSchemas || {});
+  const roleNamesForDsl = useMemo(
+    () => Object.keys(effectiveSchemas || {}),
+    [effectiveSchemas]
+  );
 
   // ロールフォーム読み込み（重複防止）
   useEffect(() => {
@@ -1079,6 +1091,14 @@ function ScenarioEventTransition() {
 
   const [copiedNode, setCopiedNode] = useState(null);
   const [globalRoles, setGlobalRoles] = useState([]);
+  // globalRoles.map(...) を毎レンダー新しい配列として作ってしまうと、
+  // ScenarioTransactionCodeEditorのextensions(useMemo)が毎回作り直されて
+  // 入力(1文字打つたび)がもたつく原因になるため、globalRoles自体が
+  // 変わった時だけ再生成されるようメモ化する（全体編集/Sub編集ダイアログ共通）。
+  const globalRoleNamesForDsl = useMemo(
+    () => globalRoles.map((r) => r.name),
+    [globalRoles]
+  );
   const [roleDataCache, setRoleDataCache] = useState({});
   const [roleFormSchemas, setRoleFormSchemas] = useState({});
 
@@ -2214,7 +2234,7 @@ function ScenarioEventTransition() {
               <ScenarioTransactionCodeEditor
                 value={allEditText}
                 onChange={setAllEditText}
-                roleNames={globalRoles.map((r) => r.name)}
+                roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
                 height="60vh"
               />
@@ -2282,7 +2302,7 @@ function ScenarioEventTransition() {
               <ScenarioTransactionCodeEditor
                 value={subEditText}
                 onChange={setSubEditText}
-                roleNames={globalRoles.map((r) => r.name)}
+                roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
                 height="60vh"
               />
