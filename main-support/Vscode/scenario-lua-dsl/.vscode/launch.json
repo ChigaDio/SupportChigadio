@@ -1,0 +1,17 @@
+{
+  // F5(またはデバッグの実行と開始)を押したときに使われる設定。
+  // これがないと、VSCodeは何を起動すればいいか分からず、開いているファイルの種類から
+  // 推測しようとして「JSONのデバッグ環境がありません」のような無関係なエラーを出すことがある。
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "拡張機能を実行 (Run Extension)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": []
+    }
+  ]
+}

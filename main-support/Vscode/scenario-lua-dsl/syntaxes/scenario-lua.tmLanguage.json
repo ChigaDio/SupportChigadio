@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Scenario Lua DSL",
+  "scopeName": "source.scenario-lua",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#bool" },
+    { "include": "#role-name" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.scenario-lua"
+    },
+    "string": {
+      "match": "\"(?:[^\"\\\\]|\\\\.)*\"",
+      "name": "string.quoted.double.scenario-lua"
+    },
+    "number": {
+      "match": "-?\\d+(?:\\.\\d+)?",
+      "name": "constant.numeric.scenario-lua"
+    },
+    "bool": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.scenario-lua"
+    },
+    "role-name": {
+      "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "entity.name.function.scenario-lua keyword.control.scenario-lua" }
+      }
+    },
+    "punctuation": {
+      "match": "[(){}\\[\\],:=]",
+      "name": "punctuation.scenario-lua"
+    }
+  }
+}

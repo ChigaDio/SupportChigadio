@@ -1,0 +1,110 @@
+{
+  "name": "scenario-lua-dsl",
+  "displayName": "Scenario Lua DSL Editor",
+  "description": "シナリオイベントのTransactionを、VSCode上でLua風テキストDSLとして直接編集・保存できるようにする拡張機能（Web版の「全体編集」「Sub編集」と同じDSL・同じルールを使用）。",
+  "version": "0.1.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Other"],
+  "activationEvents": [
+    "onView:scenarioLuaDsl.grid",
+    "onCommand:scenarioLuaDsl.openEvent",
+    "onCommand:scenarioLuaDsl.refreshDocument",
+    "onCommand:scenarioLuaDsl.toggleAllowCreateNewGroups",
+    "onFileSystem:scenario-lua"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "scenarioLuaDsl",
+          "title": "Scenario Lua",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "scenarioLuaDsl": [
+        {
+          "id": "scenarioLuaDsl.grid",
+          "name": "シナリオ一覧",
+          "type": "webview",
+          "icon": "media/icon.svg",
+          "contextualTitle": "Scenario Lua"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "id": "scenario-lua",
+        "aliases": ["Scenario Lua DSL", "scenario-lua"],
+        "extensions": [".scenariolua"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "scenario-lua",
+        "scopeName": "source.scenario-lua",
+        "path": "./syntaxes/scenario-lua.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "scenarioLuaDsl.openEvent",
+        "title": "Scenario Lua: どのイベント/Subを編集するか選ぶ (グリッドUIを開く)",
+        "category": "Scenario Lua"
+      },
+      {
+        "command": "scenarioLuaDsl.refreshDocument",
+        "title": "Scenario Lua: サーバーから最新の内容を再取得 (Refresh from Server)",
+        "category": "Scenario Lua"
+      },
+      {
+        "command": "scenarioLuaDsl.toggleAllowCreateNewGroups",
+        "title": "Scenario Lua: 新しいグループの追加を許可する / しない を切り替え (Toggle Allow New Groups)",
+        "category": "Scenario Lua"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "scenarioLuaDsl.openEvent" },
+        { "command": "scenarioLuaDsl.refreshDocument" },
+        { "command": "scenarioLuaDsl.toggleAllowCreateNewGroups" }
+      ],
+      "editor/title": [
+        {
+          "command": "scenarioLuaDsl.refreshDocument",
+          "when": "resourceScheme == scenario-lua",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "scenarioLuaDsl.openEvent",
+          "when": "view == scenarioLuaDsl.grid",
+          "group": "navigation",
+          "icon": "$(link-external)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Scenario Lua DSL",
+      "properties": {
+        "scenarioLuaDsl.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "シナリオ編集バックエンド(scenario.py)のベースURL。/api/scenario-event 等が生えているサーバーを指定してください。"
+        },
+        "scenarioLuaDsl.allowCreateNewGroups": {
+          "type": "boolean",
+          "default": false,
+          "description": "Web版の「新しいグループの追加を許可する」チェックボックスと同じ設定。未知の見出し(# ==== SUB:x NODE:y ====)が見つかったとき、新しいグループとして自動作成するかどうか。誤って見出しコメントを書き換えただけでグループが増えてしまう事故を防ぐため、既定ではOFFにしています。"
+        }
+      }
+    }
+  }
+}
