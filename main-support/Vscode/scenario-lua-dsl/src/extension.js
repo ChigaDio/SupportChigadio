@@ -25,7 +25,7 @@
 
 const vscode = require('vscode');
 const { ScenarioApi } = require('./api');
-const { lintDocument, getCompletionsAt } = require('./dslCore');
+const { lintDocument, getCompletionsAt, computeNextGroupHeader, computeNextSubgroupHeader } = require('./dslCore');
 const { buildEditLinesForSub, parseEditSections, applyEditSections } = require('./treeEdit');
 const { ScenarioGridPanel } = require('./scenarioGridPanel');
 const { ScenarioGridViewProvider } = require('./scenarioGridView');
@@ -353,6 +353,39 @@ function activate(context) {
     );
   }));
 
+  // ── コマンド: 新しいグループ/サブグループの見出しを、直前の兄弟からIDを
+  //    自動でインクリメントして、カーソル位置に挿入する ──
+  const insertHeaderAtCursor = async (compute, notFoundMessage) => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== LANGUAGE_ID) {
+      vscode.window.showWarningMessage('Scenario Lua DSLのファイルを編集している状態で実行してください');
+      return;
+    }
+    const doc = editor.document;
+    const cursorLine = editor.selection.active.line;
+    const text = doc.getText();
+    const next = compute(text, cursorLine);
+    if (!next) {
+      vscode.window.showWarningMessage(notFoundMessage);
+      return;
+    }
+    const insertPos = new vscode.Position(cursorLine, 0);
+    const insertText = `# ==== SUB:${next.subId} NODE:${next.newPathKey} ====\n\n`;
+    await editor.edit((editBuilder) => editBuilder.insert(insertPos, insertText));
+    const newPos = insertPos.translate(2, 0);
+    editor.selection = new vscode.Selection(newPos, newPos);
+  };
+
+  context.subscriptions.push(vscode.commands.registerCommand('scenarioLuaDsl.insertNewGroup', () => (
+    insertHeaderAtCursor(computeNextGroupHeader, '新しいグループの見出しを挿入できませんでした')
+  )));
+  context.subscriptions.push(vscode.commands.registerCommand('scenarioLuaDsl.insertNewSubgroup', () => (
+    insertHeaderAtCursor(
+      computeNextSubgroupHeader,
+      'カーソルがどのグループの中にいるか判定できませんでした（既存の見出しの下にカーソルを置いてから実行してください）'
+    )
+  )));
+
   // ── 補完 ──
   context.subscriptions.push(vscode.languages.registerCompletionItemProvider(
     { language: LANGUAGE_ID },
@@ -389,7 +422,9 @@ function activate(context) {
           const item = new vscode.CompletionItem(it.label, kind);
           if (it.detail) item.detail = it.detail;
           item.range = range;
-          item.insertText = it.label;
+          // Role名の場合、it.insertText に「デフォルト値付きの呼び出し」が入っている
+          // ことがある(未設定フィールドは自動で埋めない。設定済みのものだけ挿入する)。
+          item.insertText = it.insertText || it.label;
           return item;
         });
       },

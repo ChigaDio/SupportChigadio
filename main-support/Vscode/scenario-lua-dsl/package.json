@@ -13,6 +13,8 @@
     "onCommand:scenarioLuaDsl.openEvent",
     "onCommand:scenarioLuaDsl.refreshDocument",
     "onCommand:scenarioLuaDsl.toggleAllowCreateNewGroups",
+    "onCommand:scenarioLuaDsl.insertNewGroup",
+    "onCommand:scenarioLuaDsl.insertNewSubgroup",
     "onFileSystem:scenario-lua"
   ],
   "main": "./src/extension.js",
@@ -67,13 +69,39 @@
         "command": "scenarioLuaDsl.toggleAllowCreateNewGroups",
         "title": "Scenario Lua: 新しいグループの追加を許可する / しない を切り替え (Toggle Allow New Groups)",
         "category": "Scenario Lua"
+      },
+      {
+        "command": "scenarioLuaDsl.insertNewGroup",
+        "title": "Scenario Lua: 新しいグループの見出しを挿入(直前のグループからID自動採番)",
+        "category": "Scenario Lua"
+      },
+      {
+        "command": "scenarioLuaDsl.insertNewSubgroup",
+        "title": "Scenario Lua: 新しいサブグループの見出しを挿入(直前のサブグループからID自動採番)",
+        "category": "Scenario Lua"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "scenarioLuaDsl.insertNewGroup",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g",
+        "when": "editorTextFocus && editorLangId == scenario-lua"
+      },
+      {
+        "command": "scenarioLuaDsl.insertNewSubgroup",
+        "key": "ctrl+alt+h",
+        "mac": "cmd+alt+h",
+        "when": "editorTextFocus && editorLangId == scenario-lua"
       }
     ],
     "menus": {
       "commandPalette": [
         { "command": "scenarioLuaDsl.openEvent" },
         { "command": "scenarioLuaDsl.refreshDocument" },
-        { "command": "scenarioLuaDsl.toggleAllowCreateNewGroups" }
+        { "command": "scenarioLuaDsl.toggleAllowCreateNewGroups" },
+        { "command": "scenarioLuaDsl.insertNewGroup" },
+        { "command": "scenarioLuaDsl.insertNewSubgroup" }
       ],
       "editor/title": [
         {
