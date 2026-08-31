@@ -7,6 +7,7 @@ import { EditorView, keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import {
   tokenizeLine, lintDocument, getCompletionsAt,
+  computeNextGroupHeader, computeNextSubgroupHeader,
 } from '../scenario/scenarioTransactionDsl';
 
 // Transactionのロール入力を「1行1コマンド」のテキストDSLとして編集する
@@ -15,8 +16,13 @@ import {
 //   そのまま流用（ハイライトとコンパイルで別々の文法を持たない）
 // - リンター: 未知のRole/フィールド、型不一致等をリアルタイムに波線表示
 // - オートコンプリート: Role名 → フィールド名 → 値（enum等の場合は候補一覧）
-//   の順にカスケードで補完
-// - 自動インデント/コメント/Tabキー: CodeMirmirrorの標準機能を利用
+//   の順にカスケードで補完。Role名を選ぶと、デフォルト値が設定済みのフィールドは
+//   自動でその値ごと挿入される。
+// - 自動インデント/コメント/Tabキー: CodeMirrorの標準機能を利用
+// - Ctrl/Cmd+Alt+G: 新しいグループ(トップレベルの見出し)を、直前のグループの
+//   IDをインクリメントして挿入
+// - Ctrl/Cmd+Alt+H: 新しいサブグループ(カーソルが今いるグループの中の見出し)を、
+//   直前のサブグループのIDをインクリメントして挿入
 
 export function buildDslLanguage() {
   return StreamLanguage.define({
@@ -114,13 +120,16 @@ export function buildCompletionSource(roleNames, roleSchemas) {
       // 選んだときに置換範囲がずれ、「Character」+「CharacterID.Test」のように
       // 元の入力が消えずに二重挿入される不具合の原因になっていた。
       to: context.pos,
+      filter: false,
       options: items.map((it) => ({
         label: it.label,
         type: it.type === 'role' ? 'class' : it.type === 'field' ? 'property' : 'text',
         detail: it.detail,
-        // apply を明示し、候補選択時に挿入されるテキストを label と完全に一致させる
+        // apply を明示し、候補選択時に挿入されるテキストを完全に制御する
         // (from/toで指定した範囲を、常にこのテキストで置き換える)。
-        apply: it.label,
+        // Role名の場合は it.insertText に「デフォルト値付きの呼び出し」が
+        // 入っていることがあるので、それを優先する。
+        apply: it.insertText || it.label,
       })),
       // validForは指定しない: 1文字打つごとにこの関数を再実行させ、常に最新の
       // from/to・候補一覧を計算し直す(上記の二重挿入バグの根本対策)。
@@ -128,6 +137,46 @@ export function buildCompletionSource(roleNames, roleSchemas) {
       // 再計算しても体感できるほどのコストにはならない。
     };
   };
+}
+
+// ── ショートカットキー: 新しいグループ/サブグループを、直前の兄弟から
+// IDをインクリメントして挿入する ──
+// 「見出しをまた1から手で書く」手間を減らすためのもの。あくまで見出し行を
+// カーソル位置に挿し込むだけで、実際にノードとして生成されるのは
+// (Web版の場合)全体編集/Sub編集ダイアログの「適用」時、DSLのコンパイルを
+// 経てから。既存の「見出しから新規グループを作る」仕組み・
+// 「新しいグループの追加を許可する」設定はそのまま活きる。
+function insertNewGroupCommand(view) {
+  const doc = view.state.doc;
+  const text = doc.toString();
+  const cursorLine = doc.lineAt(view.state.selection.main.head).number - 1; // 0始まり
+  const { subId, newPathKey } = computeNextGroupHeader(text, cursorLine);
+
+  const insertLine = doc.lineAt(view.state.selection.main.head);
+  const insertText = `# ==== SUB:${subId} NODE:${newPathKey} ====\n\n`;
+  view.dispatch({
+    changes: { from: insertLine.from, insert: insertText },
+    selection: { anchor: insertLine.from + insertText.length },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function insertNewSubgroupCommand(view) {
+  const doc = view.state.doc;
+  const text = doc.toString();
+  const cursorLine = doc.lineAt(view.state.selection.main.head).number - 1;
+  const next = computeNextSubgroupHeader(text, cursorLine);
+  if (!next) return false; // カーソルがどのグループの中にいるか判定できない場合は何もしない
+
+  const insertLine = doc.lineAt(view.state.selection.main.head);
+  const insertText = `# ==== SUB:${next.subId} NODE:${next.newPathKey} ====\n\n`;
+  view.dispatch({
+    changes: { from: insertLine.from, insert: insertText },
+    selection: { anchor: insertLine.from + insertText.length },
+    scrollIntoView: true,
+  });
+  return true;
 }
 
 // CodeMirrorに渡すbasicSetupは、コンポーネントのレンダーごとに新しいオブジェクト
@@ -150,8 +199,12 @@ function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas
   const extensions = useMemo(() => [
     buildDslLanguage(),
     buildLinter(roleSchemas),
-    autocompletion({ override: [buildCompletionSource(roleNames || [], roleSchemas || {})] }),
-    keymap.of([indentWithTab]),
+    autocompletion({ override: [buildCompletionSource(roleNames || [], roleSchemas || {})],activateOnTyping: true }),
+    keymap.of([
+      indentWithTab,
+      { key: 'Mod-Alt-g', run: insertNewGroupCommand, preventDefault: true },
+      { key: 'Mod-Alt-h', run: insertNewSubgroupCommand, preventDefault: true },
+    ]),
     EditorView.lineWrapping,
   ], [roleNames, roleSchemas]);
 

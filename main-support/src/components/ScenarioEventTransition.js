@@ -14,6 +14,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
@@ -617,35 +618,75 @@ const RoleDataDrawer = ({
 // ============================================================
 // RoleSelectDrawer（Role選択Drawer）
 // ============================================================
-const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => (
-  <Drawer anchor="right" open={open} onClose={onClose}>
-    <Box sx={{ width: 320, p: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 2, py: 1.5, bgcolor: 'secondary.dark', color: 'white' }}>
-        <Box>
-          <Typography variant="subtitle1" fontWeight="bold">Role 追加</Typography>
-          <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId}</Typography>
+const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => {
+  const [search, setSearch] = useState('');
+
+  // Drawerを開き直すたびに検索語をリセットする
+  useEffect(() => {
+    if (open) setSearch('');
+  }, [open]);
+
+  const q = search.trim().toLowerCase();
+  // Role名・説明文のどちらかに部分一致すれば表示する
+  const filteredRoles = q
+    ? roles.filter((role) => (
+      (role.name || '').toLowerCase().includes(q)
+      || (role.description || '').toLowerCase().includes(q)
+    ))
+    : roles;
+
+  return (
+    <Drawer anchor="right" open={open} onClose={onClose}>
+      <Box sx={{ width: 320, p: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 2, py: 1.5, bgcolor: 'secondary.dark', color: 'white' }}>
+          <Box>
+            <Typography variant="subtitle1" fontWeight="bold">Role 追加</Typography>
+            <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId}</Typography>
+          </Box>
+          <IconButton onClick={onClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
         </Box>
-        <IconButton onClick={onClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
+        <Box sx={{ px: 1.5, pt: 1.5 }}>
+          <TextField
+            fullWidth
+            size="small"
+            autoFocus
+            placeholder="Role名・説明で検索..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+              ),
+              endAdornment: search ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setSearch('')}><CloseIcon fontSize="small" /></IconButton>
+                </InputAdornment>
+              ) : null,
+            }}
+          />
+        </Box>
+        <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
+          {roles.length === 0 ? (
+            <Typography color="text.secondary" variant="body2">Roleが登録されていません</Typography>
+          ) : filteredRoles.length === 0 ? (
+            <Typography color="text.secondary" variant="body2">「{search}」に一致するRoleが見つかりません</Typography>
+          ) : filteredRoles.map(role => (
+            <Paper key={role.id} variant="outlined" sx={{
+              mb: 0.75, p: 1.25, cursor: 'pointer',
+              transition: 'all 0.15s',
+              '&:hover': { bgcolor: 'secondary.50', borderColor: 'secondary.main', transform: 'translateX(2px)' },
+            }} onClick={() => { onAdd(role); onClose(); }}>
+              <Typography variant="body2" fontWeight="bold">{role.name}</Typography>
+              {role.description && (
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', display: 'block' }}>{role.description}</Typography>
+              )}
+            </Paper>
+          ))}
+        </Box>
       </Box>
-      <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
-        {roles.length === 0 ? (
-          <Typography color="text.secondary" variant="body2">Roleが登録されていません</Typography>
-        ) : roles.map(role => (
-          <Paper key={role.id} variant="outlined" sx={{
-            mb: 0.75, p: 1.25, cursor: 'pointer',
-            transition: 'all 0.15s',
-            '&:hover': { bgcolor: 'secondary.50', borderColor: 'secondary.main', transform: 'translateX(2px)' },
-          }} onClick={() => { onAdd(role); onClose(); }}>
-            <Typography variant="body2" fontWeight="bold">{role.name}</Typography>
-            {role.description && (
-              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap', display: 'block' }}>{role.description}</Typography>
-            )}
-          </Paper>
-        ))}
-      </Box>
-    </Box>
-  </Drawer>
-);
+    </Drawer>
+  );
+};
 
 // ============================================================
 // BlockCard（スクラッチ/ティラノビルダー風ブロックカード）
@@ -2206,6 +2247,10 @@ function ScenarioEventTransition() {
             NODE:親ID/子ID のように "/" で区切ると、親グループの中に新しいサブグループを作成できます。
             ただし新規作成したグループは他のノードと接続されていない状態で追加されるため、必要に応じて
             通常のGUI操作で他のノードと接続してください。既存の見出しコメントは削除・改変しないでください。
+            編集中は Ctrl(⌘)+Alt+G で新しいグループの見出しを、Ctrl(⌘)+Alt+H でカーソル位置のグループの
+            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます。
+            Vector2/3/4・color・bit・bezierも class_data と同じ「{`{ フィールド名: 値, ... }`}」の書き方で入力できます
+            （例: {`target={ x: 1, y: 0, z: 2.5 }`} / {`color={ r: 1, g: 0.5, b: 0, a: 1 }`}）。
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>
@@ -2274,6 +2319,9 @@ function ScenarioEventTransition() {
             新しいグループを追加したい場合は、下のチェックを入れたうえで
             新しい見出し（# ==== SUB:{subId} NODE:新しいID ====）を書き足してください。
             他のSubの内容をまとめて編集したい場合は「全体編集(全Sub一括)」を使ってください。
+            編集中は Ctrl(⌘)+Alt+G で新しいグループの見出しを、Ctrl(⌘)+Alt+H でカーソル位置のグループの
+            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます。
+            Vector2/3/4・color・bit・bezierも class_data と同じ「{`{ フィールド名: 値, ... }`}」の書き方で入力できます。
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>

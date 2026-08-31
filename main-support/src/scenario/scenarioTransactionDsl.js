@@ -10,11 +10,14 @@
 //   comment    := '#' 任意の文字列（行全体 or 行末コメント）
 //   call       := RoleName (WS argument)*
 //   argument   := fieldName '=' value
-//   value      := string | number | bool | vector | array | bareword
+//   value      := string | number | bool | object | array | bareword
 //   string     := "..." （\" \\ エスケープ対応）
 //   number     := -?数字(.数字)?
 //   bool       := true | false
-//   vector     := '(' number (',' number)+ ')'
+//   object     := '{' (fieldName ':' value (',' fieldName ':' value)*)? '}'
+//                 class_data・Vector2/3/4・bit・color・bezier はすべてこの
+//                 { フィールド名: 値, ... } という同じ形式で読み書きする
+//                 （何段ネストしていても同じルールが再帰的に適用される）。
 //   array      := '[' (value (',' value)*)? ']'
 //   bareword   := 上記以外の連続文字（enum値・ID参照名などに使う）
 //
@@ -22,8 +25,11 @@
 //   # 主人公が挨拶する
 //   Say text="こんにちは" speed=1.5 wait=true
 //   VoiceLine voiceId=Scenario_Line001
-//   Move target=(1.0, 0, 2.5)
+//   Move target={ x: 1.0, y: 0, z: 2.5 }
 //   SetFlags flags=[Flag1, Flag3]
+//   SetColor color={ r: 1, g: 0.5, b: 0, a: 1 }
+//   SetCurve curve={ points: [{ time: 0, value: 0, inTangent: 0, outTangent: 0 }, { time: 1, value: 1, inTangent: 0, outTangent: 0 }] }
+//   SetFlagBits bits={ size: 8, bits: [0, 2, 5] }
 
 // ============================================================
 // トークナイザ
@@ -176,16 +182,176 @@ function tokensToSourceText(tokens) {
 const NUMERIC_TYPES = new Set(['int', 'uint', 'short', 'long', 'byte']);
 const FLOAT_TYPES = new Set(['float', 'double', 'decimal']);
 const VECTOR_SIZES = { vector2: 2, vector3: 3, vector4: 4 };
+const VECTOR_FIELD_NAMES = { vector2: ['x', 'y'], vector3: ['x', 'y', 'z'], vector4: ['x', 'y', 'z', 'w'] };
+
+// bit / color / bezier は、GUI側(BaseRoleInputForm.js)では専用エディタで組み立てているが、
+// 実際に保存される値の形はどれも固定された名前付きフィールドを持つ「ただのオブジェクト」
+// （bit: {size, bits}、color: {r,g,b,a}、bezier: {points: [{time,value,inTangent,outTangent}, ...]}）。
+// class_dataと全く同じ「{ フィールド名: 値, ... }」の構文・パーサー・補完をそのまま
+// 再利用できるよう、スキーマ側から subFields が来なくてもここで固定のsubFieldsを与える。
+// (dictionary型だけはキー自体が動的なため、引き続きJSON直書きのままにしている)
+const BEZIER_POINT_SUBFIELDS = [
+  { name: 'time', type: 'float' },
+  { name: 'value', type: 'float' },
+  { name: 'inTangent', type: 'float' },
+  { name: 'outTangent', type: 'float' },
+];
+const BUILTIN_STRUCT_SUBFIELDS = {
+  bit: [
+    { name: 'size', type: 'int' },
+    { name: 'bits', type: 'int[]' },
+  ],
+  color: [
+    { name: 'r', type: 'float' },
+    { name: 'g', type: 'float' },
+    { name: 'b', type: 'float' },
+    { name: 'a', type: 'float' },
+  ],
+  bezier: [
+    { name: 'points', type: 'BezierPoint[]', subFields: BEZIER_POINT_SUBFIELDS },
+  ],
+};
+
+// フィールドが実際に使うべきsubFieldsを解決する。
+// class_dataのようにスキーマ側(バックエンド)からsubFieldsが渡ってくる場合はそれを優先し、
+// 渡ってこない組み込み構造体型(bit/color/bezier/vector2/3/4)の場合はここで補う。
+function getEffectiveSubFields(fieldType, subFields) {
+  if (Array.isArray(subFields) && subFields.length > 0) return subFields;
+  const baseType = (fieldType || '').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
+  if (BUILTIN_STRUCT_SUBFIELDS[baseType]) return BUILTIN_STRUCT_SUBFIELDS[baseType];
+  if (VECTOR_FIELD_NAMES[baseType]) {
+    return VECTOR_FIELD_NAMES[baseType].map((n) => ({ name: n, type: 'float' }));
+  }
+  return subFields;
+}
+
+function incrementTrailingNumber(id) {
+  const m = String(id ?? '').match(/^(.*?)(\d+)$/);
+  if (m) {
+    const digits = m[2];
+    const next = String(Number(digits) + 1).padStart(digits.length, '0');
+    return m[1] + next;
+  }
+  return `${id}_2`;
+}
+
+// ============================================================
+// 見出し(# ==== SUB:x NODE:y ====)を走査するためのヘルパー。
+// 「新しいグループ/サブグループを、直前の兄弟からIDをインクリメントして追加する」
+// ショートカットキー(Web版のScenarioTransactionCodeEditor.js・VSCode拡張の
+// 両方から共通で使う)のために切り出してある。
+// ============================================================
+
+const GROUP_HEADER_RE = /^#\s*====\s*SUB:(\S+)\s+NODE:(\S+).*?====\s*$/;
+
+/**
+ * ドキュメント全文から見出し行(# ==== SUB:x NODE:y ====)を全て抜き出す。
+ * 戻り値は出現順(=行番号順)の配列。
+ */
+export function findGroupHeaders(docText) {
+  const lines = docText.split('\n');
+  const headers = [];
+  lines.forEach((line, idx) => {
+    const m = line.match(GROUP_HEADER_RE);
+    if (m) headers.push({ subId: m[1], pathKey: m[2], lineIndex: idx });
+  });
+  return headers;
+}
+
+/**
+ * カーソル位置(0始まりの行番号)から見て、新しいグループ(トップレベルのノード)を
+ * 追加する際に使う { subId, newPathKey } を求める。
+ * 直近(カーソルより上)の見出しからSubIdの文脈を特定し、同じSubId・トップレベル
+ * (pathKeyに "/" を含まない)の見出しのうち、ドキュメント中で最後に出てくるものの
+ * IDをインクリメントする。見出しが1つも無い場合は SUB:1 の "1" から始める。
+ */
+export function computeNextGroupHeader(docText, cursorLine) {
+  const headers = findGroupHeaders(docText);
+  let currentSubId = null;
+  for (let i = headers.length - 1; i >= 0; i--) {
+    if (headers[i].lineIndex <= cursorLine) { currentSubId = headers[i].subId; break; }
+  }
+  if (!currentSubId) currentSubId = headers.length > 0 ? headers[0].subId : '1';
+
+  const topLevel = headers.filter((h) => h.subId === currentSubId && !h.pathKey.includes('/'));
+  const newPathKey = topLevel.length > 0
+    ? incrementTrailingNumber(topLevel[topLevel.length - 1].pathKey)
+    : '1';
+  return { subId: currentSubId, newPathKey };
+}
+
+/**
+ * カーソル位置(0始まりの行番号)から見て、新しいサブグループ(現在カーソルが
+ * 属しているグループの中に、さらにネストしたノード)を追加する際に使う
+ * { subId, newPathKey } を求める。カーソルがどのグループにも属していない
+ * (直近に見出しが1つも見つからない)場合は null を返す。
+ */
+export function computeNextSubgroupHeader(docText, cursorLine) {
+  const headers = findGroupHeaders(docText);
+  let currentSubId = null;
+  let currentParentId = null;
+  for (let i = headers.length - 1; i >= 0; i--) {
+    if (headers[i].lineIndex <= cursorLine) {
+      currentSubId = headers[i].subId;
+      currentParentId = headers[i].pathKey.split('/')[0];
+      break;
+    }
+  }
+  if (!currentSubId || !currentParentId) return null;
+
+  const siblings = headers.filter(
+    (h) => h.subId === currentSubId && h.pathKey.startsWith(`${currentParentId}/`)
+  );
+  const newLastSegment = siblings.length > 0
+    ? incrementTrailingNumber(siblings[siblings.length - 1].pathKey.split('/').pop())
+    : '1';
+  return { subId: currentSubId, newPathKey: `${currentParentId}/${newLastSegment}` };
+}
+
+/**
+ * DSLの "{ フィールド名: 値, ... }" オブジェクトリテラルを、指定されたsubFieldsの
+ * スキーマに従ってパースする。class_data・bit・color・bezier・vector2/3/4のいずれの
+ * オブジェクトリテラルもこの共通関数を通る（何段ネストしても再帰的に同じ処理になる）。
+ */
+function parseObjectLiteralTokens(valueTokens, subFields, lineText) {
+  if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
+    return { value: undefined, error: `{ フィールド名: 値, ... } の形式で指定してください（例: { x: 0, y: 0 }）` };
+  }
+  if (valueTokens[valueTokens.length - 1].type !== 'RBRACE') {
+    return { value: undefined, error: '{ が閉じられていません' };
+  }
+  const inner = valueTokens.slice(1, -1);
+  const groups = splitByComma(inner);
+  const subFieldByName = new Map(subFields.map((f) => [f.name, f]));
+  const result = {};
+  for (const g of groups) {
+    if (g.length === 0) continue;
+    if (g[0].type !== 'IDENT' || g[1]?.type !== 'COLON') {
+      return { value: undefined, error: `{ フィールド名: 値 } の形式で指定してください（例: { x: 0, y: 0 }）` };
+    }
+    const subName = g[0].value;
+    const subField = subFieldByName.get(subName);
+    if (!subField) {
+      return { value: undefined, error: `存在しないフィールドです: ${subName}` };
+    }
+    const subValueTokens = g.slice(2);
+    const { value, error } = coerceValueTokens(subValueTokens, subField.type, subField.options, lineText, subField.subFields);
+    if (error) return { value: undefined, error: `${subName}: ${error}` };
+    result[subName] = value;
+  }
+  return { value: result, error: null };
+}
 
 /**
  * トークン列を、指定された型に応じた実値へ変換する。
  * 失敗時は { value: undefined, error: string } を返す（例外を投げない。
  * リンター/コンパイラ双方から使い回せるようにするため）。
- * lineText: bit/color/bezier/dictionary（JSONリテラル）の復元に使う元の行文字列。
+ * lineText: dictionary（JSONリテラル）の復元に使う元の行文字列。
  */
 export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText, subFields) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
+  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields);
 
   // 配列型([] 付き)は、まず [ 値, 値, ... ] を分解してから、各要素を
   // baseType(=[]を外した型)としてcoerceValueTokensに再帰させる。
@@ -205,40 +371,31 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     return { value: result, error: null };
   }
 
-  // class_data型(ネストした構造体): { フィールド名: 値, フィールド名2: 値2, ... } の
+  // vector2/3/4: アプリ内部では [x, y, ...] という配列で保持するが、DSL上は
+  // class_data等と同じ { x: .., y: .. } の名前付きオブジェクトリテラルとして読み書きする
+  // ("(0, 0)" のような位置だけの表記や "0,0" のような生の値は分かりにくいため)。
+  if (baseType in VECTOR_SIZES) {
+    const names = VECTOR_FIELD_NAMES[baseType];
+    const vecFields = names.map((n) => ({ name: n, type: 'float' }));
+    const { value: obj, error } = parseObjectLiteralTokens(valueTokens, vecFields, lineText);
+    if (error) return { value: undefined, error };
+    const missing = names.filter((n) => !(n in obj));
+    if (missing.length > 0) {
+      return { value: undefined, error: `${missing.join(', ')} が指定されていません（例: { ${names.map((n) => `${n}: 0`).join(', ')} }）` };
+    }
+    return { value: names.map((n) => obj[n]), error: null };
+  }
+
+  // class_data型・bit・color・bezier(いずれもネストした構造体): { フィールド名: 値, ... } の
   // 独自オブジェクトリテラルとして扱う(JSON.parseではなく、subFieldsのスキーマに従って
   // 1つ1つcoerceValueTokensを再帰適用する。フィールド名の予測変換もこれに合わせて
   // getCompletionsAt側で対応している)。
-  if (Array.isArray(subFields) && subFields.length > 0) {
-    if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
-      return { value: undefined, error: `${fieldType}は { フィールド名: 値, ... } の形式で指定してください` };
-    }
-    if (valueTokens[valueTokens.length - 1].type !== 'RBRACE') {
-      return { value: undefined, error: '{ が閉じられていません' };
-    }
-    const inner = valueTokens.slice(1, -1);
-    const groups = splitByComma(inner);
-    const subFieldByName = new Map(subFields.map((f) => [f.name, f]));
-    const result = {};
-    for (const g of groups) {
-      if (g.length === 0) continue;
-      if (g[0].type !== 'IDENT' || g[1]?.type !== 'COLON') {
-        return { value: undefined, error: `{ フィールド名: 値 } の形式で指定してください（例: { x: 1, y: 2 }）` };
-      }
-      const subName = g[0].value;
-      const subField = subFieldByName.get(subName);
-      if (!subField) {
-        return { value: undefined, error: `存在しないフィールドです: ${subName}` };
-      }
-      const subValueTokens = g.slice(2);
-      const { value, error } = coerceValueTokens(subValueTokens, subField.type, subField.options, lineText, subField.subFields);
-      if (error) return { value: undefined, error: `${subName}: ${error}` };
-      result[subName] = value;
-    }
-    return { value: result, error: null };
+  if (Array.isArray(effectiveSubFields) && effectiveSubFields.length > 0) {
+    return parseObjectLiteralTokens(valueTokens, effectiveSubFields, lineText);
   }
 
-  if (baseType === 'bit' || baseType === 'color' || baseType === 'bezier' || baseType === 'dictionary') {
+  // dictionary型のみ、キーが動的なため引き続きJSONリテラルとして扱う
+  if (baseType === 'dictionary') {
     if (valueTokens.length === 0) return { value: undefined, error: '値が指定されていません' };
     const from = valueTokens[0].from;
     const to = valueTokens[valueTokens.length - 1].to;
@@ -246,28 +403,8 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     try {
       return { value: JSON.parse(raw), error: null };
     } catch (e) {
-      return { value: undefined, error: `${baseType}はJSON形式で指定してください（例: {"size":8,"bits":[0,2]}）` };
+      return { value: undefined, error: `dictionaryはJSON形式で指定してください（例: {"key":"value"}）` };
     }
-  }
-
-  if (baseType in VECTOR_SIZES) {
-    const size = VECTOR_SIZES[baseType];
-    if (valueTokens.length === 0 || valueTokens[0].type !== 'LPAREN') {
-      return { value: undefined, error: `${baseType}は (x, y${size > 2 ? ', z' : ''}${size > 3 ? ', w' : ''}) の形式で指定してください` };
-    }
-    const inner = valueTokens.slice(1, -1);
-    const parts = splitByComma(inner);
-    if (parts.length !== size) {
-      return { value: undefined, error: `${baseType}には${size}個の数値が必要です（${parts.length}個指定されています）` };
-    }
-    const nums = [];
-    for (const p of parts) {
-      if (p.length !== 1 || p[0].type !== 'NUMBER') {
-        return { value: undefined, error: `${baseType}の要素は数値で指定してください` };
-      }
-      nums.push(Number(p[0].value));
-    }
-    return { value: nums, error: null };
   }
 
   if (valueTokens.length !== 1) {
@@ -362,14 +499,25 @@ function splitByComma(tokens) {
 function serializeValue(value, fieldType, subFields) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
+  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields);
 
-  if (Array.isArray(subFields) && subFields.length > 0) {
+  // vector2/3/4: 内部的には [x, y, ...] という配列で保持されているが、DSL上は
+  // { x: .., y: .. } の名前付きオブジェクトリテラルとして出力する
+  // ("(0, 0)"のような位置だけの表記や生の"0,0"は分かりにくいため)。
+  if (baseType in VECTOR_SIZES && !isArrayType) {
+    const names = VECTOR_FIELD_NAMES[baseType];
+    const arr = Array.isArray(value) ? value : [];
+    const parts = names.map((n, idx) => `${n}: ${arr[idx] ?? 0}`);
+    return `{ ${parts.join(', ')} }`;
+  }
+
+  if (Array.isArray(effectiveSubFields) && effectiveSubFields.length > 0) {
     if (isArrayType) {
       const arr = Array.isArray(value) ? value : [];
-      return `[${arr.map((v) => serializeValue(v, baseType, subFields)).join(', ')}]`;
+      return `[${arr.map((v) => serializeValue(v, baseType, effectiveSubFields)).join(', ')}]`;
     }
     const obj = value && typeof value === 'object' ? value : {};
-    const parts = subFields.map((f) => `${f.name}: ${serializeValue(obj[f.name], f.type, f.subFields)}`);
+    const parts = effectiveSubFields.map((f) => `${f.name}: ${serializeValue(obj[f.name], f.type, f.subFields)}`);
     return `{ ${parts.join(', ')} }`;
   }
 
@@ -377,17 +525,14 @@ function serializeValue(value, fieldType, subFields) {
     const arr = Array.isArray(value) ? value : [];
     return `[${arr.map((v) => serializeValue(v, baseType)).join(', ')}]`;
   }
-  if (baseType in VECTOR_SIZES) {
-    const arr = Array.isArray(value) ? value : [];
-    return `(${arr.join(', ')})`;
-  }
   if (NUMERIC_TYPES.has(baseType) || FLOAT_TYPES.has(baseType)) {
     return String(value ?? 0);
   }
   if (baseType === 'bool') {
     return value ? 'true' : 'false';
   }
-  if (baseType === 'bit' || baseType === 'color' || baseType === 'bezier' || baseType === 'dictionary') {
+  // dictionary型のみ、キーが動的なため引き続きJSONリテラルとして出力する
+  if (baseType === 'dictionary') {
     return JSON.stringify(value ?? {});
   }
   // string / enum / ID参照 / char 等
@@ -591,11 +736,12 @@ function completeObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd
   if (!subField) return [];
   const subValueTokens = cursorGroup.slice(2);
 
-  if (Array.isArray(subField.subFields) && subField.subFields.length > 0) {
+  const nestedSubFields = getEffectiveSubFields(subField.type, subField.subFields);
+  if (Array.isArray(nestedSubFields) && nestedSubFields.length > 0) {
     if ((subField.type || '').endsWith('[]')) {
-      return completeArrayOfObjectLiteral(line, subValueTokens, cursorCh, subField.subFields, cursorEntry.end);
+      return completeArrayOfObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end);
     }
-    return completeObjectLiteral(line, subValueTokens, cursorCh, subField.subFields, cursorEntry.end);
+    return completeObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end);
   }
   return completeScalarValue(line, subValueTokens, cursorCh, subField);
 }
@@ -647,29 +793,34 @@ function completeScalarValue(line, valueTokens, cursorCh, field) {
   const typedPrefix = lastTok && cursorCh > lastTok.from ? line.slice(lastTok.from, cursorCh) : '';
   if (field.options?.length) {
     // field.options は既に "TypeName.Property" の完全修飾形式で渡ってくる
-    // (generate_role_form_schema参照)。例えば "CharacterID.Test" に対して、
-    //   ・"Character" のように型名側から打ち始めた場合(前方一致)
-    //   ・"Test" のようにプロパティ名(ドットの後ろ)だけを打った場合(前方一致の省略形)
-    //   ・"est" のように途中の文字列だけを打った場合(部分一致。あいまい補完)
-    // のいずれでも "CharacterID.Test" が候補に出るようにする。
-    // 前方一致のほうが精度が高いので、部分一致より前に並べる。
+    // (generate_role_form_schema参照)。1つのフィールドが持つ候補は全部同じ
+    // "TypeName." を共有しているため、マッチ判定に完全修飾文字列(TypeName込み)を
+    // 使ってしまうと、例えば "I" 一文字だけで "FadeTypeID" 側の "I" にまで
+    // ヒットしてしまい、絞り込みにならず全候補が出てしまう。
+    // そのため判定は必ずドットより後ろの名前(bare)だけに対して行う。
+    //
+    // 表示上も "TypeName." の部分(型のqualifier)は見せず、ドットより後ろの
+    // 名前だけを候補として出す。実際に選んで確定したときには、これまで通り
+    // 完全修飾形式("TypeName.Property")を挿入する
+    // ("label" は表示専用、"insertText" が実際に挿入される値)。
+    const bareOf = (o) => (o.includes('.') ? o.slice(o.indexOf('.') + 1) : o);
+    const toItem = (o) => ({ label: bareOf(o), insertText: o, type: 'value' });
+
     const prefixLower = typedPrefix.toLowerCase();
     if (!prefixLower) {
-      return field.options.map((o) => ({ label: o, type: 'value' }));
+      return field.options.map(toItem);
     }
     const startsWithMatches = [];
     const containsMatches = [];
     field.options.forEach((o) => {
-      const oLower = o.toLowerCase();
-      const bare = o.includes('.') ? o.slice(o.indexOf('.') + 1) : o;
-      const bareLower = bare.toLowerCase();
-      if (oLower.startsWith(prefixLower) || bareLower.startsWith(prefixLower)) {
+      const bareLower = bareOf(o).toLowerCase();
+      if (bareLower.startsWith(prefixLower)) {
         startsWithMatches.push(o);
-      } else if (oLower.includes(prefixLower) || bareLower.includes(prefixLower)) {
+      } else if (bareLower.includes(prefixLower)) {
         containsMatches.push(o);
       }
     });
-    return [...startsWithMatches, ...containsMatches].map((o) => ({ label: o, type: 'value' }));
+    return [...startsWithMatches, ...containsMatches].map(toItem);
   }
   if (field.type === 'bool') {
     return ['true', 'false']
@@ -679,13 +830,31 @@ function completeScalarValue(line, valueTokens, cursorCh, field) {
   return [];
 }
 
+// Role名を補完で選んだときに実際に挿入するテキストを組み立てる。
+// デフォルト値が保存されているフィールド(field.default が設定されている)があれば、
+// "RoleName field1=default1 field2=default2 ..." のように、Roleを追加したその瞬間に
+// デフォルト値ごと書き込む(GUI側でRoleを新規追加した際に初期値が自動で入るのと同じ体験を
+// テキストDSL側でも再現する)。デフォルトが設定されていないフィールドは、ユーザーが
+// 自分で入力できるようそのままにしておく(勝手に埋めない)。
+function buildRoleInsertText(roleName, schema) {
+  if (!schema || !Array.isArray(schema.fields)) return roleName;
+  const parts = [];
+  for (const field of schema.fields) {
+    if (field.default === undefined || field.default === null) continue;
+    const subFields = getEffectiveSubFields(field.type, field.subFields);
+    parts.push(`${field.name}=${serializeValue(field.default, field.type, subFields)}`);
+  }
+  if (parts.length === 0) return roleName;
+  return `${roleName} ${parts.join(' ')}`;
+}
+
 export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas) {
   const lines = text.split('\n');
   const line = lines[cursorLine] ?? '';
   const tokens = tokenizeLine(line).filter((t) => t.type !== 'COMMENT');
 
   if (tokens.length === 0) {
-    return roleNames.map((n) => ({ label: n, type: 'role' }));
+    return roleNames.map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n]) }));
   }
 
   // 最初のトークン（Role名）を編集中かどうか
@@ -695,7 +864,7 @@ export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSche
     const prefix = line.slice(first.from, cursorCh);
     return roleNames
       .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()))
-      .map((n) => ({ label: n, type: 'role' }));
+      .map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n]) }));
   }
 
   const roleName = first.value;
@@ -720,12 +889,14 @@ export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSche
       : (valueTokens.length > 0 ? valueTokens[valueTokens.length - 1].to : regionStart);
     if (cursorCh < regionStart || cursorCh > regionEnd) continue;
 
-    // class_data型(ネストした構造体): { フィールド名: 値, ... } の中を予測変換する
-    if (Array.isArray(field.subFields) && field.subFields.length > 0) {
+    // class_data型・bit・color・bezier・vector2/3/4(いずれもネストした構造体):
+    // { フィールド名: 値, ... } の中を予測変換する
+    const fieldSubFields = getEffectiveSubFields(field.type, field.subFields);
+    if (Array.isArray(fieldSubFields) && fieldSubFields.length > 0) {
       if ((field.type || '').endsWith('[]')) {
-        return completeArrayOfObjectLiteral(line, valueTokens, cursorCh, field.subFields, regionEnd);
+        return completeArrayOfObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd);
       }
-      return completeObjectLiteral(line, valueTokens, cursorCh, field.subFields, regionEnd);
+      return completeObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd);
     }
 
     return completeScalarValue(line, valueTokens, cursorCh, field);
