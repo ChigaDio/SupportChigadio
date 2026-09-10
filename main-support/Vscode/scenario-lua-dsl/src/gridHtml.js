@@ -136,6 +136,7 @@ function getGridHtml(webview, opts = {}) {
 <body>
   <div class="toolbar">
     <input id="search" type="text" placeholder="検索 (Event ID / 名前 / 説明 / Sub)" />
+    <button id="migrateBtn" class="secondary icon" title="旧形式のまま残っているイベントデータを、新しい保存形式(イベント名フォルダ + Subごとの個別ファイル)へ一括更新します">旧→新</button>
     <button id="refreshBtn" class="secondary icon" title="再取得">⟳</button>
   </div>
   <div id="status"></div>
@@ -370,6 +371,9 @@ function getGridHtml(webview, opts = {}) {
   searchEl.addEventListener('input', render);
   document.getElementById('refreshBtn').addEventListener('click', () => {
     vscodeApi.postMessage({ type: 'refresh' });
+  });
+  document.getElementById('migrateBtn').addEventListener('click', () => {
+    vscodeApi.postMessage({ type: 'migrateLegacy' });
   });
 
   window.addEventListener('message', (event) => {

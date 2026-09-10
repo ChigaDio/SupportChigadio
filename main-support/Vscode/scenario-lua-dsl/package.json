@@ -15,6 +15,7 @@
     "onCommand:scenarioLuaDsl.toggleAllowCreateNewGroups",
     "onCommand:scenarioLuaDsl.insertNewGroup",
     "onCommand:scenarioLuaDsl.insertNewSubgroup",
+    "onCommand:scenarioLuaDsl.migrateLegacyEvents",
     "onFileSystem:scenario-lua"
   ],
   "main": "./src/extension.js",
@@ -79,6 +80,11 @@
         "command": "scenarioLuaDsl.insertNewSubgroup",
         "title": "Scenario Lua: 新しいサブグループの見出しを挿入(直前のサブグループからID自動採番)",
         "category": "Scenario Lua"
+      },
+      {
+        "command": "scenarioLuaDsl.migrateLegacyEvents",
+        "title": "Scenario Lua: 旧形式のイベントデータを新形式へ一括更新",
+        "category": "Scenario Lua"
       }
     ],
     "keybindings": [
@@ -101,7 +107,8 @@
         { "command": "scenarioLuaDsl.refreshDocument" },
         { "command": "scenarioLuaDsl.toggleAllowCreateNewGroups" },
         { "command": "scenarioLuaDsl.insertNewGroup" },
-        { "command": "scenarioLuaDsl.insertNewSubgroup" }
+        { "command": "scenarioLuaDsl.insertNewSubgroup" },
+        { "command": "scenarioLuaDsl.migrateLegacyEvents" }
       ],
       "editor/title": [
         {
@@ -116,6 +123,12 @@
           "when": "view == scenarioLuaDsl.grid",
           "group": "navigation",
           "icon": "$(link-external)"
+        },
+        {
+          "command": "scenarioLuaDsl.migrateLegacyEvents",
+          "when": "view == scenarioLuaDsl.grid",
+          "group": "navigation",
+          "icon": "$(sync)"
         }
       ]
     },

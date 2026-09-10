@@ -386,6 +386,11 @@ function activate(context) {
     )
   )));
 
+  // ── コマンド: 旧形式のまま残っているイベントデータを新形式へ一括更新 ──
+  context.subscriptions.push(vscode.commands.registerCommand('scenarioLuaDsl.migrateLegacyEvents', () => (
+    gridController.migrateLegacy()
+  )));
+
   // ── 補完 ──
   context.subscriptions.push(vscode.languages.registerCompletionItemProvider(
     { language: LANGUAGE_ID },

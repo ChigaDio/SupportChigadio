@@ -87,6 +87,13 @@ class ScenarioApi {
   async saveSubTransition(eventId, subId, tree) {
     return request('POST', this.url(`/api/scenario-event/${encodeURIComponent(eventId)}/sub/${encodeURIComponent(subId)}/transition`), tree);
   }
+
+  // 旧形式(イベントID直下に1ファイルへ全Subをまとめて保存)のまま残っている
+  // イベントデータを、新形式(イベント名フォルダ + Subごとの個別ファイル)へ
+  // まとめて更新する。戻り値: {migrated: [...], skipped: [...], failed: [...]}
+  async migrateLegacyEvents() {
+    return request('POST', this.url('/api/scenario-event/migrate-legacy'));
+  }
 }
 
 module.exports = { ScenarioApi };

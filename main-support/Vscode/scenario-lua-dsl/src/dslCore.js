@@ -562,12 +562,16 @@ function compileDocument(text, roleSchemas, existingRoles = []) {
   const diagnostics = [];
   const roles = [];
 
-  // 既存のuniqueIdを可能な限り引き継ぐ（同名Roleの出現順で対応付け、
-  // GUIモードとテキストモードを往復してもID安定性を保つため）
+  // 既存のuniqueId「だけ」ではなく、ロールオブジェクト全体を保持しておく。
+  // id(ScenarioRoleIDの数値)やbranchTypeなど、data/uniqueId/name以外の
+  // 付帯情報を持つ既存Roleを、Lua形式エディタで編集・保存しただけで
+  // 消してしまわないようにするため(以前はuniqueIdだけ引き継いでいて、
+  // id/branchTypeが失われ、バイナリ書き出し時にRoleIDが0=Noneになる
+  // 不具合があった)。
   const existingByName = new Map();
   for (const r of existingRoles) {
     if (!existingByName.has(r.name)) existingByName.set(r.name, []);
-    existingByName.get(r.name).push(r.uniqueId);
+    existingByName.get(r.name).push(r);
   }
   const usedCount = new Map();
 
@@ -615,9 +619,14 @@ function compileDocument(text, roleSchemas, existingRoles = []) {
     const idx = usedCount.get(roleName) || 0;
     usedCount.set(roleName, idx + 1);
     const candidates = existingByName.get(roleName) || [];
-    const uniqueId = candidates[idx] || `${roleName}_${Date.now()}_${roles.length}_${Math.random().toString(36).slice(2, 7)}`;
+    const existing = candidates[idx];
+    const uniqueId = existing?.uniqueId || `${roleName}_${Date.now()}_${roles.length}_${Math.random().toString(36).slice(2, 7)}`;
 
-    roles.push({ uniqueId, name: roleName, data });
+    // 既存Roleの場合は、id/branchTypeを含む元の付帯情報をすべて引き継ぐ。
+    // 新規に追加するRoleの場合は、スキーマ(id/branchTypeを含む)から補う
+    // (GUIでRoleを新規追加したときと同じ情報を持たせるため)。
+    const baseRole = existing ? { ...existing } : { id: schema.id, branchType: schema.branchType };
+    roles.push({ ...baseRole, uniqueId, name: roleName, data });
   }
 
   return { roles, diagnostics };
