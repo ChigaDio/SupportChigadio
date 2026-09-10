@@ -17,6 +17,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import BuildIcon from '@mui/icons-material/Build';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import SyncIcon from '@mui/icons-material/Sync';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import Checkbox from '@mui/material/Checkbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
@@ -462,6 +463,28 @@ function ScenarioEventGrid() {
       .catch(() => showSnack('生成エラー', 'error'));
   };
 
+  // 旧レイアウト(イベントID直下に1ファイルへ全Subをまとめて保存)のまま残っている
+  // イベントデータを、新レイアウト(イベント名フォルダ + Subごとの個別ファイル)へ
+  // まとめて更新する。個々のイベントは通常アクセス時に自動で更新されるが、
+  // それを待たずに今すぐ全部更新したい場合に使う。
+  const handleMigrateLegacy = () => {
+    if (!window.confirm('旧形式のまま残っているイベントデータを、新しい保存形式へ一括更新しますか？')) return;
+    fetch('/api/scenario-event/migrate-legacy', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(result => {
+        const migrated = result.migrated?.length || 0;
+        const failed = result.failed?.length || 0;
+        if (failed > 0) {
+          showSnack(`更新完了: ${migrated}件更新（${failed}件失敗。詳細はサーバーログを確認してください）`, 'warning');
+        } else if (migrated > 0) {
+          showSnack(`${migrated}件のイベントを新しい形式に更新しました`);
+        } else {
+          showSnack('更新が必要なイベントはありませんでした（すでに最新形式です）');
+        }
+      })
+      .catch(() => showSnack('更新エラー', 'error'));
+  };
+
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
       {/* ヘッダー */}
@@ -508,6 +531,17 @@ function ScenarioEventGrid() {
               onClick={handleFixAll}
             >
               Fix All
+            </Button>
+          </Tooltip>
+          <Tooltip title="旧形式のまま残っているイベントデータを、新しい保存形式(イベント名フォルダ + Subごとの個別ファイル)へ一括更新します">
+            <Button
+              variant="outlined"
+              startIcon={<SyncIcon />}
+              size="small"
+              color="secondary"
+              onClick={handleMigrateLegacy}
+            >
+              旧形式を一括更新
             </Button>
           </Tooltip>
           <Tooltip title="全バイナリを生成">

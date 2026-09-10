@@ -5,6 +5,7 @@ import struct
 import sys
 import os
 import json
+import shutil
 from enum import Enum
 # 追加 import
 import glob
@@ -75,13 +76,11 @@ def compute_max_role_concurrency():
         event_id = event.get('id')
         if not event_id:
             continue
-        event_path = os.path.join(DATA_DIR, SCENARIO_EVENT, event_id, f"{event_id}.json")
-        if not os.path.exists(event_path):
-            continue
         try:
-            with open(event_path, 'r', encoding='utf-8') as f:
-                event_data = json.load(f)
+            event_data = read_event_data(event_id)
         except Exception:
+            continue
+        if not event_data or not event_data.get('subgroups'):
             continue
 
         # main(親イベント直下)＋サブグループのそれぞれを「1アクション単位」として集計
@@ -1844,12 +1843,9 @@ def sync_prefill_dependents_scenario(source_name, current_members):
     try:
         role_field_meta = _load_role_field_meta()
         class_schemas = class_data_id_api.load_class_schemas()
-        event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
-        for event_file in glob.glob(os.path.join(event_dir, '*', '*.json')):
-            try:
-                with open(event_file, 'r', encoding='utf-8') as f:
-                    event_data = json.load(f)
-            except Exception:
+        for event_id in _list_all_event_ids():
+            event_data = read_event_data(event_id)
+            if not event_data:
                 continue
 
             changed = _walk_event_roles(
@@ -1858,9 +1854,8 @@ def sync_prefill_dependents_scenario(source_name, current_members):
             )
 
             if changed:
-                with open(event_file, 'w', encoding='utf-8') as f:
-                    json.dump(event_data, f, ensure_ascii=False, indent=2)
-                logger.info(f"prefill同期(scenario): {os.path.basename(event_file)} を {source_name} のメンバー変更に追従させました")
+                write_event_data(event_id, event_data)
+                logger.info(f"prefill同期(scenario): event {event_id} を {source_name} のメンバー変更に追従させました")
     except Exception as e:
         logger.error(f"prefill同期処理エラー(scenario, source={source_name}): {str(e)}")
 
@@ -1878,18 +1873,15 @@ def sync_all_prefill_scenario_safety_net():
         sources = _collect_prefill_sources(role_field_meta, class_schemas)
         if not sources:
             return
-        event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
-        event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))
+        event_ids = _list_all_event_ids()
 
         for source_name in sources:
             members = _resolve_prefill_members(source_name)
             if members is None:
                 continue
-            for event_file in event_files:
-                try:
-                    with open(event_file, 'r', encoding='utf-8') as f:
-                        event_data = json.load(f)
-                except Exception:
+            for event_id in event_ids:
+                event_data = read_event_data(event_id)
+                if not event_data:
                     continue
 
                 changed = _walk_event_roles(
@@ -1898,25 +1890,452 @@ def sync_all_prefill_scenario_safety_net():
                 )
 
                 if changed:
-                    with open(event_file, 'w', encoding='utf-8') as f:
-                        json.dump(event_data, f, ensure_ascii=False, indent=2)
+                    write_event_data(event_id, event_data)
     except Exception as e:
         logger.error(f"prefill安全網同期処理エラー: {str(e)}")
 
 
 # ユーティリティ: イベントJSONの読み書き
+# ============================================================
+# イベント/Subのストレージレイアウト
+# ------------------------------------------------------------
+# 【新レイアウト】
+#   scenario_event_data/
+#     {イベント名(サニタイズ済み)}/
+#       _event.json          … イベントのメタデータのみ(id/name/description/subEvents一覧)。
+#                               subgroups(各Subのツリー)はここには含まない。
+#       {Sub名(サニタイズ済み)}/
+#         _sub.json           … そのSub 1つ分のツリー({nodes, edges, storySetting}等)
+#
+# フォルダ名は「人間が見て分かりやすい名前」を優先するが、実際の紐付けは
+# _event.json / _sub.json の中の id / subId で行う(名前重複・リネーム耐性のため)。
+#
+# 【旧レイアウト(移行対象)】
+#   scenario_event_data/{eventId}/{eventId}.json
+#   (1ファイルに、そのイベントの全Subのツリーがsubgroupsとして埋め込まれていた)
+#
+# read_event_data()/write_event_data() は、これまで通り「イベント全体を
+# 1つのdict(subgroups込み)としてやり取りする」外部インターフェースを維持している。
+# 内部でこの新レイアウトへ読み書きするよう置き換えているだけなので、
+# これら2関数だけを経由している呼び出し元(app.py等)は無改修で動くはず。
+# ただし「Sub単位でファイルを分けて容量を抑える」という目的を最大限活かすには、
+# 1つのSubだけを読み書きする read_sub_event_transition()/write_sub_event_transition()
+# に置き換えるのが理想(app.py の /transition エンドポイント向け)。
+# ============================================================
+
+_INVALID_FOLDER_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+def _sanitize_folder_name(name, fallback):
+    """イベント名/Sub名をそのままフォルダ名として使えるように整形する。
+    OS上使えない文字を置換し、空になった場合はfallback(通常は"event_{id}"等)を使う。"""
+    name = (name or '').strip()
+    name = _INVALID_FOLDER_CHARS_RE.sub('_', name)
+    name = name.strip(' .')  # 末尾の空白・ドットはWindowsでフォルダ名として問題になる
+    if not name:
+        name = fallback
+    return name[:100]  # 極端に長い名前を避ける
+
+def _unique_dir_name(parent_dir, base_name):
+    """parent_dir配下でbase_nameが既に使われていたら、_2, _3... を付けて衝突を避ける。"""
+    candidate = base_name
+    n = 2
+    while os.path.exists(os.path.join(parent_dir, candidate)):
+        candidate = f"{base_name}_{n}"
+        n += 1
+    return candidate
+
+def _event_root_dir():
+    return os.path.join(DATA_DIR, SCENARIO_EVENT)
+
+def _list_all_event_ids():
+    """scenario_event_list.json から全イベントIDの一覧を返す。
+    イベントフォルダを直接globせず、常にこのインデックスファイルを正とすることで、
+    新レイアウト(名前ベースのフォルダ)・旧レイアウトいずれの状態でも安定して動く。"""
+    event_list_path = os.path.join(_event_root_dir(), "scenario_event_list.json")
+    if not os.path.exists(event_list_path):
+        return []
+    try:
+        with open(event_list_path, 'r', encoding='utf-8') as f:
+            events = json.load(f)
+    except Exception:
+        return []
+    return [e.get('id') for e in events if e.get('id')]
+
+def _find_event_dir_by_id(event_id):
+    """event_idから、新レイアウトの実フォルダを名前に関わらず探す
+    (_event.json内のidで照合するので、フォルダ名がズレていても正しく見つかる)。
+    見つからなければNone。"""
+    event_root = _event_root_dir()
+    if not os.path.isdir(event_root):
+        return None
+    for entry in os.listdir(event_root):
+        full = os.path.join(event_root, entry)
+        if not os.path.isdir(full) or entry.startswith('_legacy_'):
+            continue
+        meta_path = os.path.join(full, '_event.json')
+        if not os.path.exists(meta_path):
+            continue
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if str(meta.get('id')) == str(event_id):
+            return full
+    return None
+
+def _find_sub_dir_by_id(event_dir, sub_id):
+    """event_dir配下から、sub_idに対応するSubフォルダを探す(_sub.json内のsubIdで照合)。"""
+    if not event_dir or not os.path.isdir(event_dir):
+        return None
+    for entry in os.listdir(event_dir):
+        full = os.path.join(event_dir, entry)
+        if not os.path.isdir(full):
+            continue
+        meta_path = os.path.join(full, '_sub.json')
+        if not os.path.exists(meta_path):
+            continue
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if str(meta.get('subId')) == str(sub_id):
+            return full
+    return None
+
+def _legacy_event_json_path(event_id):
+    return os.path.join(_event_root_dir(), str(event_id), f"{event_id}.json")
+
+def _migrate_legacy_event(event_id):
+    """旧レイアウト({eventId}/{eventId}.json、subgroups埋め込み)を新レイアウトへ移行する。
+    移行後の新フォルダパスを返す(該当する旧データが無ければNone)。
+    旧フォルダは削除せず "_legacy_{eventId}" にリネームして残す
+    (何か問題があった場合に元データを参照・復元できるようにするため)。"""
+    legacy_path = _legacy_event_json_path(event_id)
+    if not os.path.exists(legacy_path):
+        return None
+    try:
+        with open(legacy_path, 'r', encoding='utf-8') as f:
+            old_data = json.load(f)
+    except Exception as e:
+        logger.error(f"旧イベントデータの読み込みに失敗しました({event_id}): {e}")
+        return None
+
+    event_root = _event_root_dir()
+    folder_name = _unique_dir_name(
+        event_root, _sanitize_folder_name(old_data.get('name', ''), f"event_{event_id}")
+    )
+    new_dir = os.path.join(event_root, folder_name)
+    os.makedirs(new_dir, exist_ok=True)
+
+    subgroups = old_data.get('subgroups', {}) or {}
+    sub_events = old_data.get('subEvents', []) or []
+    sub_name_by_id = {str(s.get('subId')): s.get('name', '') for s in sub_events}
+
+    for sub_id, sub_tree in subgroups.items():
+        sub_id = str(sub_id)
+        sub_folder_name = _unique_dir_name(
+            new_dir, _sanitize_folder_name(sub_name_by_id.get(sub_id, ''), f"sub_{sub_id}")
+        )
+        sub_dir = os.path.join(new_dir, sub_folder_name)
+        os.makedirs(sub_dir, exist_ok=True)
+        sub_payload = dict(sub_tree) if isinstance(sub_tree, dict) else {}
+        sub_payload['subId'] = sub_id
+        with open(os.path.join(sub_dir, '_sub.json'), 'w', encoding='utf-8') as f:
+            json.dump(sub_payload, f, ensure_ascii=False, indent=2)
+
+    event_meta = {k: v for k, v in old_data.items() if k != 'subgroups'}
+    event_meta['id'] = event_id
+    with open(os.path.join(new_dir, '_event.json'), 'w', encoding='utf-8') as f:
+        json.dump(event_meta, f, ensure_ascii=False, indent=2)
+
+    legacy_dir = os.path.dirname(legacy_path)
+    backup_dir = os.path.join(event_root, f"_legacy_{event_id}")
+    if not os.path.exists(backup_dir):
+        try:
+            os.rename(legacy_dir, backup_dir)
+        except Exception as e:
+            logger.error(f"旧イベントフォルダの退避に失敗しました({event_id}): {e}")
+
+    logger.info(f"イベント {event_id} を新レイアウトへ移行しました: {new_dir}")
+    return new_dir
+
+def _resolve_event_dir(event_id, create_name=None):
+    """event_idから現在のイベントフォルダを解決する。
+    1. 新レイアウトに既にあればそれを返す
+    2. 旧レイアウトのデータがあれば、その場で新レイアウトへ移行してから返す
+    3. どちらにも無ければ(真に新規イベント)、これから書き込む用の新しいフォルダパスを返す
+       (この時点ではまだディスク上には作成しない。呼び出し側でos.makedirsする)"""
+    found = _find_event_dir_by_id(event_id)
+    if found:
+        return found
+    migrated = _migrate_legacy_event(event_id)
+    if migrated:
+        return migrated
+    event_root = _event_root_dir()
+    folder_name = _unique_dir_name(
+        event_root, _sanitize_folder_name(create_name or '', f"event_{event_id}")
+    )
+    return os.path.join(event_root, folder_name)
+
+def _sync_event_dir_name(event_dir, event_id, data):
+    """イベント名が変わっていたら、フォルダ名もそれに追従してリネームする
+    (フォルダ名が常に今の名前を反映しているようにするため)。リネーム後のパスを返す。"""
+    event_root = _event_root_dir()
+    desired_name = _sanitize_folder_name(data.get('name', ''), f"event_{event_id}")
+    current_name = os.path.basename(event_dir)
+    if current_name == desired_name:
+        return event_dir
+    target = os.path.join(event_root, desired_name)
+    if os.path.exists(target):
+        return event_dir  # 別のフォルダが既にその名前を使っている場合はリネームを諦める(安全側)
+    try:
+        os.rename(event_dir, target)
+        return target
+    except Exception as e:
+        logger.error(f"イベントフォルダのリネームに失敗しました({event_id}): {e}")
+        return event_dir
+
+def _sync_sub_dir_name(event_dir, sub_dir, sub_id, sub_name):
+    """Sub名が変わっていたら、フォルダ名もそれに追従してリネームする。リネーム後のパスを返す。"""
+    desired_name = _sanitize_folder_name(sub_name, f"sub_{sub_id}")
+    current_name = os.path.basename(sub_dir)
+    if current_name == desired_name:
+        return sub_dir
+    target = os.path.join(event_dir, desired_name)
+    if os.path.exists(target):
+        return sub_dir
+    try:
+        os.rename(sub_dir, target)
+        return target
+    except Exception as e:
+        logger.error(f"Subフォルダのリネームに失敗しました({sub_id}): {e}")
+        return sub_dir
+
+
 def read_event_data(eventId):
-    event_path = os.path.join(DATA_DIR, SCENARIO_EVENT,f"{eventId}", f"{eventId}.json")
-    if os.path.exists(event_path):
-        with open(event_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"subgroups": {}}
+    """イベント1件分のデータを、これまで通り
+    {id, name, description, subEvents, subgroups: {subId: {...}, ...}} の形で返す。
+    内部では新レイアウト(イベントごとのフォルダ + Subごとの個別ファイル)から
+    組み立てている(外部から見た戻り値の形は変えていない)。"""
+    event_dir = _resolve_event_dir(eventId)
+    meta_path = os.path.join(event_dir, '_event.json') if event_dir else None
+    if not event_dir or not os.path.exists(meta_path):
+        return {"subgroups": {}}
+
+    with open(meta_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    subgroups = {}
+    for sub in data.get('subEvents', []) or []:
+        sub_id = str(sub.get('subId'))
+        sub_dir = _find_sub_dir_by_id(event_dir, sub_id)
+        if not sub_dir:
+            continue
+        sub_meta_path = os.path.join(sub_dir, '_sub.json')
+        if not os.path.exists(sub_meta_path):
+            continue
+        with open(sub_meta_path, 'r', encoding='utf-8') as f:
+            sub_data = json.load(f)
+        sub_data.pop('subId', None)
+        subgroups[sub_id] = sub_data
+
+    data['subgroups'] = subgroups
+    return data
+
 
 def write_event_data(eventId, data):
-    event_path = os.path.join(DATA_DIR, SCENARIO_EVENT, f"{eventId}", f"{eventId}.json")
-    with open(event_path, 'w', encoding='utf-8') as f:
+    """イベント1件分のデータ({..., subgroups: {...}})を、新レイアウトへ書き込む。
+    渡されたsubEvents一覧に無いSubのフォルダは、削除されたものとみなして掃除する。"""
+    data = dict(data)  # 呼び出し元のdictをここで書き換えないようにコピーする
+    subgroups = data.pop('subgroups', {}) or {}
+    sub_events = data.get('subEvents', []) or []
+    sub_name_by_id = {str(s.get('subId')): s.get('name', '') for s in sub_events}
+
+    event_dir = _resolve_event_dir(eventId, create_name=data.get('name', ''))
+    os.makedirs(event_dir, exist_ok=True)
+    event_dir = _sync_event_dir_name(event_dir, eventId, data)
+
+    with open(os.path.join(event_dir, '_event.json'), 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+    # 既存Subフォルダの棚卸し(削除されたSubの掃除・リネーム追従のため)
+    existing_sub_dirs = {}
+    for entry in os.listdir(event_dir):
+        full = os.path.join(event_dir, entry)
+        meta_path = os.path.join(full, '_sub.json')
+        if os.path.isdir(full) and os.path.exists(meta_path):
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    sub_meta = json.load(f)
+                existing_sub_dirs[str(sub_meta.get('subId'))] = full
+            except Exception:
+                continue
+
+    written_sub_ids = set()
+    for sub_id, sub_tree in subgroups.items():
+        sub_id = str(sub_id)
+        written_sub_ids.add(sub_id)
+        sub_name = sub_name_by_id.get(sub_id, '')
+        sub_dir = existing_sub_dirs.get(sub_id)
+        if not sub_dir:
+            desired = _unique_dir_name(event_dir, _sanitize_folder_name(sub_name, f"sub_{sub_id}"))
+            sub_dir = os.path.join(event_dir, desired)
+            os.makedirs(sub_dir, exist_ok=True)
+        else:
+            sub_dir = _sync_sub_dir_name(event_dir, sub_dir, sub_id, sub_name)
+
+        sub_payload = dict(sub_tree) if isinstance(sub_tree, dict) else {}
+        sub_payload['subId'] = sub_id
+        with open(os.path.join(sub_dir, '_sub.json'), 'w', encoding='utf-8') as f:
+            json.dump(sub_payload, f, ensure_ascii=False, indent=2)
+
+    # 今回書き込まれなかった(=subEvents一覧から消えた)Subのフォルダを削除する
+    for sub_id, sub_dir in existing_sub_dirs.items():
+        if sub_id not in written_sub_ids:
+            try:
+                shutil.rmtree(sub_dir)
+                logger.info(f"不要になったSubフォルダを削除しました: {sub_dir}")
+            except Exception as e:
+                logger.error(f"不要になったSubフォルダの削除に失敗しました({eventId}/{sub_id}): {e}")
+
+
+def read_sub_event_transition(eventId, subId):
+    """1つのSubのツリー({nodes, edges, storySetting}等)だけを読み込む。
+    他のSubのファイルには一切触れないため、Sub単位での読み込みが軽量になる
+    (app.pyの `/api/scenario-event/<eventId>/sub/<subId>/transition` のGETに使う想定)。"""
+    event_dir = _resolve_event_dir(eventId)
+    if not event_dir or not os.path.isdir(event_dir):
+        return {"nodes": [], "edges": []}
+    sub_dir = _find_sub_dir_by_id(event_dir, subId)
+    if not sub_dir:
+        return {"nodes": [], "edges": []}
+    sub_meta_path = os.path.join(sub_dir, '_sub.json')
+    if not os.path.exists(sub_meta_path):
+        return {"nodes": [], "edges": []}
+    with open(sub_meta_path, 'r', encoding='utf-8') as f:
+        sub_data = json.load(f)
+    sub_data.pop('subId', None)
+    return sub_data
+
+
+def write_sub_event_transition(eventId, subId, tree):
+    """1つのSubのツリーだけを書き込む。他のSubのファイルには一切触れないため、
+    保存コストがそのSub分だけで済む(app.pyの
+    `/api/scenario-event/<eventId>/sub/<subId>/transition` のPOSTに使う想定)。
+    「イベント全体を読み書きしないのでファイル容量・保存コストを抑えられる」という
+    今回の目的は、read_event_data/write_event_data経由ではなく、この関数を使って
+    初めて完全に達成される。"""
+    event_dir = _resolve_event_dir(eventId)
+    if not event_dir:
+        return {"error": f"Event not found: {eventId}"}
+    os.makedirs(event_dir, exist_ok=True)
+
+    # このSubの名前を、イベントのメタデータ(_event.json)のsubEvents一覧から引く
+    sub_name = ''
+    meta_path = os.path.join(event_dir, '_event.json')
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            event_meta = json.load(f)
+        for s in event_meta.get('subEvents', []) or []:
+            if str(s.get('subId')) == str(subId):
+                sub_name = s.get('name', '')
+                break
+
+    sub_dir = _find_sub_dir_by_id(event_dir, subId)
+    if not sub_dir:
+        desired = _unique_dir_name(event_dir, _sanitize_folder_name(sub_name, f"sub_{subId}"))
+        sub_dir = os.path.join(event_dir, desired)
+        os.makedirs(sub_dir, exist_ok=True)
+    else:
+        sub_dir = _sync_sub_dir_name(event_dir, sub_dir, subId, sub_name)
+
+    sub_payload = dict(tree) if isinstance(tree, dict) else {}
+    sub_payload['subId'] = str(subId)
+    with open(os.path.join(sub_dir, '_sub.json'), 'w', encoding='utf-8') as f:
+        json.dump(sub_payload, f, ensure_ascii=False, indent=2)
+    return {"message": f"Sub {subId} を保存しました"}
+
+
+def delete_event_storage(eventId):
+    """イベント1件分のストレージ(新レイアウトのフォルダ、旧レイアウトの
+    退避フォルダ_legacy_{id}、および万一残っている旧レイアウトそのままの
+    フォルダ)をまとめて削除する(app.pyのイベント削除エンドポイント用)。"""
+    event_root = _event_root_dir()
+    new_dir = _find_event_dir_by_id(eventId)
+    if new_dir and os.path.isdir(new_dir):
+        shutil.rmtree(new_dir, ignore_errors=True)
+
+    legacy_backup = os.path.join(event_root, f"_legacy_{eventId}")
+    if os.path.isdir(legacy_backup):
+        shutil.rmtree(legacy_backup, ignore_errors=True)
+
+    legacy_dir = os.path.join(event_root, str(eventId))
+    if os.path.isdir(legacy_dir):
+        shutil.rmtree(legacy_dir, ignore_errors=True)
+
+
+def delete_sub_event_storage(eventId, subId):
+    """1つのSubのフォルダだけを削除する(app.pyのSub削除エンドポイント用)。
+    他のSubには一切触れない。"""
+    event_dir = _find_event_dir_by_id(eventId)
+    if not event_dir:
+        return
+    sub_dir = _find_sub_dir_by_id(event_dir, subId)
+    if sub_dir and os.path.isdir(sub_dir):
+        shutil.rmtree(sub_dir, ignore_errors=True)
+
+
+def migrate_all_legacy_events():
+    """旧レイアウト({eventId}/{eventId}.json、subgroups埋め込み)のまま残っている
+    イベントを、まとめて新レイアウト(イベント名フォルダ + Subごとの個別ファイル)へ
+    移行する。個々のイベントは普段read_event_data()等を呼んだ時点で自動的に
+    移行されるが(遅延移行)、その場しのぎではなく明示的に「今すぐ全部更新したい」
+    場合のためのバッチ処理。
+
+    戻り値: {"migrated": [id, ...], "skipped": [id, ...], "failed": [{"id":.., "error":..}, ...]}
+    - migrated: 今回実際に新レイアウトへ移行したイベントID
+    - skipped: 既に新レイアウトだった、または旧データも存在しなかったイベントID
+    - failed: 移行中にエラーが発生したイベントID(理由付き)
+    """
+    result = {"migrated": [], "skipped": [], "failed": []}
+    seen_ids = set()
+
+    def _try_migrate(event_id):
+        event_id = str(event_id)
+        if event_id in seen_ids:
+            return
+        seen_ids.add(event_id)
+        try:
+            if _find_event_dir_by_id(event_id):
+                result["skipped"].append(event_id)
+                return
+            if not os.path.exists(_legacy_event_json_path(event_id)):
+                result["skipped"].append(event_id)
+                return
+            migrated_dir = _migrate_legacy_event(event_id)
+            if migrated_dir:
+                result["migrated"].append(event_id)
+            else:
+                result["skipped"].append(event_id)
+        except Exception as e:
+            logger.error(f"イベント {event_id} の一括移行に失敗しました: {e}")
+            result["failed"].append({"id": event_id, "error": str(e)})
+
+    # 1. scenario_event_list.json に載っている全ID
+    for event_id in _list_all_event_ids():
+        _try_migrate(event_id)
+
+    # 2. 念のため、event_root直下で数字だけのフォルダ名(旧レイアウトの典型的な形)を
+    #    持つものも走査する(一覧ファイルに載っていない孤立データを取りこぼさないため)
+    event_root = _event_root_dir()
+    if os.path.isdir(event_root):
+        for entry in os.listdir(event_root):
+            if entry.isdigit():
+                _try_migrate(entry)
+
+    return result
 
 
 # Role schema の初期値生成ヘルパー
@@ -1958,12 +2377,27 @@ def fix_all_events():
                 for field in fields
             }
 
-    # 全 event JSON を走査
-    event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
-    for event_file in glob.glob(os.path.join(event_dir, '*', '*.json')):
-        with open(event_file, 'r', encoding='utf-8') as f:
-            event_data = json.load(f)
-        
+    # 全eventを走査(フォルダを直接globせず、scenario_event_list.jsonのid一覧を使う。
+    # これによりイベントフォルダの命名規則(新レイアウトの名前ベースフォルダ)に
+    # 依存せずに済む)
+    event_list_path = os.path.join(DATA_DIR, SCENARIO_EVENT, "scenario_event_list.json")
+    if not os.path.exists(event_list_path):
+        sync_all_prefill_scenario_safety_net()
+        return
+    try:
+        with open(event_list_path, 'r', encoding='utf-8') as f:
+            event_list = json.load(f)
+    except Exception:
+        event_list = []
+
+    for event_entry in event_list:
+        event_id = event_entry.get('id')
+        if not event_id:
+            continue
+        event_data = read_event_data(event_id)
+        if not event_data:
+            continue
+
         # subgroups を走査
         updated = False
         subgroups = event_data.get('subgroups', {})
@@ -1995,8 +2429,7 @@ def fix_all_events():
                         updated = fix_roles(inner_roles, role_schemas) or updated
         
         if updated:
-            with open(event_file, 'w', encoding='utf-8') as f:
-                json.dump(event_data, f, ensure_ascii=False, indent=2)
+            write_event_data(event_id, event_data)
 
     # 仕様書項目5(追記分)の安全網: prefill設定を持つ全フィールドを、その場で参照元の
     # 最新メンバー構成に合わせて同期する。fix_all_events()は既にバイナリ生成前に必ず
@@ -2158,26 +2591,21 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
     type_info = build_scenario_type_info(enum_list, class_list, class_data_id_list)
 
     # 1. Load event JSON files
-    event_dir = os.path.join(DATA_DIR, SCENARIO_EVENT)
-    event_files = glob.glob(os.path.join(event_dir, '*', '*.json'))  # Original path
+    # (旧: event_dir配下を直接globしていたが、新レイアウトではイベントフォルダ名が
+    #  IDではなく名前ベースになるため、scenario_event_list.jsonのID一覧を正として
+    #  read_event_data() 経由で読み込む(新旧レイアウトいずれでも正しく読める))
     events = []
-    for event_file in event_files:
+    for event_id in _list_all_event_ids():
         try:
-            with open(event_file, 'r', encoding='utf-8') as f:
-                event_data = json.load(f)
-                # Handle list-wrapped JSON
-                if isinstance(event_data, list) and event_data:
-                    event_data = event_data[0]  # Take first dict
-                if not isinstance(event_data, dict):
-                    logger.error(f"Invalid event data format in {event_file}: expected dict, got {type(event_data)}")
-                    continue
-                if 'id' not in event_data:
-                    logger.error(f"Missing 'id' in event data: {event_file}")
-                    continue
-                events.append(event_data)
-                logger.debug(f"Loaded event file: {event_file}, ID: {event_data.get('id')}")
+            event_data = read_event_data(event_id)
+            if not isinstance(event_data, dict):
+                logger.error(f"Invalid event data format for event id {event_id}")
+                continue
+            event_data.setdefault('id', event_id)
+            events.append(event_data)
+            logger.debug(f"Loaded event: {event_id}")
         except Exception as e:
-            logger.error(f"Failed to load event file {event_file}: {e}")
+            logger.error(f"Failed to load event {event_id}: {e}")
     
     if not events:
         logger.error("No valid event files loaded")

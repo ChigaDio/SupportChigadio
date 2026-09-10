@@ -1562,10 +1562,9 @@ def handle_scenario_event_list():
             new_event = {"id": id, "name": name, "description": description, "subEvents": []}
             with open(list_path, 'w', encoding='utf-8') as f:
                 json.dump([new_event], f)
-        event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
-        os.makedirs(event_dir, exist_ok=True)
-        with open(os.path.join(event_dir, f"{id}.json"), 'w', encoding='utf-8') as f:
-            json.dump(new_event, f)
+        # イベントデータ本体は新レイアウト(名前ベースフォルダ)の
+        # scenario.write_event_data() 経由で書き込む
+        scenario.write_event_data(id, {**new_event, "subgroups": {}})
         # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
         with open(list_path, 'r', encoding='utf-8') as f:
             scenario.sync_all_scenario_class_data(json.load(f))
@@ -1574,8 +1573,6 @@ def handle_scenario_event_list():
 @app.route('/api/scenario-event/<id>', methods=['PATCH', 'DELETE'])
 def handle_scenario_event(id):
     list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
-    event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
-    event_path = os.path.join(event_dir, f"{id}.json")
     if request.method == 'PATCH':
         data = request.json
         name = data.get('name')
@@ -1593,8 +1590,17 @@ def handle_scenario_event(id):
                     f.seek(0)
                     f.truncate()
                     json.dump(events, f)
-                    with open(event_path, 'w', encoding='utf-8') as ef:
-                        json.dump(event, ef)
+                    # イベント全体(subgroups含む)を読み込んでから名前/説明だけを
+                    # 更新して書き戻す(以前はリストの断片データ(subgroups無し)で
+                    # そのまま上書きしており、Subの遷移図データが消えてしまう
+                    # 恐れがあったため、必ずフルデータを経由するように修正)
+                    full_data = scenario.read_event_data(id)
+                    if name is not None:
+                        full_data['name'] = name
+                    if description is not None:
+                        full_data['description'] = description
+                    full_data['subEvents'] = event.get('subEvents', full_data.get('subEvents', []))
+                    scenario.write_event_data(id, full_data)
                     return jsonify({"message": "Event updated"})
         return jsonify({"error": "Event not found"}), 404
     elif request.method == 'DELETE':
@@ -1607,8 +1613,7 @@ def handle_scenario_event(id):
                 json.dump(events, f)
             # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
             scenario.sync_all_scenario_class_data(events)
-        if os.path.exists(event_dir):
-            shutil.rmtree(event_dir)
+        scenario.delete_event_storage(id)
         return jsonify({"message": "Event deleted"})
 
 @app.route('/api/scenario-event/<id>/sub', methods=['POST'])
@@ -1619,37 +1624,40 @@ def add_sub_event(id):
     if not name:
         return jsonify({"error": "Name is required"}), 400
     list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
-    event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
-    if os.path.exists(list_path):
-        with open(list_path, 'r+', encoding='utf-8') as f:
-            events = json.load(f)
-            for event in events:
-                if event['id'] == id:
-                    max_sub_id = max([s['subId'] for s in event.get('subEvents', [])], default=0) + 1
-                    new_sub = {"subId": max_sub_id, "name": name, "description": description}
-                    event['subEvents'].append(new_sub)
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(events, f)
-                    with open(event_path, 'r+', encoding='utf-8') as ef:
-                        eventData = json.load(ef)
-                        for subEv in eventData["subEvents"]:
-                            if subEv['name'] == name:
-                                return jsonify({"message": "すでに存在しています", "subId": max_sub_id})
-                        eventData["subEvents"].append(new_sub)
-                        ef.seek(0)
-                        ef.truncate()
-                        json.dump(eventData, ef)
-                    # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
-                    scenario.sync_all_scenario_class_data(events)
-                    return jsonify({"message": "Sub event added", "subId": max_sub_id})
+    if not os.path.exists(list_path):
         return jsonify({"error": "Event not found"}), 404
+
+    with open(list_path, 'r+', encoding='utf-8') as f:
+        events = json.load(f)
+        for event in events:
+            if event['id'] == id:
+                # 重複チェックは追加する「前」に行う(以前はリスト側へ追加した後に
+                # 個別ファイル側で重複チェックしていたため、重複時でも
+                # リスト側にだけ追加されてしまう不整合があった)
+                if any(s['name'] == name for s in event.get('subEvents', [])):
+                    return jsonify({"message": "すでに存在しています"})
+                max_sub_id = max([s['subId'] for s in event.get('subEvents', [])], default=0) + 1
+                new_sub = {"subId": max_sub_id, "name": name, "description": description}
+                event['subEvents'].append(new_sub)
+                f.seek(0)
+                f.truncate()
+                json.dump(events, f)
+
+                # イベント本体側のsubEvents一覧にも同期する
+                # (新しいSub自体のツリーデータはまだ無いので、read_event_data/
+                #  write_event_dataは既存の他Subファイルには一切触れない)
+                full_data = scenario.read_event_data(id)
+                full_data['subEvents'] = event['subEvents']
+                scenario.write_event_data(id, full_data)
+
+                # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
+                scenario.sync_all_scenario_class_data(events)
+                return jsonify({"message": "Sub event added", "subId": max_sub_id})
     return jsonify({"error": "Event not found"}), 404
 
 @app.route('/api/scenario-event/<id>/sub/<int:subId>', methods=['PATCH', 'DELETE'])
 def handle_sub_event(id, subId):
     list_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, 'scenario_event_list.json')
-    event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
     if request.method == 'PATCH':
         data = request.json
         name = data.get('name')
@@ -1669,8 +1677,15 @@ def handle_sub_event(id, subId):
                             f.seek(0)
                             f.truncate()
                             json.dump(events, f)
-                            with open(event_path, 'w', encoding='utf-8') as ef:
-                                json.dump(event, ef)
+                            # イベント全体(subgroups含む)を読み込んでからsubEvents一覧だけ
+                            # 更新して書き戻す(以前はリストの断片データ(subgroups無し)で
+                            # そのまま上書きしており、他Subの遷移図データが消えてしまう
+                            # 恐れがあったため、必ずフルデータを経由するように修正)。
+                            # Sub名を変更した場合、write_event_data側でそのSubのフォルダ名も
+                            # 自動的に追従してリネームされる。
+                            full_data = scenario.read_event_data(id)
+                            full_data['subEvents'] = event['subEvents']
+                            scenario.write_event_data(id, full_data)
                             # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
                             scenario.sync_all_scenario_class_data(events)
                             return jsonify({"message": "Sub event updated"})
@@ -1685,8 +1700,12 @@ def handle_sub_event(id, subId):
                         f.seek(0)
                         f.truncate()
                         json.dump(events, f)
-                        with open(event_path, 'w', encoding='utf-8') as ef:
-                            json.dump(event, ef)
+                        # イベント本体側のsubEvents一覧を更新し、削除されたSubの
+                        # フォルダも削除する(他のSubには一切触れない)
+                        full_data = scenario.read_event_data(id)
+                        full_data['subEvents'] = event['subEvents']
+                        full_data.get('subgroups', {}).pop(str(subId), None)
+                        scenario.write_event_data(id, full_data)
                         # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
                         scenario.sync_all_scenario_class_data(events)
                         return jsonify({"message": "Sub event deleted"})
@@ -1737,16 +1756,9 @@ def copy_scenario_event(id):
         f.truncate()
         json.dump(events, f)
 
-    # 個別ファイル(遷移図データ含む)も作成
-    src_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id)
-    src_event_path = os.path.join(src_event_dir, f"{id}.json")
-    new_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, new_id)
-    os.makedirs(new_event_dir, exist_ok=True)
-    new_event_path = os.path.join(new_event_dir, f"{new_id}.json")
-
-    if copy_subs and os.path.exists(src_event_path):
-        with open(src_event_path, 'r', encoding='utf-8') as f:
-            src_data = json.load(f)
+    # 個別ファイル(遷移図データ含む)もコピーする
+    if copy_subs:
+        src_data = scenario.read_event_data(id)
         src_subgroups = src_data.get('subgroups', {})
         new_subgroups = {}
         for old_sub, new_sub in zip(source.get('subEvents', []), new_sub_events):
@@ -1755,8 +1767,7 @@ def copy_scenario_event(id):
                 # 遷移図データ(nodes/edges、サブグループ含む)をそのままコピー
                 new_subgroups[str(new_sub['subId'])] = copy.deepcopy(src_subgroups[old_sub_id_str])
         new_event = {**new_event, "subgroups": new_subgroups}
-    with open(new_event_path, 'w', encoding='utf-8') as f:
-        json.dump(new_event, f)
+    scenario.write_event_data(new_id, new_event)
 
     # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
     scenario.sync_all_scenario_class_data(events)
@@ -1799,30 +1810,34 @@ def copy_sub_event(id, subId):
         f.truncate()
         json.dump(events, f)
 
-    # 遷移図データ(nodes/edges)もコピー
-    src_event_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, id, f"{id}.json")
-    target_event_dir = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, target_event_id)
-    os.makedirs(target_event_dir, exist_ok=True)
-    target_event_path = os.path.join(target_event_dir, f"{target_event_id}.json")
+    # 遷移図データ(nodes/edges)もコピーする。読み込み・書き込みとも
+    # このSub 1件分だけに触れるので、対象イベントの他のSubには一切影響しない。
+    src_tree = scenario.read_sub_event_transition(id, subId)
+    scenario.write_sub_event_transition(target_event_id, max_sub_id, copy.deepcopy(src_tree))
 
-    src_subgroup_data = {'nodes': [], 'edges': []}
-    if os.path.exists(src_event_path):
-        with open(src_event_path, 'r', encoding='utf-8') as f:
-            src_data = json.load(f)
-        src_subgroup_data = src_data.get('subgroups', {}).get(str(subId), {'nodes': [], 'edges': []})
-
-    target_data = {}
-    if os.path.exists(target_event_path):
-        with open(target_event_path, 'r', encoding='utf-8') as f:
-            target_data = json.load(f)
-    target_data.setdefault('subgroups', {})[str(max_sub_id)] = copy.deepcopy(src_subgroup_data)
-    with open(target_event_path, 'w', encoding='utf-8') as f:
-        json.dump(target_data, f)
+    # イベント本体側のsubEvents一覧にも同期する
+    target_full = scenario.read_event_data(target_event_id)
+    target_full['subEvents'] = target_event['subEvents']
+    scenario.write_event_data(target_event_id, target_full)
 
     # ClassDataID側のScenario_{親}/{サブ}を最新の構成へ同期(項目6)
     scenario.sync_all_scenario_class_data(events)
 
     return jsonify({"message": "サブイベントをコピーしました", "subId": max_sub_id, "targetEventId": target_event_id})
+
+
+@app.route('/api/scenario-event/migrate-legacy', methods=['POST'])
+def migrate_legacy_scenario_events():
+    """旧レイアウト({eventId}/{eventId}.json、subgroups埋め込み)のまま残っている
+    イベントデータを、まとめて新レイアウト(イベント名フォルダ + Subごとの
+    個別ファイル)へ更新する。個々のイベントは通常アクセス時に自動で移行されるが、
+    それを待たずに今すぐまとめて更新したい場合に使う一括処理。"""
+    try:
+        result = scenario.migrate_all_legacy_events()
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error migrating legacy scenario events: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 
 # Transition管理
@@ -1833,38 +1848,28 @@ def handle_transition(eventId, subId):
     if not eventId or eventId == 'undefined' or not subId or subId == 'undefined':
         app.logger.error(f"Invalid parameters: eventId={eventId}, subId={subId}")
         return jsonify({'error': 'Invalid eventId or subId'}), 400
-    file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
     if request.method == 'GET':
         try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                return jsonify(data.get('subgroups', {}).get(subId, {'nodes': [], 'edges': []}))
-            return jsonify({'nodes': [], 'edges': []})
+            # このSub 1件分のファイルだけを読む(他のSubには一切触れない)
+            return jsonify(scenario.read_sub_event_transition(eventId, subId))
         except Exception as e:
-            app.logger.error(f"Error reading {file_path}: {str(e)}")
+            app.logger.error(f"Error reading transition for {eventId}/{subId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
     else:  # POST
         try:
             data = request.get_json()
-            current_data = {}
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    current_data = json.load(f)
             # 物語設定(storySetting)など、遷移グラフ(nodes/edges)以外の
-            # キーが既存のsubgroups[subId]に同居している場合があるため、
+            # キーが既存のSubデータに同居している場合があるため、
             # 丸ごと置き換えず非破壊マージする（このAPIは遷移グラフの
             # 保存専用であり、物語設定を書き潰さないようにするため）。
-            current_data.setdefault('subgroups', {})
-            existing_sub = current_data['subgroups'].get(subId, {})
+            existing_sub = scenario.read_sub_event_transition(eventId, subId)
             merged_sub = dict(existing_sub)
             merged_sub.update(data)
-            current_data['subgroups'][subId] = merged_sub
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(current_data, f, ensure_ascii=False, indent=2)
+            # このSub 1件分のファイルだけを書く(他のSubには一切触れない)
+            scenario.write_sub_event_transition(eventId, subId, merged_sub)
             return jsonify({'message': 'Transition saved'})
         except Exception as e:
-            app.logger.error(f"Error saving {file_path}: {str(e)}")
+            app.logger.error(f"Error saving transition for {eventId}/{subId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
 @app.route('/api/scenario-event/<eventId>/sub/<subId>/transition/<parentId>/subgroup', methods=['GET', 'POST'])
@@ -1873,53 +1878,39 @@ def handle_subgroup(eventId, subId, parentId):
     if not eventId or eventId == 'undefined' or not subId or subId == 'undefined' or not parentId:
         app.logger.error(f"Invalid parameters: eventId={eventId}, subId={subId}, parentId={parentId}")
         return jsonify({'error': 'Invalid parameters'}), 400
-    file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
     if request.method == 'GET':
         try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                subgroups = data.get('subgroups', {}).get(subId, {}).get('nodes', [])
-                for node in subgroups:
-                    if node['id'] == parentId:
-                        return jsonify(node['data'].get('subgroups', {}).get(parentId, {'nodes': [], 'edges': []}))
-                return jsonify({'nodes': [], 'edges': []})
+            sub_data = scenario.read_sub_event_transition(eventId, subId)
+            for node in sub_data.get('nodes', []):
+                if node['id'] == parentId:
+                    return jsonify(node['data'].get('subgroups', {}).get(parentId, {'nodes': [], 'edges': []}))
             return jsonify({'nodes': [], 'edges': []})
         except Exception as e:
-            app.logger.error(f"Error reading {file_path}: {str(e)}")
+            app.logger.error(f"Error reading subgroup for {eventId}/{subId}/{parentId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
     else:  # POST
         try:
             data = request.get_json()
-            current_data = {}
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    current_data = json.load(f)
-            subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
-            updated_nodes = subgroups
-            for node in updated_nodes:
+            sub_data = scenario.read_sub_event_transition(eventId, subId)
+            nodes = sub_data.get('nodes', [])
+            for node in nodes:
                 if node['id'] == parentId:
                     node['data']['subgroups'] = node['data'].get('subgroups', {})
                     node['data']['subgroups'][parentId] = data
-            current_data.setdefault('subgroups', {}).setdefault(subId, {})['nodes'] = updated_nodes
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(current_data, f, ensure_ascii=False, indent=2)
+            sub_data['nodes'] = nodes
+            scenario.write_sub_event_transition(eventId, subId, sub_data)
             return jsonify({'message': 'Subgroup saved'})
         except Exception as e:
-            app.logger.error(f"Error saving {file_path}: {str(e)}")
+            app.logger.error(f"Error saving subgroup for {eventId}/{subId}/{parentId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
 @app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/role', methods=['POST'])
 def add_role(eventId, subId, nodeId):
     try:
         data = request.get_json()
-        file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
-        current_data = {}
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                current_data = json.load(f)
-        subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
-        for node in subgroups:
+        sub_data = scenario.read_sub_event_transition(eventId, subId)
+        nodes = sub_data.get('nodes', [])
+        for node in nodes:
             if node['id'] == nodeId:
                 node['data']['roles'] = node['data'].get('roles', []) + [{
                     'id': data['roleId'],
@@ -1938,8 +1929,8 @@ def add_role(eventId, subId, nodeId):
                     }]
                 )
                 break
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(current_data, f, ensure_ascii=False, indent=2)
+        sub_data['nodes'] = nodes
+        scenario.write_sub_event_transition(eventId, subId, sub_data)
         return jsonify({'message': 'Role added'})
     except Exception as e:
         app.logger.error(f"Error adding role: {str(e)}")
@@ -2045,13 +2036,10 @@ def save_role_data(eventId, subId, nodeId, roleId):
     try:
         data = request.get_json()
         formData = data.get('formData', {})
-        file_path = os.path.join(DATA_DIR, scenario.SCENARIO_EVENT, eventId, f"{eventId}.json")
-        current_data = {}
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                current_data = json.load(f)
-        subgroups = current_data.get('subgroups', {}).get(subId, {}).get('nodes', [])
-        for node in subgroups:
+        # このSub 1件分だけを読み書きする(他のSubには一切触れない)
+        sub_data = scenario.read_sub_event_transition(eventId, subId)
+        nodes = sub_data.get('nodes', [])
+        for node in nodes:
             if node['id'] == nodeId:
                 node['data']['roles'] = [
                     role if role['id'] != roleId else { **role, 'data': formData }
@@ -2064,8 +2052,8 @@ def save_role_data(eventId, subId, nodeId, roleId):
                     for role in node['data']['subgroups'][nodeId]['nodes'][0]['data'].get('roles', [])
                 ]
                 break
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(current_data, f, ensure_ascii=False, indent=2)
+        sub_data['nodes'] = nodes
+        scenario.write_sub_event_transition(eventId, subId, sub_data)
         return jsonify({'message': 'Role data saved'})
     except Exception as e:
         app.logger.error(f"Error saving role data: {str(e)}")

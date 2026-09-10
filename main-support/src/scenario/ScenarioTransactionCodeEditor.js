@@ -120,7 +120,6 @@ export function buildCompletionSource(roleNames, roleSchemas) {
       // 選んだときに置換範囲がずれ、「Character」+「CharacterID.Test」のように
       // 元の入力が消えずに二重挿入される不具合の原因になっていた。
       to: context.pos,
-      filter: false,
       options: items.map((it) => ({
         label: it.label,
         type: it.type === 'role' ? 'class' : it.type === 'field' ? 'property' : 'text',
@@ -199,7 +198,7 @@ function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas
   const extensions = useMemo(() => [
     buildDslLanguage(),
     buildLinter(roleSchemas),
-    autocompletion({ override: [buildCompletionSource(roleNames || [], roleSchemas || {})],activateOnTyping: true }),
+    autocompletion({ override: [buildCompletionSource(roleNames || [], roleSchemas || {})] }),
     keymap.of([
       indentWithTab,
       { key: 'Mod-Alt-g', run: insertNewGroupCommand, preventDefault: true },
