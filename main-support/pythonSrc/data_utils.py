@@ -713,6 +713,11 @@ def _dict_json_key_from_object(target, source_expr, type_str, enum_list, class_l
     if type_str in enum_list or type_str in class_id_list:
         cs_type = _dict_cs_type_name(type_str, None, enum_list, class_list, class_id_list)
         return f"{target} = ({cs_type})Enum.Parse(typeof({cs_type}), Convert.ToString({source_expr}));"
+    if type_str in class_list:
+        cs_type = _dict_cs_type_name(type_str, None, enum_list, class_list, class_id_list)
+        var_ref = target[4:] if target.startswith('var ') else target
+        return (f"{target} = new {cs_type}(); "
+                f"{var_ref}.ReadJson((Dictionary<string, object>){source_expr});")
     tl = type_str.lower() if isinstance(type_str, str) else ''
     if tl in TYPE_MAP and tl not in ('string', 'vector2', 'vector3'):
         return f"{target} = Convert.ToInt32({source_expr});" if tl in ('int', 'byte', 'short', 'long') else f"{target} = Convert.ToDouble({source_expr});"

@@ -424,6 +424,7 @@ def custom_class_data_type_options():
 _CUSTOM_BIT_FIELD_CS = '''using System;
 using System.Collections.Generic;
 using System.IO;
+using UnityEngine;
 
 namespace GameCore.Classes
 {
@@ -439,7 +440,6 @@ namespace GameCore.Classes
     [Serializable]
     public abstract class CustomBitFieldBase
     {
-        [SerializeField]
         public int Size { get; protected set; }
         [SerializeField]
         protected ulong single;
@@ -572,12 +572,21 @@ namespace GameCore.Classes
     // コンストラクタに渡す order は「ビットインデックス ⇔ T の値」の対応表で、
     // C#生成のたびに参照先の並び順から自動的に組み立てられる。
     [Serializable]
-        [Serializable]
     public class CustomBitField<T> : CustomBitFieldBase where T : struct, Enum
     {
         // 型ごとに一度だけ計算される
-        private static readonly int MaxValue =
-            Enum.GetValues<T>().Max(e => Convert.ToInt32(e));
+        private static readonly int MaxValue = GetMaxValue();
+
+        private static int GetMaxValue()
+        {
+            int max = 0;
+            foreach (T value in Enum.GetValues(typeof(T)))
+            {
+                int index = Convert.ToInt32(value);
+                if (index > max) max = index;
+            }
+            return max;
+        }
 
         public CustomBitField()
         {
@@ -632,6 +641,8 @@ namespace GameCore.Classes
         }
     }
 }
+
+
 
 '''
 
