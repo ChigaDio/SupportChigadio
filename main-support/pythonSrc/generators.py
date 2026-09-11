@@ -69,6 +69,449 @@ PY_TYPE_MAP = {  # Pythonのreader用（変更なし）
 # JSはDataView + offset直接実装にするのでTYPE_MAP不要（BinaryReaderは他の用途で残す）
 
 # ========================
+# 1.5 共有ランタイムファイル（Python/JS）の自動生成
+# ========================
+# C#側で _CUSTOM_BIT_FIELD_CS を _ensure_custom_bit_field_cs() が自動生成しているのと
+# 同じ考え方で、Python/JS版のBase{name}.py / Base{name}.js が使う共通クラス
+# （バイナリ読み書き・bit/color/bezier/dictionary用のランタイムクラス）も、
+# 手書きで配置してもらうのではなく、生成のたびにこのモジュールが自動で書き出す。
+# 出力先は class_data フォルダ直下の "_Shared" サブフォルダ（C#側の _Shared 命名と統一）。
+
+_PY_BINARY_IO_SRC = '''# -*- coding: utf-8 -*-
+"""
+class_data/_Shared/binary_io.py
+
+自動生成ファイル（pythonSrc/generators.py が生成のたびに書き出す）。
+手動で編集しないこと（次回生成時に上書きされる）。
+
+Base{name}.py の read(self, reader) / write(self, writer) が使う、
+対称なバイナリ読み書きの共通クラス。
+- エンディアン: リトルエンディアン固定（C#側BinaryReader/BinaryWriter、
+  JS側DataView(..., true)実装と揃えている）
+- 文字列: 4byte(int32, リトルエンディアン)の長さプレフィックス + UTF-8バイト列
+- char: 2byte(UInt16)としてUnicodeのコードポイント1つ分を読み書きする
+"""
+import struct
+
+
+class PyBinaryReader:
+    __slots__ = ('_data', '_pos')
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self._pos = 0
+
+    def _read_exact(self, size):
+        end = self._pos + size
+        if end > len(self._data):
+            raise EOFError(
+                f"バイナリの終端を超えて読み込もうとしました "
+                f"(pos={self._pos}, size={size}, len={len(self._data)})"
+            )
+        chunk = self._data[self._pos:end]
+        self._pos = end
+        return chunk
+
+    def read_int32(self) -> int:
+        return struct.unpack('<i', self._read_exact(4))[0]
+
+    def read_uint32(self) -> int:
+        return struct.unpack('<I', self._read_exact(4))[0]
+
+    def read_byte(self) -> int:
+        return struct.unpack('<B', self._read_exact(1))[0]
+
+    def read_int16(self) -> int:
+        return struct.unpack('<h', self._read_exact(2))[0]
+
+    def read_int64(self) -> int:
+        return struct.unpack('<q', self._read_exact(8))[0]
+
+    def read_uint64(self) -> int:
+        return struct.unpack('<Q', self._read_exact(8))[0]
+
+    def read_float(self) -> float:
+        return struct.unpack('<f', self._read_exact(4))[0]
+
+    def read_double(self) -> float:
+        return struct.unpack('<d', self._read_exact(8))[0]
+
+    def read_bool(self) -> bool:
+        return struct.unpack('<?', self._read_exact(1))[0]
+
+    def read_char(self) -> str:
+        return chr(struct.unpack('<H', self._read_exact(2))[0])
+
+    def read_string(self) -> str:
+        length = self.read_int32()
+        if length <= 0:
+            return ''
+        return self._read_exact(length).decode('utf-8')
+
+    def tell(self) -> int:
+        return self._pos
+
+    def remaining(self) -> int:
+        return len(self._data) - self._pos
+
+    def eof(self) -> bool:
+        return self._pos >= len(self._data)
+
+
+class PyBinaryWriter:
+    __slots__ = ('_buf',)
+
+    def __init__(self):
+        self._buf = bytearray()
+
+    def write_int32(self, value):
+        self._buf += struct.pack('<i', int(value))
+
+    def write_uint32(self, value):
+        self._buf += struct.pack('<I', int(value))
+
+    def write_byte(self, value):
+        self._buf += struct.pack('<B', int(value) & 0xFF)
+
+    def write_int16(self, value):
+        self._buf += struct.pack('<h', int(value))
+
+    def write_int64(self, value):
+        self._buf += struct.pack('<q', int(value))
+
+    def write_uint64(self, value):
+        self._buf += struct.pack('<Q', int(value))
+
+    def write_float(self, value):
+        self._buf += struct.pack('<f', float(value))
+
+    def write_double(self, value):
+        self._buf += struct.pack('<d', float(value))
+
+    def write_bool(self, value):
+        self._buf += struct.pack('<?', bool(value))
+
+    def write_char(self, value):
+        code_point = ord(value) if isinstance(value, str) else int(value)
+        self._buf += struct.pack('<H', code_point)
+
+    def write_string(self, value):
+        encoded = (value or '').encode('utf-8')
+        self.write_int32(len(encoded))
+        self._buf += encoded
+
+    def getvalue(self) -> bytes:
+        return bytes(self._buf)
+
+    def __len__(self):
+        return len(self._buf)
+'''
+
+_PY_RUNTIME_TYPES_SRC = '''# -*- coding: utf-8 -*-
+"""
+class_data/_Shared/runtime_types.py
+
+自動生成ファイル（pythonSrc/generators.py が生成のたびに書き出す）。
+手動で編集しないこと（次回生成時に上書きされる）。
+
+bit/color/bezier(AnimationCurve)フィールド用のPython版ランタイムクラス。
+C#側の CustomBitField / UnityEngine.Color / UnityEngine.AnimationCurve と
+同じバイナリレイアウト・同じJSONスキーマ（{"bits":[...]} / {"r","g","b","a"} /
+{"points":[{"time","value","inTangent","outTangent"}, ...]}）で相互運用できる
+ようにしてある。
+"""
+
+
+class PyBitField:
+    """CustomBitField(C#)相当。Pythonのintは多倍長なので、C#のような
+    64bit超えでの配列分割は行わず、1つのintをビットマスクとして使う。
+    ワイヤーフォーマット（Read/Write）はC#側と互換
+    （int32 size + ceil(size/64)個のuint64、リトルエンディアン）。"""
+    __slots__ = ('size', '_bits')
+
+    def __init__(self, size=8):
+        self.size = max(int(size), 1)
+        self._bits = 0
+
+    def get(self, index):
+        if index < 0 or index >= self.size:
+            return False
+        return (self._bits >> index) & 1 == 1
+
+    def set(self, index, value):
+        if index < 0 or index >= self.size:
+            return
+        if value:
+            self._bits |= (1 << index)
+        else:
+            self._bits &= ~(1 << index)
+
+    def set_exclusive(self, index):
+        self._bits = 0
+        self.set(index, True)
+
+    def select_all(self):
+        self._bits = (1 << self.size) - 1
+
+    def clear(self):
+        self._bits = 0
+
+    def read(self, reader):
+        self.size = reader.read_int32()
+        nwords = (self.size + 63) // 64
+        value = 0
+        for i in range(nwords):
+            value |= reader.read_uint64() << (64 * i)
+        self._bits = value
+
+    def write(self, writer):
+        writer.write_int32(self.size)
+        nwords = (self.size + 63) // 64
+        mask = (1 << 64) - 1
+        for i in range(nwords):
+            writer.write_uint64((self._bits >> (64 * i)) & mask)
+
+    def load_json(self, data):
+        self.clear()
+        for idx in (data or {}).get('bits', []):
+            self.set(int(idx), True)
+
+    def write_json(self, data):
+        data['bits'] = [i for i in range(self.size) if self.get(i)]
+
+
+class PyColor:
+    """UnityEngine.Color相当の軽量版。"""
+    __slots__ = ('r', 'g', 'b', 'a')
+
+    def __init__(self, r=1.0, g=1.0, b=1.0, a=1.0):
+        self.r, self.g, self.b, self.a = r, g, b, a
+
+    def read(self, reader):
+        self.r = reader.read_float()
+        self.g = reader.read_float()
+        self.b = reader.read_float()
+        self.a = reader.read_float()
+
+    def write(self, writer):
+        writer.write_float(self.r)
+        writer.write_float(self.g)
+        writer.write_float(self.b)
+        writer.write_float(self.a)
+
+    def load_json(self, data):
+        d = data or {}
+        self.r = d.get('r', 1.0)
+        self.g = d.get('g', 1.0)
+        self.b = d.get('b', 1.0)
+        self.a = d.get('a', 1.0)
+
+    def write_json(self, data):
+        data['r'] = self.r
+        data['g'] = self.g
+        data['b'] = self.b
+        data['a'] = self.a
+
+
+class PyKeyframe:
+    __slots__ = ('time', 'value', 'in_tangent', 'out_tangent')
+
+    def __init__(self, time=0.0, value=0.0, in_tangent=0.0, out_tangent=0.0):
+        self.time = time
+        self.value = value
+        self.in_tangent = in_tangent
+        self.out_tangent = out_tangent
+
+
+class PyAnimationCurve:
+    """UnityEngine.AnimationCurve(bezier)相当の軽量版。keysプロパティ名も
+    Unity側に合わせてある。"""
+    __slots__ = ('keys',)
+
+    def __init__(self):
+        self.keys = []
+
+    def read(self, reader):
+        count = reader.read_int32()
+        self.keys = []
+        for _ in range(count):
+            self.keys.append(PyKeyframe(
+                reader.read_float(), reader.read_float(),
+                reader.read_float(), reader.read_float(),
+            ))
+
+    def write(self, writer):
+        writer.write_int32(len(self.keys))
+        for k in self.keys:
+            writer.write_float(k.time)
+            writer.write_float(k.value)
+            writer.write_float(k.in_tangent)
+            writer.write_float(k.out_tangent)
+
+    def load_json(self, data):
+        self.keys = []
+        for p in (data or {}).get('points', []):
+            self.keys.append(PyKeyframe(
+                p.get('time', 0.0), p.get('value', 0.0),
+                p.get('inTangent', 0.0), p.get('outTangent', 0.0),
+            ))
+
+    def write_json(self, data):
+        data['points'] = [
+            {'time': k.time, 'value': k.value, 'inTangent': k.in_tangent, 'outTangent': k.out_tangent}
+            for k in self.keys
+        ]
+'''
+
+_JS_RUNTIME_TYPES_SRC = '''// class_data/_Shared/runtimeTypes.js
+//
+// 自動生成ファイル（pythonSrc/generators.py が生成のたびに書き出す）。
+// 手動で編集しないこと（次回生成時に上書きされる）。
+//
+// bit/bezier(AnimationCurve)フィールド用のJS版ランタイムクラス。
+// C#側の CustomBitField / UnityEngine.AnimationCurve と同じバイナリレイアウト・
+// 同じJSONスキーマ（{"bits":[...]} / {"points":[{"time","value","inTangent","outTangent"}, ...]}）
+// で相互運用できるようにしてある。colorは単純なプレーンオブジェクト{r,g,b,a}のまま
+// 扱う（Vector2/Vector3が配列のまま扱われているのと同じ方針）。
+
+export class BitField {
+  // C#側のCustomBitFieldと同じワイヤーフォーマット
+  // （int32 size + ceil(size/64)個のuint64、リトルエンディアン）。
+  // JSはBigIntを使うことで、Pythonのint同様に多倍長のビットマスクとして扱う。
+  constructor(size = 8) {
+    this.size = Math.max(size | 0, 1);
+    this.bits = 0n;
+  }
+
+  get(index) {
+    if (index < 0 || index >= this.size) return false;
+    return ((this.bits >> BigInt(index)) & 1n) === 1n;
+  }
+
+  set(index, value) {
+    if (index < 0 || index >= this.size) return;
+    const bit = 1n << BigInt(index);
+    if (value) this.bits |= bit; else this.bits &= ~bit;
+  }
+
+  setExclusive(index) { this.clear(); this.set(index, true); }
+  selectAll() { this.bits = (1n << BigInt(this.size)) - 1n; }
+  clear() { this.bits = 0n; }
+
+  read(view, offset) {
+    let o = offset;
+    this.size = view.getInt32(o, true); o += 4;
+    const nWords = Math.ceil(this.size / 64);
+    let value = 0n;
+    for (let i = 0; i < nWords; i++) {
+      const word = view.getBigUint64(o, true); o += 8;
+      value |= word << BigInt(64 * i);
+    }
+    this.bits = value;
+    return o;
+  }
+
+  write(view, offset) {
+    let o = offset;
+    view.setInt32(o, this.size, true); o += 4;
+    const nWords = Math.ceil(this.size / 64);
+    const mask = (1n << 64n) - 1n;
+    for (let i = 0; i < nWords; i++) {
+      const word = (this.bits >> BigInt(64 * i)) & mask;
+      view.setBigUint64(o, word, true); o += 8;
+    }
+    return o;
+  }
+
+  loadJson(data) {
+    this.clear();
+    for (const idx of (data && data.bits) || []) this.set(idx, true);
+  }
+
+  writeJson(result) {
+    const bits = [];
+    for (let i = 0; i < this.size; i++) if (this.get(i)) bits.push(i);
+    result.bits = bits;
+  }
+}
+
+export class AnimationCurveLite {
+  // UnityEngine.AnimationCurve相当の軽量版。keys: [{time,value,inTangent,outTangent}, ...]
+  constructor() { this.keys = []; }
+
+  read(view, offset) {
+    let o = offset;
+    const count = view.getInt32(o, true); o += 4;
+    this.keys = [];
+    for (let i = 0; i < count; i++) {
+      const time = view.getFloat32(o, true); o += 4;
+      const value = view.getFloat32(o, true); o += 4;
+      const inTangent = view.getFloat32(o, true); o += 4;
+      const outTangent = view.getFloat32(o, true); o += 4;
+      this.keys.push({ time, value, inTangent, outTangent });
+    }
+    return o;
+  }
+
+  write(view, offset) {
+    let o = offset;
+    view.setInt32(o, this.keys.length, true); o += 4;
+    for (const k of this.keys) {
+      view.setFloat32(o, k.time, true); o += 4;
+      view.setFloat32(o, k.value, true); o += 4;
+      view.setFloat32(o, k.inTangent, true); o += 4;
+      view.setFloat32(o, k.outTangent, true); o += 4;
+    }
+    return o;
+  }
+
+  loadJson(data) {
+    this.keys = ((data && data.points) || []).map((p) => ({
+      time: p.time || 0, value: p.value || 0, inTangent: p.inTangent || 0, outTangent: p.outTangent || 0,
+    }));
+  }
+
+  writeJson(result) {
+    result.points = this.keys.map((k) => ({
+      time: k.time, value: k.value, inTangent: k.inTangent, outTangent: k.outTangent,
+    }));
+  }
+}
+'''
+
+
+def _shared_class_data_dir():
+    d = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA, '_Shared')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _ensure_py_binary_io():
+    """Python版の共通バイナリ読み書きクラスを最新化する（C#側の
+    _ensure_custom_bit_field_cs()と同じ「生成のたびに自動で書き出す」方式）。"""
+    path = os.path.join(_shared_class_data_dir(), 'binary_io.py')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(_PY_BINARY_IO_SRC)
+    return path
+
+
+def _ensure_py_runtime_types():
+    """Python版のbit/color/bezier用ランタイムクラスを最新化する。"""
+    path = os.path.join(_shared_class_data_dir(), 'runtime_types.py')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(_PY_RUNTIME_TYPES_SRC)
+    return path
+
+
+def _ensure_js_runtime_types():
+    """JS版のbit/bezier用ランタイムクラスを最新化する。"""
+    path = os.path.join(_shared_class_data_dir(), 'runtimeTypes.js')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(_JS_RUNTIME_TYPES_SRC)
+    return path
+
+
+# ========================
 # 2. Python版フィールド生成（load_json追加 + import用に型情報を返す）
 # ========================
 def generate_python_field(item, enum_list, class_list, class_id_list):
@@ -76,6 +519,90 @@ def generate_python_field(item, enum_list, class_list, class_id_list):
     var_name = item['name']
     array_size = item.get('arraySize', 0)
     description = item.get('description', '')
+    options = item.get('options') or {}
+
+    # --- bit / color / bezier: 専用のPythonランタイムクラス(_Shared/runtime_types.py)
+    #     に委譲する。いずれもスカラー専用（配列/リストのbitフィールド等は現状非対応、
+    #     実運用上ほぼ使われないため）。
+    if type_str in ('bit', 'color', 'bezier'):
+        class_name = {'bit': 'PyBitField', 'color': 'PyColor', 'bezier': 'PyAnimationCurve'}[type_str]
+        if type_str == 'bit':
+            size = int(options.get('size', 8) or 8)
+            initial = f"{class_name}({size})"
+        else:
+            initial = f"{class_name}()"
+        return {
+            'field': f"        self.{var_name} = {initial}  # {description}\n",
+            'read': f"        self.{var_name}.read(reader)\n",
+            'write': f"        self.{var_name}.write(writer)\n",
+            'json': f"        self.{var_name}.load_json(data.get('{var_name}', {{}}))\n",
+            'json_write': f"        __d_{var_name} = {{}}\n        self.{var_name}.write_json(__d_{var_name})\n        data['{var_name}'] = __d_{var_name}\n",
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+            'used_runtime_type': class_name,
+        }
+
+    # --- dictionary: keyType/valueTypeの組み合わせに応じて、素のdictとして
+    #     読み書きする。JSON表現はC#/JS版と揃えて {"entries":[{"key":...,"value":...}]}。
+    if type_str == 'dictionary':
+        key_type = options.get('keyType', 'int')
+        value_type = options.get('valueType', 'int')
+        value_array_size = options.get('valueArraySize', 0) or 0
+        value_options = options.get('valueOptions') or {}
+
+        def _py_basic_read(t):
+            tl = t.lower()
+            if tl in PY_TYPE_MAP:
+                return f"reader.{PY_TYPE_MAP[tl]['py_read']}()"
+            if t in enum_list or t in class_id_list:
+                return "reader.read_int32()"
+            return "reader.read_int32()  # TODO: 未対応の型です"
+
+        def _py_basic_write(t, expr):
+            tl = t.lower()
+            if tl in PY_TYPE_MAP:
+                return f"writer.{PY_TYPE_MAP[tl]['py_read'].replace('read_', 'write_')}({expr})"
+            if t in enum_list or t in class_id_list:
+                return f"writer.write_int32(int({expr}))"
+            return f"writer.write_int32(0)  # TODO: 未対応の型です"
+
+        read_code = f"        self.{var_name} = {{}}\n"
+        read_code += f"        __n_{var_name} = reader.read_int32()\n"
+        read_code += f"        for _ in range(__n_{var_name}):\n"
+        read_code += f"            __k = {_py_basic_read(key_type)}\n"
+        if value_array_size == -1:
+            read_code += f"            __cnt = reader.read_int32()\n"
+            read_code += f"            __v = [{_py_basic_read(value_type)} for _ in range(__cnt)]\n"
+        else:
+            read_code += f"            __v = {_py_basic_read(value_type)}\n"
+        read_code += f"            self.{var_name}[__k] = __v\n"
+
+        write_code = f"        writer.write_int32(len(self.{var_name}))\n"
+        write_code += f"        for __k, __v in self.{var_name}.items():\n"
+        write_code += f"            {_py_basic_write(key_type, '__k')}\n"
+        if value_array_size == -1:
+            write_code += f"            writer.write_int32(len(__v))\n"
+            write_code += f"            for __item in __v:\n"
+            write_code += f"                {_py_basic_write(value_type, '__item')}\n"
+        else:
+            write_code += f"            {_py_basic_write(value_type, '__v')}\n"
+
+        json_code = f"        self.{var_name} = {{}}\n"
+        json_code += f"        for __e in (data.get('{var_name}', {{}}) or {{}}).get('entries', []):\n"
+        json_code += f"            self.{var_name}[__e['key']] = __e['value']\n"
+
+        json_write_code = f"        __entries_{var_name} = []\n"
+        json_write_code += f"        for __k, __v in self.{var_name}.items():\n"
+        json_write_code += f"            __entries_{var_name}.append({{'key': __k, 'value': __v}})\n"
+        json_write_code += f"        data['{var_name}'] = {{'entries': __entries_{var_name}}}\n"
+
+        return {
+            'field': f"        self.{var_name} = {{}}  # {description}\n",
+            'read': read_code, 'write': write_code,
+            'json': json_code, 'json_write': json_write_code,
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+        }
 
     # 型正規化（短いクラス名だけ使う）
     short_type = type_str.split('.')[-1].replace("TableID", "").replace("ID", "") # クラスIDはIDを外す   
@@ -187,10 +714,79 @@ def generate_python_field(item, enum_list, class_list, class_id_list):
         else:
             json_code = f"        self.{var_name} = data.get('{var_name}', [])\n"
 
+    # --- write(writer)コード（readと対称。writerの生成/closeは呼び出し元の責務）--
+    # readerが read_int32()等の対称メソッドを持つ前提で、writerは write_int32()等の
+    # 対称メソッドを持つものとする（呼び出し元のwriterクラスにこれらが無ければ追加要）。
+    write_code = ""
+    if is_list:
+        write_code = f"        writer.write_int32(len(self.{var_name}))\n"
+        write_code += f"        for __v in self.{var_name}:\n"
+        w_indent = "            "
+    elif is_array:
+        write_code = f"        for __v in self.{var_name}[:{array_size}]:\n"
+        w_indent = "            "
+    else:
+        w_indent = "        "
+
+    def py_write_stmt(expr):
+        if py_type == 'vector2':
+            return f"{w_indent}writer.write_float({expr}[0]); writer.write_float({expr}[1])\n"
+        if py_type == 'vector3':
+            return f"{w_indent}writer.write_float({expr}[0]); writer.write_float({expr}[1]); writer.write_float({expr}[2])\n"
+        if py_type in PY_TYPE_MAP:
+            return f"{w_indent}writer.{PY_TYPE_MAP[py_type]['py_read'].replace('read_', 'write_')}({expr})\n"
+        if is_enum or is_table_id:
+            return f"{w_indent}writer.write_int32(int({expr}))\n"
+        if is_class:
+            return f"{w_indent}{expr}.write(writer)\n"
+        return f"{w_indent}pass  # Unsupported type for write: {py_type}\n"
+
+    if is_list or is_array:
+        write_code += py_write_stmt("__v")
+    else:
+        write_code += py_write_stmt(f"self.{var_name}")
+
+    # --- to_json()コード: dataに自身の値をキー=フィールド名でセットする ---------
+    def py_to_json_expr(expr):
+        if py_type in ('vector2', 'vector3'):
+            return f"list({expr})"
+        if is_enum or is_table_id:
+            return f"int({expr})"
+        return expr
+
+    if is_class:
+        json_write_code = (
+            f"        if self.{var_name} is not None:\n"
+            f"            __d_{var_name} = {{}}\n"
+            f"            self.{var_name}.write_json(__d_{var_name})\n"
+            f"            data['{var_name}'] = __d_{var_name}\n"
+            f"        else:\n"
+            f"            data['{var_name}'] = None\n"
+        )
+    elif is_list or is_array:
+        if is_class:
+            json_write_code = (
+                f"        __list_{var_name} = []\n"
+                f"        for __v in self.{var_name}:\n"
+                f"            if __v is not None:\n"
+                f"                __d = {{}}\n"
+                f"                __v.write_json(__d)\n"
+                f"                __list_{var_name}.append(__d)\n"
+                f"            else:\n"
+                f"                __list_{var_name}.append(None)\n"
+                f"        data['{var_name}'] = __list_{var_name}\n"
+            )
+        else:
+            json_write_code = f"        data['{var_name}'] = list(self.{var_name})\n"
+    else:
+        json_write_code = f"        data['{var_name}'] = {py_to_json_expr(f'self.{var_name}')}\n"
+
     return {
         'field': f"        self.{var_name} = {initial}  # {description}\n",
         'read': read_code,
+        'write': write_code,
         'json': json_code,
+        'json_write': json_write_code,
         'used_class': py_type if is_class else None,
         'is_enum': is_enum,
         'used_enum': py_type if is_enum else None,
@@ -206,6 +802,120 @@ def generate_js_field(item, enum_list, class_list, class_id_list):
     var_name = item['name']
     array_size = item.get('arraySize', 0)
     description = item.get('description', '')
+    options = item.get('options') or {}
+
+    # --- bit / bezier: 専用のJSランタイムクラス(_Shared/runtimeTypes.js)に委譲する
+    #     （colorは既存のVector2/Vector3同様プレーンオブジェクトのまま扱う）。
+    #     いずれもスカラー専用。
+    if type_str == 'bit':
+        size = int(options.get('size', 8) or 8)
+        return {
+            'field': f"        this.{var_name} = new BitField({size}); // {description}\n",
+            'read': f"        o = this.{var_name}.read(view, o);\n",
+            'write': f"        o = this.{var_name}.write(view, o);\n",
+            'json': f"        this.{var_name}.loadJson(data.{var_name});\n",
+            'json_write': f"        result.{var_name} = {{}}; this.{var_name}.writeJson(result.{var_name});\n",
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+            'used_runtime_type': 'BitField',
+        }
+    if type_str == 'bezier':
+        return {
+            'field': f"        this.{var_name} = new AnimationCurveLite(); // {description}\n",
+            'read': f"        o = this.{var_name}.read(view, o);\n",
+            'write': f"        o = this.{var_name}.write(view, o);\n",
+            'json': f"        this.{var_name}.loadJson(data.{var_name});\n",
+            'json_write': f"        result.{var_name} = {{}}; this.{var_name}.writeJson(result.{var_name});\n",
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+            'used_runtime_type': 'AnimationCurveLite',
+        }
+    if type_str == 'color':
+        return {
+            'field': f"        this.{var_name} = {{ r: 1, g: 1, b: 1, a: 1 }}; // {description}\n",
+            'read': (f"        this.{var_name} = {{ r: view.getFloat32(o, true), g: view.getFloat32(o + 4, true), "
+                      f"b: view.getFloat32(o + 8, true), a: view.getFloat32(o + 12, true) }}; o += 16;\n"),
+            'write': (f"        view.setFloat32(o, this.{var_name}.r, true); view.setFloat32(o + 4, this.{var_name}.g, true); "
+                       f"view.setFloat32(o + 8, this.{var_name}.b, true); view.setFloat32(o + 12, this.{var_name}.a, true); o += 16;\n"),
+            'json': f"        this.{var_name} = data.{var_name} || {{ r: 1, g: 1, b: 1, a: 1 }};\n",
+            'json_write': f"        result.{var_name} = {{ ...this.{var_name} }};\n",
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+        }
+
+    # --- dictionary: JSのMapとして読み書きする。JSON表現はC#/Python版と揃えて
+    #     { entries: [{ key, value }, ...] }。
+    if type_str == 'dictionary':
+        key_type = options.get('keyType', 'int')
+        value_type = options.get('valueType', 'int')
+        value_array_size = options.get('valueArraySize', 0) or 0
+
+        def _js_basic_read(t):
+            tl = t.lower()
+            if tl == 'string':
+                code = "(() => { const len = view.getInt32(o, true); o += 4; "
+                code += "const s = new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + o, len)); o += len; return s; })()"
+                return code
+            if tl == 'float':
+                return "(() => { const v = view.getFloat32(o, true); o += 4; return v; })()"
+            if tl == 'double':
+                return "(() => { const v = view.getFloat64(o, true); o += 8; return v; })()"
+            if tl == 'bool':
+                return "(() => { const v = view.getUint8(o) !== 0; o += 1; return v; })()"
+            # int / enum / classId等はすべてint32として扱う
+            return "(() => { const v = view.getInt32(o, true); o += 4; return v; })()"
+
+        def _js_basic_write(t, expr):
+            tl = t.lower()
+            if tl == 'string':
+                code = f"{{ const b = new TextEncoder().encode({expr}); view.setInt32(o, b.length, true); o += 4; "
+                code += "new Uint8Array(view.buffer, view.byteOffset + o, b.length).set(b); o += b.length; }"
+                return code
+            if tl == 'float':
+                return f"{{ view.setFloat32(o, {expr}, true); o += 4; }}"
+            if tl == 'double':
+                return f"{{ view.setFloat64(o, {expr}, true); o += 8; }}"
+            if tl == 'bool':
+                return f"{{ view.setUint8(o, {expr} ? 1 : 0); o += 1; }}"
+            return f"{{ view.setInt32(o, {expr}, true); o += 4; }}"
+
+        read_code = f"        this.{var_name} = new Map();\n"
+        read_code += f"        {{ const __n = view.getInt32(o, true); o += 4;\n"
+        read_code += f"          for (let __i = 0; __i < __n; __i++) {{\n"
+        read_code += f"              const __k = {_js_basic_read(key_type)};\n"
+        if value_array_size == -1:
+            read_code += "              const __cnt = view.getInt32(o, true); o += 4;\n"
+            read_code += "              const __v = [];\n"
+            read_code += f"              for (let __j = 0; __j < __cnt; __j++) {{ __v.push({_js_basic_read(value_type)}); }}\n"
+        else:
+            read_code += f"              const __v = {_js_basic_read(value_type)};\n"
+        read_code += f"              this.{var_name}.set(__k, __v);\n"
+        read_code += "          }\n        }\n"
+
+        write_code = f"        view.setInt32(o, this.{var_name}.size, true); o += 4;\n"
+        write_code += f"        for (const [__k, __v] of this.{var_name}.entries()) {{\n"
+        write_code += f"            {_js_basic_write(key_type, '__k')}\n"
+        if value_array_size == -1:
+            write_code += "            view.setInt32(o, __v.length, true); o += 4;\n"
+            write_code += f"            for (const __item of __v) {{ {_js_basic_write(value_type, '__item')} }}\n"
+        else:
+            write_code += f"            {_js_basic_write(value_type, '__v')}\n"
+        write_code += "        }\n"
+
+        json_code = f"        this.{var_name} = new Map();\n"
+        json_code += f"        for (const __e of (data.{var_name} && data.{var_name}.entries) || []) {{\n"
+        json_code += f"            this.{var_name}.set(__e.key, __e.value);\n"
+        json_code += "        }\n"
+
+        json_write_code = f"        result.{var_name} = {{ entries: Array.from(this.{var_name}.entries()).map(([key, value]) => ({{ key, value }})) }};\n"
+
+        return {
+            'field': f"        this.{var_name} = new Map(); // {description}\n",
+            'read': read_code, 'write': write_code,
+            'json': json_code, 'json_write': json_write_code,
+            'used_class': None, 'is_enum': False, 'used_enum': None,
+            'is_table_id': False, 'used_table_id': None,
+        }
 
     short_type = type_str.split('.')[-1].replace("TableID", "").replace("ID", "") # クラスIDはIDを外す   
     is_enum = type_str in enum_list or short_type in enum_list
@@ -352,10 +1062,83 @@ def generate_js_field(item, enum_list, class_list, class_id_list):
         else:
             json_code = f"        this.{var_name} = data.{var_name} || [];\n"
 
+    # --- write(view, offset)コード（read(view,o)と対称。新しいoffsetを返す）------
+    def js_write_stmt(target_expr):
+        if js_type == 'vector2':
+            return (f"        view.setFloat32(o, {target_expr}[0], true); o += 4;\n"
+                     f"        view.setFloat32(o, {target_expr}[1], true); o += 4;\n")
+        if js_type == 'vector3':
+            return (f"        view.setFloat32(o, {target_expr}[0], true); o += 4;\n"
+                     f"        view.setFloat32(o, {target_expr}[1], true); o += 4;\n"
+                     f"        view.setFloat32(o, {target_expr}[2], true); o += 4;\n")
+        if js_type == 'int' or js_type == 'int32':
+            return f"        view.setInt32(o, {target_expr}, true); o += 4;\n"
+        if js_type == 'byte':
+            return f"        view.setUint8(o, {target_expr}); o += 1;\n"
+        if js_type == 'short':
+            return f"        view.setInt16(o, {target_expr}, true); o += 2;\n"
+        if js_type == 'uint':
+            return f"        view.setUint32(o, {target_expr}, true); o += 4;\n"
+        if js_type == 'long' or js_type == 'int64':
+            return f"        view.setBigInt64(o, BigInt({target_expr}), true); o += 8;\n"
+        if js_type == 'char':
+            return f"        view.setUint16(o, {target_expr}.charCodeAt(0), true); o += 2;\n"
+        if js_type == 'float':
+            return f"        view.setFloat32(o, {target_expr}, true); o += 4;\n"
+        if js_type == 'double':
+            return f"        view.setFloat64(o, {target_expr}, true); o += 8;\n"
+        if js_type == 'bool':
+            return f"        view.setUint8(o, {target_expr} ? 1 : 0); o += 1;\n"
+        if js_type == 'string':
+            code = f"        {{ const __bytes = new TextEncoder().encode({target_expr}); view.setInt32(o, __bytes.length, true); o += 4;\n"
+            code += "          new Uint8Array(view.buffer, view.byteOffset + o, __bytes.length).set(__bytes); o += __bytes.length; }\n"
+            return code
+        if is_enum or is_table_id:
+            return f"        view.setInt32(o, {target_expr}, true); o += 4;\n"
+        if is_class:
+            return f"        o = {target_expr}.write(view, o);\n"
+        return f"        o += 4; // Unsupported type for write: {js_type}\n"
+
+    write_code = ""
+    if is_list or is_array:
+        write_code = f"        view.setInt32(o, this.{var_name}.length, true); o += 4;\n" if is_list else ""
+        write_code += f"        for (const __v of this.{var_name}) {{\n"
+        write_code += "    " + js_write_stmt("__v").replace("\n", "\n    ").rstrip() + "\n"
+        write_code += "        }\n"
+    else:
+        write_code = js_write_stmt(f"this.{var_name}")
+
+    # --- writeJson(data)コード: 引数に渡されたオブジェクトへ自身の値を書き込む ---
+    # （loadJson(data)と対で「引数にデータを入れる」方式に統一する）
+    def js_to_json_expr(expr):
+        if js_type in ('vector2', 'vector3'):
+            return f"[...{expr}]"
+        return expr
+
+    if is_class:
+        json_write_assign = (
+            f"        if (this.{var_name}) {{ result.{var_name} = {{}}; this.{var_name}.writeJson(result.{var_name}); }}\n"
+            f"        else {{ result.{var_name} = null; }}\n"
+        )
+    elif is_list or is_array:
+        if is_class:
+            json_write_assign = (
+                f"        result.{var_name} = this.{var_name}.map(__v => {{\n"
+                f"            if (!__v) return null;\n"
+                f"            const __d = {{}}; __v.writeJson(__d); return __d;\n"
+                f"        }});\n"
+            )
+        else:
+            json_write_assign = f"        result.{var_name} = [...this.{var_name}];\n"
+    else:
+        json_write_assign = f"        result.{var_name} = {js_to_json_expr('this.' + var_name)};\n"
+
     return {
         'field': f"        this.{var_name} = {initial}; // {description}\n",
         'read': read_code,
+        'write': write_code,
         'json': json_code,
+        'json_write': json_write_assign,
         'used_class': js_type if is_class else None,
         'is_enum': is_enum,
         'used_enum': js_type if is_enum else None,
@@ -533,28 +1316,42 @@ def generate_class_python(name, data, enum_list, class_list, class_id_list):
     py_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA, name)
     os.makedirs(py_dir, exist_ok=True)
 
+    # ★ 共有ランタイムファイル（バイナリ読み書き・bit/color/bezier用クラス）を
+    #   自動生成のたびに最新化する（C#側の_ensure_custom_bit_field_cs()と同じ方式）。
+    _ensure_py_binary_io()
+    _ensure_py_runtime_types()
+
     used_classes = set()
     enum_classes = set()
     table_classes = set()
+    used_runtime_types = set()
     field_lines = []
     read_lines = []
+    write_lines = []
     json_lines = []
+    json_write_lines = []
 
     for item in data:
         f = generate_python_field(item, enum_list, class_list, class_id_list)
         field_lines.append(f['field'])
         read_lines.append(f['read'])
+        write_lines.append(f.get('write', ''))
         json_lines.append(f['json'])
+        json_write_lines.append(f.get('json_write', ''))
         if f['used_class']:
             used_classes.add(f['used_class'])
         if f['is_enum']:
             enum_classes.add(f['used_enum'])
         if f['is_table_id']:
             table_classes.add(f['used_table_id'])
+        if f.get('used_runtime_type'):
+            used_runtime_types.add(f['used_runtime_type'])
 
     base_path = os.path.join(py_dir, f"Base{name}.py")
     with open(base_path, 'w', encoding='utf-8') as f:
         f.write("from ..BaseCustomClassData import BaseCustomClassData\n")
+        if used_runtime_types:
+            f.write(f"from .._Shared.runtime_types import {', '.join(sorted(used_runtime_types))}\n")
         for uc in sorted(used_classes):
             if uc != name:  # 自分自身は不要
                 f.write(f"from ...class_data.{uc}.{uc} import {uc}\n")
@@ -574,8 +1371,18 @@ def generate_class_python(name, data, enum_list, class_list, class_id_list):
         f.write("\n    def read(self, reader):\n")
         for line in read_lines:
             f.write(line)
+        # ★ write(writer): readと対称のバイナリ書込。writerの生成・open/closeは
+        #   呼び出し元の責務（このメソッド内では行わない）。
+        f.write("\n    def write(self, writer):\n")
+        for line in write_lines:
+            f.write(line)
         f.write("\n    def load_json(self, data):\n")
         for line in json_lines:
+            f.write(line)
+        # ★ write_json(data): 引数に渡された辞書へ自身の値を書き込む
+        #   （load_jsonと対になる「引数にデータを入れる」方式に統一）。
+        f.write("\n    def write_json(self, data):\n")
+        for line in json_write_lines:
             f.write(line)
 
     # 空の継承クラス
@@ -597,29 +1404,42 @@ def generate_class_js(name, data, enum_list, class_list, class_id_list):
     js_dir = os.path.join(SCRIPT_DATA_DIR, CLASS_DATA, name)
     os.makedirs(js_dir, exist_ok=True)
 
+    # ★ 共有ランタイムファイル（bit/bezier用クラス）を自動生成のたびに最新化する
+    #   （C#側の_ensure_custom_bit_field_cs()と同じ方式）。
+    _ensure_js_runtime_types()
+
     used_classes = set()
     enum_classes = set()
     table_classes = set()
+    used_runtime_types = set()
 
     field_lines = []
     read_lines = []
+    write_lines = []
     json_lines = []
+    json_write_lines = []
 
     for item in data:
         f = generate_js_field(item, enum_list, class_list, class_id_list)
         field_lines.append(f['field'])
         read_lines.append(f['read'])
+        write_lines.append(f.get('write', ''))
         json_lines.append(f['json'])
+        json_write_lines.append(f.get('json_write', ''))
         if f['used_class']:
             used_classes.add(f['used_class'])
         if f['is_enum']:
             enum_classes.add(f['used_enum'])
         if f['is_table_id']:
             table_classes.add(f['used_table_id'])
+        if f.get('used_runtime_type'):
+            used_runtime_types.add(f['used_runtime_type'])
 
     base_path = os.path.join(js_dir, f"Base{name}.js")
     with open(base_path, 'w', encoding='utf-8') as f:
         f.write("import { BaseCustomClassData } from '../BaseCustomClassData.js';\n")
+        if used_runtime_types:
+            f.write(f"import {{ {', '.join(sorted(used_runtime_types))} }} from '../_Shared/runtimeTypes.js';\n")
         for uc in sorted(used_classes):
             if uc != name:
                 f.write(f"import {{ {uc} }} from '../{uc}/{uc}.js';\n")
@@ -642,8 +1462,22 @@ def generate_class_js(name, data, enum_list, class_list, class_id_list):
             f.write(line)
         f.write("        return o;\n")
         f.write("    }\n\n")
+        # ★ write(view, offset): readと対称のバイナリ書込。DataViewの生成・
+        #   バッファ確保は呼び出し元の責務とし、書込後のoffsetを返す。
+        f.write("    write(view, offset) {\n")
+        f.write("        let o = offset;\n")
+        for line in write_lines:
+            f.write(line)
+        f.write("        return o;\n")
+        f.write("    }\n\n")
         f.write("    loadJson(data) {\n")
         for line in json_lines:
+            f.write(line)
+        f.write("    }\n\n")
+        # ★ writeJson(result): loadJson(data)と対で、引数に渡されたオブジェクトへ
+        #   自身の値を書き込む方式に統一する。
+        f.write("    writeJson(result) {\n")
+        for line in json_write_lines:
             f.write(line)
         f.write("    }\n")
         f.write("}\n")

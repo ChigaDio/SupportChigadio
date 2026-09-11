@@ -420,20 +420,46 @@ def generate_class_cs(name):
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name)):
             os.makedirs(os.path.join(DATA_DIR, CLASS_DATA, name), exist_ok=True)
         cs_path = os.path.join(DATA_DIR, CLASS_DATA,name, f"Base{name}.cs")
-        
+
+        # ★ ClassData側もbit/color/bezier型フィールドを持てるため、共有のビット
+        #   フィールドクラスを常に最新化しておく（customclassdata.py側と同じ方針）。
+        pythonSrc.customclassdata._ensure_custom_bit_field_cs()
+
         with open(cs_path, 'w', encoding='utf-8') as f:
             f.write("using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n")
             f.write("namespace GameCore.Classes\n{\n")
             f.write(f"    [Serializable]\n")
             f.write(f"    public class Base{name} : BaseCustomClassData\n    {{\n")
             read_codes = []
+            write_codes = []
+            json_read_codes = []
+            json_write_codes = []
             for item in data:
                 field_data = generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_data_id_list, custom_type_info=custom_type_info)
                 f.write(field_data['field'])
                 read_codes.append(field_data['read'])
+                write_codes.append(field_data.get('write', ''))
+                json_read_codes.append(field_data.get('json_read', ''))
+                json_write_codes.append(field_data.get('json_write', ''))
             f.write(f"\n        public Base{name}() : base() {{ }}\n        public override void Read(BinaryReader reader)        {{\n")
             for read_code in read_codes:
                 f.write(read_code)
+            f.write("        }\n")
+            # ★ Write(BinaryWriter): Readと対称のバイナリ書込。writerの生成・オープン/
+            #   クローズは呼び出し元の責務とし、ここでは受け取ったwriterに書き込むだけ。
+            f.write("        public override void Write(BinaryWriter writer)\n        {\n")
+            for write_code in write_codes:
+                f.write(write_code)
+            f.write("        }\n")
+            # ★ ReadJson(Dictionary<string, object> data): 引数に渡された辞書から自身へ読み込む。
+            f.write("        public override void ReadJson(Dictionary<string, object> data)\n        {\n")
+            for json_read_code in json_read_codes:
+                f.write(json_read_code)
+            f.write("        }\n")
+            # ★ WriteJson(Dictionary<string, object> data): 引数に渡された辞書へ自身の値を書き込む。
+            f.write("        public override void WriteJson(Dictionary<string, object> data)\n        {\n")
+            for json_write_code in json_write_codes:
+                f.write(json_write_code)
             f.write("        }\n")
             f.write("    }\n}\n")
         if not os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, name, f"{name}.cs")):
@@ -764,6 +790,10 @@ def generate_base(data_dir):
         public abstract class BaseCustomClassData
         {
             public abstract void Read(BinaryReader reader);
+            public abstract void Write(BinaryWriter writer);
+            
+            public abstract void ReadJson(System.Collections.Generic.Dictionary<string, object> data);
+            public abstract void WriteJson(System.Collections.Generic.Dictionary<string, object> data);
         }
     }
     """
@@ -845,8 +875,15 @@ class BaseCustomClassData(ABC):
     @abstractmethod
     def read(self, reader):
         pass
-
+    @abstractmethod
     def load_json(self, data):
+        pass
+        
+    @abstractmethod
+    def write(self, writer):
+        pass
+    @abstractmethod
+    def save_json(self, data):
         pass
     """
         with open(os.path.join(data_dir,CLASS_DATA,"BaseCustomClassData.py"), 'w', encoding='utf-8') as f:
@@ -862,6 +899,12 @@ export class BaseCustomClassData {
     }
     loadJson(data) {
         throw new Error("loadJson() must be implemented");
+    }
+    write(view, offset) {
+        throw new Error("write() must be implemented");
+    }
+    saveJson(data) {
+        throw new Error("saveJson() must be implemented");
     }
 }
     """

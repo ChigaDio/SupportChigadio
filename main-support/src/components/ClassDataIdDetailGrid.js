@@ -14,6 +14,8 @@ import EditIcon from '@mui/icons-material/Edit';
 import Papa from 'papaparse';
 import { useMemo } from 'react';
 import SpreadsheetImportExportDialog from './SpreadsheetImportExportDialog';
+import SqlSearchBar from './SqlSearchBar';
+import { compileQuery } from './sqlLikeSearch';
 
 // ============================================================
 // ユーティリティ
@@ -1814,6 +1816,30 @@ function ClassDataIdDetailGrid() {
   }, [data.rows, data.columns, enumValues, classSchemas]);
 
   // ============================================================
+  // SQL風検索（要件定義: ClassDataID/ClassDataMatrixID詳細GridへのSQL風検索）
+  // ============================================================
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchFieldNames = useMemo(
+    () => ['id', 'enum_property', 'description', ...data.columns.map((c) => c.name)],
+    [data.columns]
+  );
+  const searchValuesByField = useMemo(() => {
+    const map = {};
+    data.columns.forEach((col) => {
+      const { baseType } = parseType(col.type);
+      if (enumValues && enumValues[baseType]) {
+        map[col.name] = enumValues[baseType].map((v) => v.property || v.enum_property || v);
+      }
+    });
+    return map;
+  }, [data.columns, enumValues]);
+  const searchResult = useMemo(() => compileQuery(searchQuery), [searchQuery]);
+  const filteredGridRows = useMemo(
+    () => (searchQuery.trim() ? gridRows.filter((row) => searchResult.matches(row)) : gridRows),
+    [gridRows, searchResult, searchQuery]
+  );
+
+  // ============================================================
   // useEffect: データ取得
   // ============================================================
   useEffect(() => {
@@ -2436,8 +2462,21 @@ function ClassDataIdDetailGrid() {
         <Typography>読み込み中...</Typography>
       ) : (
         <div style={{ width: '100%' }}>
+          <SqlSearchBar
+            value={searchQuery}
+            onChange={setSearchQuery}
+            fieldNames={searchFieldNames}
+            valuesByField={searchValuesByField}
+            error={searchResult.error}
+            sx={{ mb: 1, maxWidth: 640 }}
+          />
+          {searchQuery.trim() && !searchResult.error && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {filteredGridRows.length}件ヒット（全{gridRows.length}件）
+            </Typography>
+          )}
           <DataGrid
-            rows={gridRows}
+            rows={filteredGridRows}
             columns={columns}
             pageSizeOptions={[5]}
             getRowId={(row) => row.id}

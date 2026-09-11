@@ -1254,7 +1254,7 @@ def sync_scenario_parent_enum_files(events):
     wrapper_lines = []
 
     for ev in events:
-        parent_name = ev['parent']
+        parent_name = ev['name']
         sub_names = ev.get('subs', [])
         if not sub_names:
             continue

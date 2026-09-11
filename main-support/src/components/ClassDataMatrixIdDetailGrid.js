@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid, useGridApiRef } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, InputAdornment, IconButton, Tooltip } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Tooltip } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
@@ -9,8 +9,6 @@ import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import CodeIcon from '@mui/icons-material/Code';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import SearchIcon from '@mui/icons-material/Search';
-import ClearIcon from '@mui/icons-material/Clear';
 import EditIcon from '@mui/icons-material/Edit';
 import Chip from '@mui/material/Chip';
 import Papa from 'papaparse';
@@ -26,6 +24,8 @@ import {
   ArrayOptionsEditor,
   DictionaryOptionsEditor,
 } from './ClassDataIdDetailGrid';
+import SqlSearchBar from './SqlSearchBar';
+import { compileQuery } from './sqlLikeSearch';
 
 function ClassDataMatrixIdDetailGrid() {
   const { name } = useParams();
@@ -56,9 +56,11 @@ function ClassDataMatrixIdDetailGrid() {
   const [editingCell, setEditingCell] = useState(null);
   const [cellValues, setCellValues] = useState({});
   const apiRef = useGridApiRef();
-  // ★ 追加: 行ID・列IDが多いと分かりにくいため、検索で絞り込めるようにする
-  const [rowSearch, setRowSearch] = useState('');
-  const [colSearch, setColSearch] = useState('');
+  // ★ SQL風検索（要件定義: ClassDataID/ClassDataMatrixID詳細GridへのSQL風検索）
+  //   row / col / セル内の各フィールド名を条件に使える統一検索に置き換えた
+  //   （旧rowSearch/colSearchの部分一致検索はこの検索に統合済み。
+  //    "row LIKE "%text%"" と書けば同等のことができる）。
+  const [searchQuery, setSearchQuery] = useState('');
 
   // ★ 配列型("int[]"等)・classData型（ネスト）にも対応した共通のデフォルト値生成
   // (gridRows等より先に定義しておく必要があるため、ここに配置)
@@ -127,19 +129,57 @@ function ClassDataMatrixIdDetailGrid() {
     });
   }, [rowKeys, colKeys, data.data, data.fields]);
 
-  // ★ 追加: 行ID・列IDの検索絞り込み（Matrixは行×列の組み合わせが多くなりがちで
-  //   見つけたいセルを探しづらいため、部分一致で絞り込めるようにする）
-  const filteredRowKeys = useMemo(() => {
-    const q = rowSearch.trim().toLowerCase();
-    if (!q) return rowKeys;
-    return rowKeys.filter(rk => rk.toLowerCase().includes(q));
-  }, [rowKeys, rowSearch]);
+  // ★ 検索条件（row/col/セル内フィールド名を横断して評価する）:
+  //   1) 各 (rowKey, colKey) の組について、コンテキスト { row, col, ...cellFields }
+  //      を作って評価する
+  //   2) あるrowKeyについて、いずれかのcolKeyで条件が真になれば、そのrowKeyは表示対象
+  //      （列についても同様＝いずれかのrowKeyで真になれば、そのcolKeyは表示対象）
+  //   これにより、「row = "Hero"」（行だけの条件）は全列に対して真になるため
+  //   列は絞り込まれず行だけ絞り込まれる、という直感的な挙動になる。
+  const searchResult = useMemo(() => compileQuery(searchQuery), [searchQuery]);
 
-  const filteredColKeys = useMemo(() => {
-    const q = colSearch.trim().toLowerCase();
-    if (!q) return colKeys;
-    return colKeys.filter(ck => ck.toLowerCase().includes(q));
-  }, [colKeys, colSearch]);
+  const { filteredRowKeys, filteredColKeys } = useMemo(() => {
+    if (!searchQuery.trim() || searchResult.error) {
+      return { filteredRowKeys: rowKeys, filteredColKeys: colKeys };
+    }
+    const matchedRowKeys = new Set();
+    const matchedColKeys = new Set();
+    rowKeys.forEach((rowKey) => {
+      colKeys.forEach((colKey) => {
+        const cellData = data.data[rowKey]?.[colKey] || {};
+        const context = { row: rowKey, col: colKey };
+        data.fields.forEach((field) => {
+          context[field.name] = cellData[field.name] ?? getDefaultValue(field.type);
+        });
+        if (searchResult.matches(context)) {
+          matchedRowKeys.add(rowKey);
+          matchedColKeys.add(colKey);
+        }
+      });
+    });
+    return {
+      filteredRowKeys: rowKeys.filter((rk) => matchedRowKeys.has(rk)),
+      filteredColKeys: colKeys.filter((ck) => matchedColKeys.has(ck)),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowKeys, colKeys, data.data, data.fields, searchQuery, searchResult]);
+
+  // 検索の予測変換用: row/col + 各フィールド名。値の候補はEnum/ClassDataID参照
+  // フィールドについてのみ、実在するメンバー名を出す。
+  const searchFieldNames = useMemo(
+    () => ['row', 'col', ...data.fields.map((f) => f.name)],
+    [data.fields]
+  );
+  const searchValuesByField = useMemo(() => {
+    const map = { row: rowKeys, col: colKeys };
+    data.fields.forEach((field) => {
+      const { baseType } = parseType(field.type);
+      if (enumValues && enumValues[baseType]) {
+        map[field.name] = enumValues[baseType].map((v) => v.property || v.enum_property || v);
+      }
+    });
+    return map;
+  }, [data.fields, enumValues, rowKeys, colKeys]);
 
   // ★ 検索結果に応じて実際にグリッドへ渡す行を絞り込む（列は columns 側で絞り込む）
   const displayedRows = useMemo(() => {
@@ -599,48 +639,16 @@ function ClassDataMatrixIdDetailGrid() {
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>Row: {data.rowId}</Typography>
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>Col: {data.colId}</Typography>
-            {/* ★ 追加: 行ID・列IDが多いと目的のセルを探しづらいため検索ボックスを設置 */}
-            <TextField
-              size="small"
-              placeholder="行IDを検索"
-              value={rowSearch}
-              onChange={(e) => setRowSearch(e.target.value)}
-              sx={{ width: 160 }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-                endAdornment: rowSearch && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setRowSearch('')}>
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
-            <TextField
-              size="small"
-              placeholder="列IDを検索"
-              value={colSearch}
-              onChange={(e) => setColSearch(e.target.value)}
-              sx={{ width: 160 }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-                endAdornment: colSearch && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setColSearch('')}>
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
+            {/* ★ SQL風検索（row/col/セル内フィールド名を横断して絞り込める）。
+                旧rowSearch/colSearchの部分一致検索はこれに統合済み。 */}
+            <SqlSearchBar
+              value={searchQuery}
+              onChange={setSearchQuery}
+              fieldNames={searchFieldNames}
+              valuesByField={searchValuesByField}
+              error={searchResult.error}
+              placeholder='例: row = "Hero" AND col LIKE "Atk%"'
+              sx={{ width: 360 }}
             />
             <Tooltip title="検索に一致した行数 / 全行数">
               <Chip

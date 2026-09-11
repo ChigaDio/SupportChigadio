@@ -10,6 +10,7 @@ class_data / class_data_id / matrix / state / behavior 等、複数のルート�
 """
 import json
 import os
+import re
 import struct
 from math import isnan, isfinite
 import sys
@@ -634,6 +635,92 @@ def _dict_read_dictionary_stmts(target, options, enum_list, class_list, class_id
     return lines
 
 
+# --- 以下、dictionary型のWrite/JSON読込/JSON書込（_dict_read_* と対称）------
+
+def _dict_write_single_stmts(source, type_str, options, enum_list, class_list, class_id_list, indent):
+    """1つの値(キー or 値)を writer へ書き込むC#文のリストを返す（_dict_read_single_stmtsと対称）。"""
+    if type_str == 'dictionary':
+        return _dict_write_dictionary_stmts(source, options, enum_list, class_list, class_id_list, indent)
+
+    tl = type_str.lower()
+    lines = []
+    if tl in TYPE_MAP:
+        if tl == 'string':
+            safe = re.sub(r'\W', '_', source)
+            lines.append(f"{indent}var {safe}_bytes = System.Text.Encoding.UTF8.GetBytes({source} ?? \"\");")
+            lines.append(f"{indent}writer.Write({safe}_bytes.Length);")
+            lines.append(f"{indent}writer.Write({safe}_bytes);")
+        elif tl == 'vector2':
+            lines.append(f"{indent}writer.Write({source}.x); writer.Write({source}.y);")
+        elif tl == 'vector3':
+            lines.append(f"{indent}writer.Write({source}.x); writer.Write({source}.y); writer.Write({source}.z);")
+        else:
+            lines.append(f"{indent}writer.Write({source});")
+    elif type_str in enum_list or type_str in class_id_list:
+        lines.append(f"{indent}writer.Write((int){source});")
+    elif type_str in class_list:
+        lines.append(f"{indent}{source}.Write(writer);")
+    else:
+        lines.append(f"{indent}// TODO: '{type_str}' 型はDictionaryのキー/値としてのWriteに未対応です")
+    return lines
+
+
+def _dict_write_dictionary_stmts(source, options, enum_list, class_list, class_id_list, indent):
+    opts = options or {}
+    key_type = opts.get('keyType', 'int')
+    value_type = opts.get('valueType', 'int')
+    value_array_size = opts.get('valueArraySize', 0) or 0
+    value_options = opts.get('valueOptions') or {}
+
+    # source は "counters_kv.Value" のようにドットを含む式の場合があるため、
+    # ループ変数名には安全な識別子(safe)を使い、C#式が必要な箇所のみ元のsourceを使う。
+    safe = re.sub(r'\W', '_', source)
+
+    lines = [
+        f"{indent}writer.Write({source}.Count);",
+        f"{indent}foreach (var {safe}_kv in {source}) {{",
+    ]
+    inner = indent + "    "
+    lines += _dict_write_single_stmts(f"{safe}_kv.Key", key_type, None, enum_list, class_list, class_id_list, inner)
+    if value_array_size == -1:
+        lines.append(f"{inner}writer.Write({safe}_kv.Value.Count);")
+        lines.append(f"{inner}foreach (var {safe}_item in {safe}_kv.Value) {{")
+        item_indent = inner + "    "
+        lines += _dict_write_single_stmts(f"{safe}_item", value_type, value_options, enum_list, class_list, class_id_list, item_indent)
+        lines.append(f"{inner}}}")
+    elif value_array_size > 0:
+        lines.append(f"{inner}for (int {safe}_j = 0; {safe}_j < {value_array_size}; {safe}_j++) {{")
+        item_indent = inner + "    "
+        lines += _dict_write_single_stmts(f"{safe}_kv.Value[{safe}_j]", value_type, value_options, enum_list, class_list, class_id_list, item_indent)
+        lines.append(f"{inner}}}")
+    else:
+        lines += _dict_write_single_stmts(f"{safe}_kv.Value", value_type, value_options, enum_list, class_list, class_id_list, inner)
+    lines.append(f"{indent}}}")
+    return lines
+
+
+def _dict_json_key_to_object(source, type_str, enum_list, class_list, class_id_list):
+    """dictionaryのキー1件を object(JSON値) に変換する式を返す（単純な式のみ対応）。"""
+    tl = type_str.lower() if isinstance(type_str, str) else ''
+    if type_str in enum_list or type_str in class_id_list:
+        return f"{source}.ToString()"
+    if tl in TYPE_MAP:
+        return f"(object){source}"
+    return f"(object){source}"  # ClassData等の複合キーは非推奨だがフォールバック
+
+
+def _dict_json_key_from_object(target, source_expr, type_str, enum_list, class_list, class_id_list):
+    if type_str in enum_list or type_str in class_id_list:
+        cs_type = _dict_cs_type_name(type_str, None, enum_list, class_list, class_id_list)
+        return f"{target} = ({cs_type})Enum.Parse(typeof({cs_type}), Convert.ToString({source_expr}));"
+    tl = type_str.lower() if isinstance(type_str, str) else ''
+    if tl in TYPE_MAP and tl not in ('string', 'vector2', 'vector3'):
+        return f"{target} = Convert.ToInt32({source_expr});" if tl in ('int', 'byte', 'short', 'long') else f"{target} = Convert.ToDouble({source_expr});"
+    if tl == 'string':
+        return f"{target} = Convert.ToString({source_expr});"
+    return f"{target} = default;"
+
+
 def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list, custom_type_info=None):
     type_str = item['type'].replace("[]", "")
 
@@ -644,9 +731,61 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         options = item.get('options') or {}
         dict_cs_type = _dict_cs_type_name('dictionary', options, enum_list, class_list, class_id_list)
         read_lines = _dict_read_dictionary_stmts(var_name, options, enum_list, class_list, class_id_list, "            ")
+        write_lines = _dict_write_dictionary_stmts(var_name, options, enum_list, class_list, class_id_list, "            ")
+
+        # JSON表現: { "entries": [ {"key": <object>, "value": <object>}, ... ] }
+        # (write_binary_field側のPython実装が使う 'entries' 規約に合わせる)
+        opts = options or {}
+        key_type = opts.get('keyType', 'int')
+        value_type = opts.get('valueType', 'int')
+        value_array_size = opts.get('valueArraySize', 0) or 0
+        value_options = opts.get('valueOptions') or {}
+        key_cs = _dict_cs_type_name(key_type, None, enum_list, class_list, class_id_list)
+        item_cs = _dict_cs_type_name(value_type, value_options, enum_list, class_list, class_id_list)
+
+        json_read_code = f"            {{ var __dict_data = data.TryGetValue(\"{var_name}\", out var __raw_{var_name}) ? (Dictionary<string, object>)__raw_{var_name} : null;\n"
+        json_read_code += f"              {var_name} = new {dict_cs_type}();\n"
+        json_read_code += "              if (__dict_data != null && __dict_data.TryGetValue(\"entries\", out var __entries_obj)) {\n"
+        json_read_code += "                  foreach (var __e_obj in (List<object>)__entries_obj) {\n"
+        json_read_code += "                      var __e = (Dictionary<string, object>)__e_obj;\n"
+        json_read_code += f"                      {key_cs} __key;\n"
+        json_read_code += "                      " + _dict_json_key_from_object("__key", "__e[\"key\"]", key_type, enum_list, class_list, class_id_list) + "\n"
+        if value_array_size == -1:
+            json_read_code += f"                      var __val = new List<{item_cs}>();\n"
+            json_read_code += "                      foreach (var __vraw in (List<object>)__e[\"value\"]) { " + \
+                               _dict_json_key_from_object("var __vv", "__vraw", value_type, enum_list, class_list, class_id_list) + " __val.Add(__vv); }\n"
+        elif value_array_size > 0:
+            json_read_code += f"                      var __val = new {item_cs}[{value_array_size}];\n"
+            json_read_code += "                      var __vraw_list = (List<object>)__e[\"value\"];\n"
+            json_read_code += f"                      for (int __vi = 0; __vi < __vraw_list.Count && __vi < {value_array_size}; __vi++) {{ " + \
+                               _dict_json_key_from_object("__val[__vi]", "__vraw_list[__vi]", value_type, enum_list, class_list, class_id_list) + " }\n"
+        else:
+            json_read_code += "                      " + _dict_json_key_from_object("var __val", "__e[\"value\"]", value_type, enum_list, class_list, class_id_list) + "\n"
+        json_read_code += f"                      {var_name}[__key] = __val;\n"
+        json_read_code += "                  }\n"
+        json_read_code += "              }\n            }\n"
+
+        json_write_code = f"            {{ var __entries_{var_name} = new List<object>();\n"
+        json_write_code += f"              foreach (var __kv in {var_name}) {{\n"
+        json_write_code += "                  var __e = new Dictionary<string, object>();\n"
+        json_write_code += f"                  __e[\"key\"] = {_dict_json_key_to_object('__kv.Key', key_type, enum_list, class_list, class_id_list)};\n"
+        if value_array_size == -1 or value_array_size > 0:
+            json_write_code += "                  var __vlist = new List<object>();\n"
+            json_write_code += f"                  foreach (var __vv in __kv.Value) {{ __vlist.Add({_dict_json_key_to_object('__vv', value_type, enum_list, class_list, class_id_list)}); }}\n"
+            json_write_code += "                  __e[\"value\"] = __vlist;\n"
+        else:
+            json_write_code += f"                  __e[\"value\"] = {_dict_json_key_to_object('__kv.Value', value_type, enum_list, class_list, class_id_list)};\n"
+        json_write_code += f"                  __entries_{var_name}.Add(__e);\n"
+        json_write_code += "              }\n"
+        json_write_code += f"              data[\"{var_name}\"] = new Dictionary<string, object> {{ [\"entries\"] = __entries_{var_name} }};\n"
+        json_write_code += "            }\n"
+
         return {
             'field': f"        [SerializeField]\n        protected {dict_cs_type} {var_name} = new {dict_cs_type}();\n        public {dict_cs_type} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
-            'read': "\n".join(read_lines) + "\n"
+            'read': "\n".join(read_lines) + "\n",
+            'write': "\n".join(write_lines) + "\n",
+            'json_read': json_read_code,
+            'json_write': json_write_code,
         }
 
     # bit / color / bezier、CustomClassData・CustomClassDataID参照は
@@ -657,7 +796,12 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         or type_str in custom_type_info.get('custom_class_id_list', [])
     ):
         custom_field = pythonSrc.customclassdata.generate_custom_field(item, custom_type_info)
-        return {'field': custom_field['field'], 'read': custom_field['read']}
+        return {
+            'field': custom_field['field'], 'read': custom_field['read'],
+            'write': custom_field.get('write', ''),
+            'json_read': custom_field.get('json_read', ''),
+            'json_write': custom_field.get('json_write', ''),
+        }
 
     var_name = item['name']
     array_size = item.get('arraySize', 0)
@@ -780,8 +924,115 @@ def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,
         else:
             read_code = f"            {var_name} = new {type_str}(); // Unsupported\n"
 
+    # --- 1要素分のWrite/JSON読込/JSON書込コードを生成するヘルパー ------------
+    # find_type（TYPE_MAP／enum_list／class_id_list／class_list のどれに該当するか）を
+    # 元に、read_codeの各分岐と1対1対応する形で生成する。
+    def write_single_stmt(target_expr):
+        ft_lower = find_type.lower()
+        if ft_lower in TYPE_MAP:
+            if ft_lower == 'string':
+                return (f"                var {var_name}_b = System.Text.Encoding.UTF8.GetBytes({target_expr} ?? \"\");\n"
+                        f"                writer.Write({var_name}_b.Length);\n                writer.Write({var_name}_b);\n")
+            if ft_lower == 'vector2':
+                return f"                writer.Write({target_expr}.x); writer.Write({target_expr}.y);\n"
+            if ft_lower == 'vector3':
+                return f"                writer.Write({target_expr}.x); writer.Write({target_expr}.y); writer.Write({target_expr}.z);\n"
+            return f"                writer.Write({target_expr});\n"
+        if find_type in enum_list or find_type in class_id_list:
+            return f"                writer.Write((int){target_expr});\n"
+        if find_type in class_list:
+            return f"                {target_expr}.Write(writer);\n"
+        return f"                // Unsupported type for Write: {find_type}\n"
+
+    def json_read_single_stmt(target_expr, source_expr, is_assign_stmt=True):
+        ft_lower = find_type.lower()
+        assign = f"{target_expr} = " if is_assign_stmt else ''
+        if ft_lower in ('int', 'byte', 'short', 'long', 'uint'):
+            return f"                {assign}Convert.ToInt32({source_expr});\n"
+        if ft_lower in ('float', 'double', 'decimal'):
+            return f"                {assign}({find_type.lower()})Convert.ToDouble({source_expr});\n" if ft_lower != 'float' else f"                {assign}Convert.ToSingle({source_expr});\n"
+        if ft_lower == 'bool':
+            return f"                {assign}Convert.ToBoolean({source_expr});\n"
+        if ft_lower == 'string':
+            return f"                {assign}Convert.ToString({source_expr}) ?? \"\";\n"
+        if ft_lower == 'vector2':
+            return f"                {{ var __l = (List<object>){source_expr}; {assign}new Vector2(Convert.ToSingle(__l[0]), Convert.ToSingle(__l[1])); }}\n"
+        if ft_lower == 'vector3':
+            return f"                {{ var __l = (List<object>){source_expr}; {assign}new Vector3(Convert.ToSingle(__l[0]), Convert.ToSingle(__l[1]), Convert.ToSingle(__l[2])); }}\n"
+        if find_type in enum_list or find_type in class_id_list:
+            cs_t = item['type'] if not (is_list or is_array) else (f"GameCore.Enums.{find_type}ID" if find_type in enum_list else f"GameCore.Tables.ID.{find_type}TableID")
+            return f"                {assign}({cs_t})Enum.Parse(typeof({cs_t}), Convert.ToString({source_expr}));\n"
+        if find_type in class_list:
+            cs_t = f"GameCore.Classes.{find_type}"
+            return f"                {assign}new {cs_t}(); {target_expr}.ReadJson((Dictionary<string, object>){source_expr});\n"
+        return f"                {assign}default; // Unsupported type for JSON read: {find_type}\n"
+
+    def json_write_single_expr(source_expr, out_var):
+        ft_lower = find_type.lower()
+        if ft_lower in TYPE_MAP and ft_lower not in ('vector2', 'vector3'):
+            return f"                var {out_var} = (object){source_expr};\n"
+        if ft_lower == 'vector2':
+            return f"                var {out_var} = new List<object> {{ (double){source_expr}.x, (double){source_expr}.y }};\n"
+        if ft_lower == 'vector3':
+            return f"                var {out_var} = new List<object> {{ (double){source_expr}.x, (double){source_expr}.y, (double){source_expr}.z }};\n"
+        if find_type in enum_list or find_type in class_id_list:
+            return f"                var {out_var} = {source_expr}.ToString();\n"
+        if find_type in class_list:
+            return f"                var {out_var} = new Dictionary<string, object>();\n                {source_expr}.WriteJson({out_var});\n"
+        return f"                object {out_var} = null; // Unsupported type for JSON write: {find_type}\n"
+
+    write_code = ""
+    json_read_code = ""
+    json_write_code = ""
+    if is_list:
+        write_code = f"            writer.Write({var_name}.Count);\n"
+        write_code += f"            foreach (var __v_{var_name} in {var_name}) {{\n"
+        write_code += write_single_stmt(f"__v_{var_name}")
+        write_code += "            }\n"
+
+        json_read_code = f"            {{ var __src_{var_name} = data.TryGetValue(\"{var_name}\", out var __raw_{var_name}) ? (List<object>)__raw_{var_name} : new List<object>();\n"
+        json_read_code += f"              {var_name} = new List<{item['type']}>();\n"
+        json_read_code += f"              foreach (var __item_{var_name} in __src_{var_name}) {{\n"
+        json_read_code += f"                  {item['type']} __v_{var_name} = default;\n"
+        json_read_code += json_read_single_stmt(f"__v_{var_name}", f"__item_{var_name}")
+        json_read_code += f"                  {var_name}.Add(__v_{var_name});\n"
+        json_read_code += "              }\n            }\n"
+
+        json_write_code = f"            {{ var __list_{var_name} = new List<object>();\n"
+        json_write_code += f"              foreach (var __v_{var_name} in {var_name}) {{\n"
+        json_write_code += json_write_single_expr(f"__v_{var_name}", f"__o_{var_name}")
+        json_write_code += f"                  __list_{var_name}.Add(__o_{var_name});\n"
+        json_write_code += "              }\n"
+        json_write_code += f"              data[\"{var_name}\"] = __list_{var_name};\n            }}\n"
+    elif is_array:
+        write_code = f"            for (int i = 0; i < {array_size}; i++) {{\n"
+        write_code += write_single_stmt(f"{var_name}[i]")
+        write_code += "            }\n"
+
+        json_read_code = f"            {{ var __src_{var_name} = data.TryGetValue(\"{var_name}\", out var __raw_{var_name}) ? (List<object>)__raw_{var_name} : new List<object>();\n"
+        json_read_code += f"              {var_name} = new {item['type']}[{array_size}];\n"
+        json_read_code += f"              for (int i = 0; i < __src_{var_name}.Count && i < {array_size}; i++) {{\n"
+        json_read_code += json_read_single_stmt(f"{var_name}[i]", f"__src_{var_name}[i]")
+        json_read_code += "              }\n            }\n"
+
+        json_write_code = f"            {{ var __list_{var_name} = new List<object>();\n"
+        json_write_code += f"              for (int i = 0; i < {array_size}; i++) {{\n"
+        json_write_code += json_write_single_expr(f"{var_name}[i]", f"__o_{var_name}")
+        json_write_code += f"                  __list_{var_name}.Add(__o_{var_name});\n"
+        json_write_code += "              }\n"
+        json_write_code += f"              data[\"{var_name}\"] = __list_{var_name};\n            }}\n"
+    else:
+        write_code = write_single_stmt(var_name)
+        json_read_code = f"            if (data.TryGetValue(\"{var_name}\", out var __raw_{var_name})) {{\n"
+        json_read_code += json_read_single_stmt(var_name, f"__raw_{var_name}")
+        json_read_code += "            }\n"
+        json_write_code = json_write_single_expr(var_name, f"__out_{var_name}")
+        json_write_code += f"            data[\"{var_name}\"] = __out_{var_name};\n"
+
     return {
         'field': f"        [SerializeField]\n        protected {type_str} {var_name};\n        public {type_str} {var_name.capitalize()} {{ get => {var_name}; }} // {description}\n",
-        'read': read_code
+        'read': read_code,
+        'write': write_code,
+        'json_read': json_read_code,
+        'json_write': json_write_code,
     }
-

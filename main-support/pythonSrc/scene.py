@@ -445,6 +445,31 @@ public class SceneLoader
         action?.Invoke();
         DebugLog($"Scene '{scene}' loaded successfully.");
     }
+    
+    public static void ActivateScene(GameSceneID scene)
+    {
+        if (!loadedScenes.Contains(scene))
+        {
+            DebugLog($"Scene '{scene}' is not loaded, cannot activate.");
+            return;
+        }
+
+        if (!SceneList.sceneNames.TryGetValue(scene, out string sceneName))
+        {
+            Debug.LogError($"Scene enum '{scene}' is not mapped to a scene name.");
+            return;
+        }
+
+        Scene targetScene = SceneManager.GetSceneByName(sceneName);
+        if (!targetScene.isLoaded)
+        {
+            Debug.LogError($"Scene '{sceneName}' is not loaded.");
+            return;
+        }
+
+        SceneManager.SetActiveScene(targetScene);
+        DebugLog($"Scene '{scene}' activated successfully.");
+    }
 
     public static async UniTask UnloadSceneAsync(GameSceneID scene, Action action = null)
     {
@@ -511,6 +536,17 @@ public class SceneLoader
         GameObject obj = GameObject.Instantiate(prefab);
         SceneManager.MoveGameObjectToScene(obj, targetScene); // 安全に所属させる
         return obj;
+    }
+
+    public static async UniTask<GameObject> InstantiateInSceneAsync(GameObject prefab, GameSceneID scene)
+    {
+        if (!TryGetLoadedScene(scene, out Scene targetScene))
+            return null;
+
+        GameObject[] obj = await GameObject.InstantiateAsync(prefab);
+        SceneManager.MoveGameObjectToScene(obj[0], targetScene); // 安全に所属させる
+        await UniTask.Yield(); // 1フレーム待つことで、Awake/Startが呼ばれるのを待つ
+        return obj[0];
     }
 
     #endregion
@@ -594,6 +630,7 @@ public class SceneLoader
 
     #endregion
 }
+
 """
     output_path = os.path.join(SCENE_DATA_DIR, "SceneLoader.cs")
     with open(output_path, 'w', encoding='utf-8') as f:

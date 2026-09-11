@@ -527,6 +527,32 @@ namespace GameCore.Classes
             else
                 writer.Write(single);
         }
+
+        // JSON表現は既存のPython側実装(pythonSrc/customclassdata.py の
+        // _write_custom_single_value)と同じスキーマ { "bits": [立っているビットのindex, ...] }
+        // に合わせる。Size(容量)はコンストラクタ側で決まっている値をそのまま使うため、
+        // JSON側では持たない。
+        public void ReadJson(Dictionary<string, object> data)
+        {
+            Clear();
+            if (data != null && data.TryGetValue("bits", out var bitsObj) && bitsObj is List<object> bits)
+            {
+                foreach (var b in bits)
+                {
+                    Set(Convert.ToInt32(b), true);
+                }
+            }
+        }
+
+        public void WriteJson(Dictionary<string, object> data)
+        {
+            var bits = new List<object>();
+            for (int i = 0; i < Size; i++)
+            {
+                if (Get(i)) bits.Add(i);
+            }
+            data["bits"] = bits;
+        }
     }
 
     // 手動指定(sizeMode = manual)のビットフィールド。ビットはインデックスで指定する。
@@ -790,6 +816,151 @@ def generate_custom_field(item, type_info):
     else:
         read_code = read_single(var_name)
 
+    # --- 単一要素の書き込みコード（Readと対称）---------------------------------
+    def write_single(source_expr):
+        if type_str == 'bit':
+            # CustomBitField<T> / CustomBitField 側に Write(BinaryWriter) が
+            # 実装されている前提（Read(reader)と対になるメソッド）。
+            return f"                {source_expr}.Write(writer);\n"
+        if type_str == 'color':
+            return (f"                writer.Write({source_expr}.r); writer.Write({source_expr}.g); "
+                     f"writer.Write({source_expr}.b); writer.Write({source_expr}.a);\n")
+        if type_str == 'bezier':
+            code = f"                {{ var __keys = {source_expr}.keys; writer.Write(__keys.Length);\n"
+            code += "                  foreach (var __k in __keys) { writer.Write(__k.time); writer.Write(__k.value); writer.Write(__k.inTangent); writer.Write(__k.outTangent); } }\n"
+            return code
+        if type_str in enum_list or type_str in class_data_id_list or type_str in custom_class_id_list:
+            return f"                writer.Write((int){source_expr});\n"
+        if type_str in class_list or type_str in custom_class_list:
+            return f"                {source_expr}.Write(writer);\n"
+        if type_str.lower() == 'string':
+            return (f"                {{ var __b = System.Text.Encoding.UTF8.GetBytes({source_expr} ?? \"\"); "
+                     f"writer.Write(__b.Length); writer.Write(__b); }}\n")
+        if type_str == 'Vector2':
+            return f"                writer.Write({source_expr}.x); writer.Write({source_expr}.y);\n"
+        if type_str == 'Vector3':
+            return f"                writer.Write({source_expr}.x); writer.Write({source_expr}.y); writer.Write({source_expr}.z);\n"
+        if type_str.lower() in TYPE_MAP:
+            return f"                writer.Write({source_expr});\n"
+        return f"                // Unsupported type for Write: {type_str}\n"
+
+    write_code = ""
+    if is_list:
+        write_code = f"            writer.Write({var_name}.Count);\n"
+        write_code += f"            foreach (var __v_{var_name} in {var_name}) {{\n"
+        write_code += write_single(f"__v_{var_name}")
+        write_code += "            }\n"
+    elif is_array:
+        write_code = f"            for (int i = 0; i < {array_size}; i++) {{\n"
+        write_code += write_single(f"{var_name}[i]")
+        write_code += "            }\n"
+    else:
+        write_code = write_single(var_name)
+
+    # --- 単一要素のJSON読込/書込コード（Dictionary<string, object>ベース）------
+    # 未対応の複合型（bit/bezier）は安全側に倒し、既存コードのDictionary未対応
+    # フィールドと同じ方針でTODOコメント付きのno-opにする。
+    def json_read_single(target_expr, source_expr):
+        if type_str == 'bit':
+            # 既存のPython側実装(_write_custom_single_value)と同じスキーマ
+            # { "bits": [立っているビットのindex, ...] } に合わせる。
+            # target_expr は既にフィールド宣言時のコンストラクタで正しいサイズ/型で
+            # 初期化済みのインスタンスなので、作り直さずそこへ読み込む。
+            return f"                {target_expr}.ReadJson((Dictionary<string, object>){source_expr});\n"
+        if type_str == 'color':
+            return (f"                {{ var __c = (Dictionary<string, object>){source_expr}; "
+                     f"{target_expr} = new UnityEngine.Color(Convert.ToSingle(__c[\"r\"]), Convert.ToSingle(__c[\"g\"]), "
+                     f"Convert.ToSingle(__c[\"b\"]), Convert.ToSingle(__c[\"a\"])); }}\n")
+        if type_str == 'bezier':
+            # 既存のPython側実装(_write_custom_single_value)と同じスキーマ
+            # { "points": [{"time","value","inTangent","outTangent"}, ...] } に合わせる。
+            code = f"                {{ var __ptList = (List<object>)((Dictionary<string, object>){source_expr})[\"points\"]; "
+            code += "var __keys = new UnityEngine.Keyframe[__ptList.Count];\n"
+            code += ("                  for (int __k = 0; __k < __ptList.Count; __k++) { var __kv = (Dictionary<string, object>)__ptList[__k]; "
+                     "__keys[__k] = new UnityEngine.Keyframe(Convert.ToSingle(__kv[\"time\"]), Convert.ToSingle(__kv[\"value\"]), "
+                     "Convert.ToSingle(__kv[\"inTangent\"]), Convert.ToSingle(__kv[\"outTangent\"])); }\n")
+            code += f"                  {target_expr} = new UnityEngine.AnimationCurve(__keys); }}\n"
+            return code
+        if type_str in enum_list or type_str in class_data_id_list or type_str in custom_class_id_list:
+            return f"                {target_expr} = ({cs_type})Enum.Parse(typeof({cs_type}), Convert.ToString({source_expr}));\n"
+        if type_str in class_list or type_str in custom_class_list:
+            return (f"                {target_expr} = new {cs_type}(); "
+                     f"{target_expr}.ReadJson((Dictionary<string, object>){source_expr});\n")
+        if type_str.lower() == 'string':
+            return f"                {target_expr} = Convert.ToString({source_expr}) ?? \"\";\n"
+        if type_str == 'Vector2':
+            return (f"                {{ var __l = (List<object>){source_expr}; "
+                     f"{target_expr} = new UnityEngine.Vector2(Convert.ToSingle(__l[0]), Convert.ToSingle(__l[1])); }}\n")
+        if type_str == 'Vector3':
+            return (f"                {{ var __l = (List<object>){source_expr}; "
+                     f"{target_expr} = new UnityEngine.Vector3(Convert.ToSingle(__l[0]), Convert.ToSingle(__l[1]), Convert.ToSingle(__l[2])); }}\n")
+        if type_str.lower() in ('int', 'byte', 'short', 'long', 'uint'):
+            return f"                {target_expr} = Convert.ToInt32({source_expr});\n"
+        if type_str.lower() in ('float', 'double', 'decimal'):
+            return f"                {target_expr} = ({cs_type})Convert.ToDouble({source_expr});\n"
+        if type_str.lower() == 'bool':
+            return f"                {target_expr} = Convert.ToBoolean({source_expr});\n"
+        return f"                // TODO: '{var_name}'（{type_str}型）はJSON読込に未対応です\n"
+
+    def json_write_single(target_var, source_expr):
+        """source_expr の値を object 化して target_var (ローカル変数名) に代入する文を返す。
+        LINQ/ラムダは使わず、単純な代入・呼び出しのみで構成する。"""
+        if type_str == 'bit':
+            # target_var には Dictionary<string, object> { "bits": [...] } を入れる
+            code = f"                var {target_var} = new Dictionary<string, object>();\n"
+            code += f"                {source_expr}.WriteJson({target_var});\n"
+            return code
+        if type_str == 'color':
+            return (f"                var {target_var} = new Dictionary<string, object> {{ "
+                     f"[\"r\"] = {source_expr}.r, [\"g\"] = {source_expr}.g, [\"b\"] = {source_expr}.b, [\"a\"] = {source_expr}.a }};\n")
+        if type_str == 'bezier':
+            # 既存のPython側実装と同じスキーマ { "points": [{"time","value","inTangent","outTangent"}, ...] }
+            code = f"                var __pts_{target_var} = new List<object>();\n"
+            code += f"                foreach (var __k in {source_expr}.keys) {{\n"
+            code += (f"                    __pts_{target_var}.Add(new Dictionary<string, object> {{ "
+                     f"[\"time\"] = __k.time, [\"value\"] = __k.value, [\"inTangent\"] = __k.inTangent, [\"outTangent\"] = __k.outTangent }});\n")
+            code += "                }\n"
+            code += f"                var {target_var} = new Dictionary<string, object> {{ [\"points\"] = __pts_{target_var} }};\n"
+            return code
+        if type_str in enum_list or type_str in class_data_id_list or type_str in custom_class_id_list:
+            return f"                var {target_var} = {source_expr}.ToString();\n"
+        if type_str in class_list or type_str in custom_class_list:
+            code = f"                var {target_var} = new Dictionary<string, object>();\n"
+            code += f"                {source_expr}.WriteJson({target_var});\n"
+            return code
+        return f"                var {target_var} = (object){source_expr};\n"  # 基本型/Vector系はそのまま代入可能な値として返す
+
+    json_read_code = ""
+    json_write_code = ""
+    if is_list or is_array:
+        json_read_code = f"            {{ var __src = data.TryGetValue(\"{var_name}\", out var __raw_{var_name}) ? (List<object>)__raw_{var_name} : new List<object>();\n"
+        if is_list:
+            json_read_code += f"              {var_name} = new List<{cs_type}>();\n"
+            json_read_code += f"              foreach (var __item in __src) {{\n"
+            json_read_code += f"                  {cs_type} __v_{var_name} = default;\n"
+            json_read_code += json_read_single(f"__v_{var_name}", "__item").replace("            ", "              ", 1)
+            json_read_code += f"                  {var_name}.Add(__v_{var_name});\n"
+            json_read_code += "              }\n            }\n"
+        else:
+            json_read_code += f"              {var_name} = new {cs_type}[{array_size}];\n"
+            json_read_code += f"              for (int i = 0; i < __src.Count && i < {array_size}; i++) {{\n"
+            json_read_code += json_read_single(f"{var_name}[i]", "__src[i]").replace("            ", "              ", 1)
+            json_read_code += "              }\n            }\n"
+
+        json_write_code = f"            {{ var __list_{var_name} = new List<object>();\n"
+        json_write_code += f"              foreach (var __v_{var_name} in {var_name}) {{\n"
+        json_write_code += "  " + json_write_single(f"__item_{var_name}", f"__v_{var_name}")
+        json_write_code += f"                  __list_{var_name}.Add(__item_{var_name});\n"
+        json_write_code += "              }\n"
+        json_write_code += f"              data[\"{var_name}\"] = __list_{var_name};\n"
+        json_write_code += "            }\n"
+    else:
+        json_read_code = f"            if (data.TryGetValue(\"{var_name}\", out var __raw_{var_name})) {{\n"
+        json_read_code += json_read_single(var_name, f"__raw_{var_name}")
+        json_read_code += "            }\n"
+        json_write_code = json_write_single(f"__out_{var_name}", var_name)
+        json_write_code += f"            data[\"{var_name}\"] = __out_{var_name};\n"
+
     field_decl = (
         f"{attribute}"
         f"        [SerializeField]\n"
@@ -799,7 +970,11 @@ def generate_custom_field(item, type_info):
 
     extension_code = ''  # CustomBitField<T> により拡張メソッド方式は不要になったため常に空
 
-    return {'field': field_decl, 'read': read_code, 'extension': extension_code}
+    return {
+        'field': field_decl, 'read': read_code, 'write': write_code,
+        'json_read': json_read_code, 'json_write': json_write_code,
+        'extension': extension_code,
+    }
 
 
 def _generate_bit_extension_code(item, var_name):
