@@ -250,10 +250,12 @@ def find_highest_assets_folder(base_folder=BASE_DIR):
 
 def move_dll_files(base_folder=BASE_DIR, plugin_folder_name=os.path.join(SUBMODULE, PLUGIN)):
     """
-    Pluginフォルダ内のDLLファイルを、最も上位のAssetsフォルダに移動する。
+    Pluginフォルダ内のDLLファイルを、最も上位のAssetsフォルダにコピーする。
+    すでに同名のDLLファイルが存在する場合はコピーしない。
     """
     if isDbg:
         return
+
     # Assetsフォルダを検索
     assets_folder = find_highest_assets_folder(base_folder)
     if not assets_folder:
@@ -268,7 +270,7 @@ def move_dll_files(base_folder=BASE_DIR, plugin_folder_name=os.path.join(SUBMODU
         print(f"Pluginフォルダが見つかりません: {plugin_folder}")
         return
 
-    # DLLファイルを検索して移動
+    # DLLファイルを検索
     dll_files = list(plugin_folder.glob("*.dll"))
     if not dll_files:
         print(f"Pluginフォルダ内にDLLファイルが見つかりません: {plugin_folder}")
@@ -276,11 +278,17 @@ def move_dll_files(base_folder=BASE_DIR, plugin_folder_name=os.path.join(SUBMODU
 
     for dll_file in dll_files:
         destination = assets_folder / dll_file.name
+
+        # すでに存在する場合はコピーしない
+        if destination.exists():
+            print(f"コピー済みのためスキップ: {destination}")
+            continue
+
         try:
-            shutil.move(str(dll_file), str(destination))
-            print(f"移動成功: {dll_file} -> {destination}")
+            shutil.copy2(str(dll_file), str(destination))
+            print(f"コピー成功: {dll_file} -> {destination}")
         except Exception as e:
-            print(f"移動失敗: {dll_file} -> {destination}, エラー: {e}")
+            print(f"コピー失敗: {dll_file} -> {destination}, エラー: {e}")
 
 
 move_dll_files()
