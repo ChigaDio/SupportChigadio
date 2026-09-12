@@ -1298,7 +1298,7 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
 
                 if(value_execute_data != null)
                 {
-                    await value_execute_data.UnLoadDatabase();
+                    value_execute_data.UnLoadDatabase();
                 }
 
                 await UniTask.Yield(PlayerLoopTiming.Update, linkedCts.Token);
@@ -1387,20 +1387,24 @@ public class ScenarioManagerCore : BaseSingleton<ScenarioManagerCore>
         code_str = """
 
 
+
+
+
 using UnityEngine;
 using GameCore.Scenario.StorySetting;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using AddressableSystem;
 public class BaseScenarioExecuteData
 {
     private StorySettingDatabase database;
     public  StorySettingDatabase DataBase => database;
 
-    public void LoadDatabase(string eventId, string subId, GroupCategory category = GroupCategory.Game)
+    public async UniTask LoadDatabase(string eventId, string subId, GroupCategory category = GroupCategory.Game)
     {
         await StorySettingCore.Instance.LoadForSubEventAsync(eventId,subId,category);
 
-        database =.DataBase;
+        database = StorySettingCore.Instance.DataBase;
     }
 
     public void UnLoadDatabase()
@@ -1410,6 +1414,7 @@ public class BaseScenarioExecuteData
         StorySettingCore.Instance.UnloadAll();
     }
 }
+
 
 """
         with open(os.path.join(parent_path,SCENARIO_DATA,"script", "BaseScenarioExecuteData.cs"), 'w', encoding='utf-8') as f:
@@ -1516,6 +1521,25 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         role_data = role_json.get('data', [])
         branch_type = role_json.get('branchType', 'General')
 
+    # 'id'(ScenarioRoleIDの数値)は {role_name}.json 側には存在せず、
+    # scenario_role_list.json(handle_scenario_role_list が管理する一覧)の
+    # 該当エントリにしか保存されていない。ここを含めないと、DSL側
+    # (scenarioTransactionDsl.js の compileDocument)が新規Role作成時に参照する
+    # schema.id が常に undefined になり、引き継ぎ元(同名・同順の既存Role)が
+    # 無いケース(例: DSLでノードごとコピーしてIDだけ変更して保存)で
+    # RoleのidがNoneのまま保存されてしまう不具合があった。
+    role_id = None
+    role_list_path = os.path.join(data_dir, SCENARIO_ROLE, 'scenario_role_list.json')
+    if os.path.exists(role_list_path):
+        try:
+            with open(role_list_path, 'r', encoding='utf-8') as f:
+                role_list = json.load(f)
+            entry = next((r for r in role_list if r.get('name') == role_name), None)
+            if entry:
+                role_id = entry.get('id')
+        except (json.JSONDecodeError, OSError):
+            role_id = None
+
     # CustomClassData/CustomClassDataID の一覧・スキーマは1回だけ取得して再帰呼び出しに使い回す
     custom_info = _custom_info or customclassdata.get_extended_type_lists()
     custom_class_list = custom_info['custom_class_list']
@@ -1524,7 +1548,7 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
 
     _, _, enum_names, class_names, class_id_names = get_type_lists()
 
-    schema = {"fields": [], "branchType": branch_type}
+    schema = {"fields": [], "branchType": branch_type, "id": role_id}
 
     for var in role_data:
         field = {"name": var['name'], "label": var['name'], "arraySize": var.get("arraySize", 0), "description": var.get('description', '')}

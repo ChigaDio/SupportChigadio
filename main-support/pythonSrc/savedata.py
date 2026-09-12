@@ -569,6 +569,7 @@ namespace GameCore.SaveSystem
         public float seVolume = 1.0f;
         public float bgmVolume = 1.0f;
         public float voiceVolume = 1.0f;
+        
     }
 }
         """
@@ -584,6 +585,7 @@ namespace GameCore.SaveSystem
     [Serializable]
     public class PlayerData : BasePlayerData
     {
+
     }
 }
         """

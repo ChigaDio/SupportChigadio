@@ -1229,7 +1229,7 @@ namespace GameCore.Scenario {
             }
         }
         
-        public static void SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {s
+        public static void SetData(BaseOrigintScenarioRoleAction action,BaseScenarioRoleData data) {
             if (data == null) return;
             switch (data.RoleID) {
 """

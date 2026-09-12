@@ -1269,10 +1269,11 @@ def sync_scenario_parent_enum_files(events):
         wrapper_lines.append(f"            {enum_name}ID sub = {enum_name}ID.{sub_names[0]},")
         wrapper_lines.append(f"            bool addressable = false,")
         wrapper_lines.append(f"            Action<ScenarioExecuteData> action = null,")
+        wrapper_lines.append(f"            ScenarioExecuteData value_execute_data = null,")
         wrapper_lines.append(f"            CancellationTokenSource cts = null)")
         wrapper_lines.append("        {")
         wrapper_lines.append(f"            var subName = _{enum_name}IDToName(sub);")
-        wrapper_lines.append(f"            await core.ScenarioExecuteUpdate(\"{parent_name}\", subName, addressable, action, cts);")
+        wrapper_lines.append(f"            await core.ScenarioExecuteUpdate(\"{parent_name}\", subName, addressable, action, value_execute_data, cts);")
         wrapper_lines.append("        }")
         wrapper_lines.append("")
         wrapper_lines.append(f"        private static string _{enum_name}IDToName({enum_name}ID id)")
@@ -2304,7 +2305,7 @@ using System;
 using UnityEngine;
 using UnityEngine.AddressableAssets;                    // ← 追加
 using UnityEngine.ResourceManagement.AsyncOperations;   // ← 追加
-
+using GameCore.Enums;
 public class ClassDataIDCore : BaseSingleton<ClassDataIDCore>
 {
     private ClassDataHeader m_classDataTables;

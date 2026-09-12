@@ -730,7 +730,7 @@ namespace AddressableSystem
             }
         }
 
-        public AddressableDataContainer DataContainer => dataContainer;
+        public IAddressableDataContainer DataContainer => dataContainer;
 
         public static AddressableObject<T> CreateAddressable<T>(string path) where T : UnityEngine.Object
         {
@@ -931,35 +931,13 @@ namespace AddressableSystem
             Resources.UnloadUnusedAssets();
         }
 
-        /// <summary>
-        /// Editor向け: AddressableManagerWindow が現在のロード状況を描画するために使用する。
-        /// </summary>
-        public List<BaseAddressableData> GetAllEntries()
-        {
-            return dataContainer?.GetAllEntries() ?? new List<BaseAddressableData>();
-        }
-
-        public List<GroupCategory> GetActiveGroups()
-        {
-            return dataContainer?.GetActiveGroups() ?? new List<GroupCategory>();
-        }
-
-        public List<AssetCategory> GetActiveCategories(GroupCategory group)
-        {
-            return dataContainer?.GetActiveCategories(group) ?? new List<AssetCategory>();
-        }
-
-        public string GetGroupStats()
-        {
-            return dataContainer?.GetGroupStats() ?? string.Empty;
-        }
-        
         public Dictionary<GroupCategory, Dictionary<AssetCategory, List<BaseAddressableData>>>  GetAllEntries()
         {
             return dataContainer?.GetAllEntries();
         }
     }
 }
+
 
     """
     generate_file(os.path.join(ADDRESSABLE_LIB_DIR,"AddressableDataCore.cs"),code_str)
@@ -1068,6 +1046,7 @@ namespace AddressableSystem
     generate_file(os.path.join(ADDRESSABLE_LIB_DIR,"AddressableObject.cs"),code_str)
 
     code_str = """
+
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -1108,7 +1087,6 @@ namespace AddressableSystem
 
         public bool IsLoadedAndSetup => isSetup && isLoaded;
         public bool IsAutoRelease => isAutoRelease;
-        public bool IsArray => isArray;
         public UnityEngine.Object GetAddressableObject() => addressableObject;
         public UnityEngine.Object[] GetAddressableArray() => addressableArray;
         public int GetArrayCount() => addressableArray?.Length ?? 0;
@@ -1549,8 +1527,7 @@ namespace AddressableSystem.EditorTools
         }
     }
 }
-#endif
-"""
+#endif"""
     generate_file(os.path.join(ADDRESSABLE_EDITOR_DIR,"AddressableManagerWindow.cs"),code_str.strip() + "\\n")
 
     code_str = """

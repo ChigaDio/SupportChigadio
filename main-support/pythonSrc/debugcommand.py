@@ -673,7 +673,7 @@ namespace GameCore.DebugCommand
             }
             catch (Exception e)
             {
-                UnityEngine.Debug.LogError($"[DebugCommand] WebSocket connect failed: {e.Message}");
+                UnityEngine.Debug.LogWarning($"[DebugCommand] WebSocket connect failed: {e.Message}");
             }
         }
         private async UniTaskVoid ReceiveLoop()
@@ -712,7 +712,7 @@ namespace GameCore.DebugCommand
             }
             catch (Exception e)
             {
-                UnityEngine.Debug.LogError($"[DebugCommand] Dispatch error: {e.Message}");
+                UnityEngine.Debug.LogWarning($"[DebugCommand] Dispatch error: {e.Message}");
                 return;
             }
 

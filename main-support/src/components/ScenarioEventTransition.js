@@ -1171,6 +1171,9 @@ function ScenarioEventTransition() {
   const allEditSubTreesRef = useRef({});
   // "subId::path" -> ノードオブジェクトへの直接参照 (allEditSubTreesRef内のツリーの一部)
   const allEditTargetsRef = useRef({});
+  // ダイアログを開いた時点のテキスト(未保存の変更があるかどうかの判定基準)。
+  // モーダル外クリック/Escape/タブを閉じる、で誤って編集内容を失わないようにするため。
+  const allEditOriginalTextRef = useRef('');
 
   // ------------------------------------------------------------
   // 現在開いているSubだけをLua形式で編集するための状態
@@ -1185,6 +1188,8 @@ function ScenarioEventTransition() {
   const [subEditAllowNewGroups, setSubEditAllowNewGroups] = useState(false);
   const subEditSubTreesRef = useRef({});
   const subEditTargetsRef = useRef({});
+  // ダイアログを開いた時点のテキスト(未保存の変更があるかどうかの判定基準)
+  const subEditOriginalTextRef = useRef('');
 
   const ALL_EDIT_HEADER_RE = /^#\s*====\s*SUB:(\S+)\s+NODE:(\S+).*?====\s*$/;
   // 「# 例: ...」で始まる行は、あくまで書き方の案内・記入例であり、
@@ -1197,7 +1202,7 @@ function ScenarioEventTransition() {
   const collectAllEditTargets = (nodes, pathIds, out) => {
     (nodes || []).forEach((node) => {
       const path = [...pathIds, String(node.id)];
-      out.push({ path, node, label: node.description || '' });
+      out.push({ path, node, label: (node.data && node.data.description) || '' });
       const subgroups = (node.data && node.data.subgroups) || {};
       Object.keys(subgroups).forEach((sgId) => {
         const innerNodes = (subgroups[sgId] && subgroups[sgId].nodes) || [];
@@ -1216,13 +1221,26 @@ function ScenarioEventTransition() {
     let node = null;
     for (let i = 0; i < pathSegments.length; i++) {
       const id = pathSegments[i];
+      // pathSegmentsの2階層目以降(親を持つ階層)はサブグループノード、
+      // 1階層目はトップレベルの通常グループノード。
+      // GUIの「ノード追加」(handleAddNode)と同じ形(type/label/isSubGroup/subgroups)
+      // をここでも作っておかないと、DSL側だけノードの情報が欠落してしまう。
+      const isSub = i > 0;
+      const parentId = i > 0 ? pathSegments[i - 1] : null;
       node = list.find((n) => String(n.id) === id);
       if (!node) {
         node = {
           id,
-          description: '',
+          type: isSub ? 'subGroupNode' : 'customGroup',
+          draggable: true,
           position: { x: 120 + (list.length % 5) * 180, y: 120 + Math.floor(list.length / 5) * 140 },
-          data: { roles: [] },
+          data: {
+            label: isSub ? `Group: ${parentId} / Sub: ${id}` : id,
+            description: '',
+            roles: [],
+            subgroups: {},
+            isSubGroup: isSub,
+          },
         };
         list.push(node);
       }
@@ -1370,7 +1388,9 @@ function ScenarioEventTransition() {
         lines.push(...buildEditLinesForSub(sid, tree, allEditTargetsRef.current));
       }
 
-      setAllEditText(lines.join('\n'));
+      const joined = lines.join('\n');
+      setAllEditText(joined);
+      allEditOriginalTextRef.current = joined;
     } catch (e) {
       console.error('全体編集の読み込みエラー:', e);
       showSnack('全体編集データの取得に失敗しました', 'error');
@@ -1439,7 +1459,9 @@ function ScenarioEventTransition() {
       subEditSubTreesRef.current[subId] = tree;
 
       const lines = buildEditLinesForSub(subId, tree, subEditTargetsRef.current);
-      setSubEditText(lines.join('\n'));
+      const joined = lines.join('\n');
+      setSubEditText(joined);
+      subEditOriginalTextRef.current = joined;
     } catch (e) {
       console.error('Sub編集の読み込みエラー:', e);
       showSnack('Sub編集データの取得に失敗しました', 'error');
@@ -1492,6 +1514,65 @@ function ScenarioEventTransition() {
       setSubEditApplying(false);
     }
   };
+
+  // ------------------------------------------------------------
+  // DSL編集ダイアログを閉じる際の確認処理
+  // ------------------------------------------------------------
+  // MUIのDialogはデフォルトだと、モーダル外クリック(backdropClick)や
+  // Escapeキーでも即座にonCloseが呼ばれ、確認なしに編集中のテキストが
+  // 消えてしまう(適用していない内容がそのまま失われる)。これを防ぐため、
+  // 「開いた時点のテキスト」と現在のテキストを比較し、変更があれば
+  // window.confirm()で確認してから閉じるようにする。
+  // (onCloseはbackdropClick/escapeKeyDown両方の理由で呼ばれるため、
+  //  reasonに関わらずここで一律にチェックする)
+  const confirmDiscardDslEdit = () => window.confirm(
+    'まだ「適用」していない編集内容があります。このまま閉じると入力した内容は失われます。よろしいですか？'
+  );
+
+  const handleCloseAllEditDialog = () => {
+    if (allEditApplying) return; // 適用処理中は閉じさせない
+    const isDirty = allEditText !== allEditOriginalTextRef.current;
+    if (isDirty && !confirmDiscardDslEdit()) return;
+    setShowAllEditDialog(false);
+  };
+
+  const handleCloseSubEditDialog = () => {
+    if (subEditApplying) return;
+    const isDirty = subEditText !== subEditOriginalTextRef.current;
+    if (isDirty && !confirmDiscardDslEdit()) return;
+    setShowSubEditDialog(false);
+  };
+
+  // ------------------------------------------------------------
+  // タブを閉じる/リロードする際、DSL編集ダイアログに未適用の変更が
+  // 残っていればブラウザ標準の確認ダイアログ(離脱確認)を出す。
+  // ・リスナー自体はマウント時に一度だけ登録し、判定は最新値を追う
+  //   ref経由で行う(キー入力のたびにリスナーを付け外ししないため)。
+  // ・returnValueに文字列をセットする方式はブラウザの仕様上、実際に
+  //   表示される文言はブラウザ標準のものになる(カスタム文言は出せない)。
+  // ------------------------------------------------------------
+  const allEditDirtyRef = useRef(false);
+  const subEditDirtyRef = useRef(false);
+
+  useEffect(() => {
+    allEditDirtyRef.current = showAllEditDialog && allEditText !== allEditOriginalTextRef.current;
+  }, [showAllEditDialog, allEditText]);
+
+  useEffect(() => {
+    subEditDirtyRef.current = showSubEditDialog && subEditText !== subEditOriginalTextRef.current;
+  }, [showSubEditDialog, subEditText]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (allEditDirtyRef.current || subEditDirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
 
   // 保存バグ修正用の参照群
@@ -2235,7 +2316,7 @@ function ScenarioEventTransition() {
       </Box>
 
       {/* ── 全体編集ダイアログ(イベント内の全Sub・全ノードのTransactionを一括編集) ── */}
-      <Dialog open={showAllEditDialog} onClose={() => setShowAllEditDialog(false)} maxWidth="lg" fullWidth>
+      <Dialog open={showAllEditDialog} onClose={handleCloseAllEditDialog} maxWidth="lg" fullWidth>
         <DialogTitle>
           全体編集（{eventId} / 全Sub一括）
           <Typography variant="caption" display="block" color="text.secondary">
@@ -2296,7 +2377,7 @@ function ScenarioEventTransition() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowAllEditDialog(false)} disabled={allEditApplying}>閉じる</Button>
+          <Button onClick={handleCloseAllEditDialog} disabled={allEditApplying}>閉じる</Button>
           <Button onClick={handleOpenAllEditDialog} disabled={allEditLoading || allEditApplying}>再取得</Button>
           <Button
             variant="contained"
@@ -2309,7 +2390,7 @@ function ScenarioEventTransition() {
       </Dialog>
 
       {/* ── Sub編集ダイアログ(現在開いているSubだけをLua形式でまとめて編集) ── */}
-      <Dialog open={showSubEditDialog} onClose={() => setShowSubEditDialog(false)} maxWidth="lg" fullWidth>
+      <Dialog open={showSubEditDialog} onClose={handleCloseSubEditDialog} maxWidth="lg" fullWidth>
         <DialogTitle>
           Sub編集（{eventId} / SUB:{subId} のみ）
           <Typography variant="caption" display="block" color="text.secondary">
@@ -2367,7 +2448,7 @@ function ScenarioEventTransition() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowSubEditDialog(false)} disabled={subEditApplying}>閉じる</Button>
+          <Button onClick={handleCloseSubEditDialog} disabled={subEditApplying}>閉じる</Button>
           <Button onClick={handleOpenSubEditDialog} disabled={subEditLoading || subEditApplying}>再取得</Button>
           <Button
             variant="contained"

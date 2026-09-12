@@ -796,10 +796,7 @@ namespace GameCore.Scenario.StorySetting
         f.write(database_code)
 
     core_code = '''
-uusing System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
+uusing System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using GameCore;
@@ -809,7 +806,9 @@ using GameCore.Gameobject;
 using AddressableSystem;
 using Cysharp.Threading.Tasks.Triggers;
 using GameCore.Enums;
-
+using System;
+using System.Collections.Generic;
+using System.Linq;
 namespace GameCore.Scenario.StorySetting
 {
     /// <summary>
@@ -833,6 +832,7 @@ namespace GameCore.Scenario.StorySetting
     public partial class StorySettingCore : BaseSingleton<StorySettingCore>
     {
         private StorySettingDatabase database;
+        public StorySettingDatabase DataBase => database;
         private bool isLoadDatabase;
         private CancellationTokenSource manualCancelSource;
         private CancellationToken combinedToken;
