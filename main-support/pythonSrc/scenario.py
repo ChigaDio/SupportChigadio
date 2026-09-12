@@ -2705,11 +2705,19 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
             logger.error(f"Failed to load role file {role_file}: {e}")
 
     def write_role_fields(sub_section, role, schema_fields):
-        """1つのRoleが持つフィールド値をすべてバイナリへ書き込む(roles/inner_roles共通)。"""
-        fields = role.get('data', [])
-        for field_idx in range(min(len(fields), len(schema_fields))):
-            field = fields[field_idx]
-            schema_field = schema_fields[field_idx]
+        """1つのRoleが持つフィールド値をすべてバイナリへ書き込む(roles/inner_roles共通)。
+        書き込み順は schema_fields 側(={RoleName}.jsonのマスター定義順。C#側の
+        ReadBinaryもこの順を前提に読む)を正として走査する。
+        以前は role.data 側の並び順と schema_fields 側の並び順を単純にインデックスで
+        突き合わせていたため、DSL編集で記述したフィールドの順序がマスター定義の順序と
+        異なっていると(例: type_id/timeの記述順を入れ替えて保存)、値と型がずれて
+        書き込まれてしまい、結果的に別のフィールドが初期値扱いになる不具合があった。
+        ここではrole.data側を name -> field の辞書にしてから、schema_fields側の
+        順序でnameが一致するものを引く(role.data側の記述順には依存しない)。
+        """
+        fields_by_name = {f.get('name'): f for f in role.get('data', []) if f.get('name')}
+        for schema_field in schema_fields:
+            field = fields_by_name.get(schema_field['name'], {})
             field_type = schema_field['type']
             array_size = field.get('arraySize', schema_field.get('arraySize', 0))
             options = field.get('options', schema_field.get('options', {}))
