@@ -28,16 +28,22 @@ const RoleInputFactory = {
         // import SpecialRoleInputForm from './SpecialRoleInputForm'; // 必要なら
       }
 
-      return () => (
+      // initialData/onChange は描画時に props で上書き可能にする。
+      // 以前は getForm 呼び出し時点の initialData をクロージャで固定していたため、
+      // フォーム生成後に親の formDataState が更新されても BaseRoleInputForm は
+      // 古い initialData のまま再初期化され、一括保存→DSL切替で編集内容が
+      // 消える原因になっていた。
+      const Form = (props) => (
         <BaseRoleInputForm
           schema={schema}
-          initialData={initialData}
-          onChange={onChange}
+          initialData={props.initialData !== undefined ? props.initialData : initialData}
+          onChange={props.onChange || onChange}
           eventId={context?.eventId}
           subId={context?.subId}
           roleName={roleName}
         />
-      );  // onSave を onChange に変更
+      );
+      return Form;
     } catch (error) {
       console.error(error);
       return () => (

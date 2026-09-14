@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useContext, createContext } from 'react';
 import {
   Box,
   TextField,
@@ -21,6 +21,17 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+
+// ============================================================
+// class_data / CustomClassData のネストしたフィールドを描画するとき、
+// BaseRoleInputForm は自分自身を再帰的にレンダーする(下の方の renderField 参照)。
+// 以前は再帰した各階層が独立に enumValues/classDataSchemas/customClassSchemas を
+// フェッチしていたため、ネストが深いRoleほど /api/enum-id・/api/class-data-id・
+// /api/class-data・/api/custom-class-data-type-options とその配下の個別フェッチが
+// 階層の数だけ重複して走り、「データ編集がクッソ重い」原因になっていた。
+// 最上位のインスタンスだけがフェッチを行い、結果をこのContext経由でネストした
+// 子インスタンスへ配る(子は自分ではフェッチしない)ことで、通信を1回に減らす。
+const RoleFormTypeOptionsContext = createContext(null);
 
 // Vector のラベル定義
 const VECTOR_AXIS_LABELS = {
@@ -463,6 +474,23 @@ const NumericInput = ({ label, value, onChange, isFloat = false, sx = {} }) => {
 // ============================================================
 function DictionaryScalarEditor({ type, value, options, onChange, enumValues, classDataSchemas, customClassSchemas }) {
   const lower = (type || '').toLowerCase();
+  // subSchemaはHooksのルール上、早期returnより前で無条件に(useMemoとして)
+  // 組み立てておく必要がある。ここで毎回新しいオブジェクトを作ってしまうと
+  // NestedClassDataField側のuseMemoの依存配列([...、subSchema])が常に変化した
+  // ことになり、せっかくのメモ化が効かなくなってしまう。
+  const nestedSchema = customClassSchemas[type] || classDataSchemas[type];
+  const nestedSubSchema = useMemo(() => {
+    if (!nestedSchema || nestedSchema.length === 0) return null;
+    return {
+      fields: nestedSchema.map(sub => ({
+        ...sub,
+        label: sub.label || sub.name,
+        arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
+      })),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nestedSchema]);
+
   if (lower === 'bit') return <BitValueEditor value={value} options={options} onChange={onChange} />;
   if (lower === 'color') return <ColorValueEditor value={value} onChange={onChange} />;
   if (lower === 'bezier') return <BezierValueEditor value={value} options={options} onChange={onChange} />;
@@ -534,29 +562,8 @@ function DictionaryScalarEditor({ type, value, options, onChange, enumValues, cl
     );
   }
   // CustomClassData / ClassData (ネストしたオブジェクト)
-  const nestedSchema = customClassSchemas[type] || classDataSchemas[type];
-  if (nestedSchema && nestedSchema.length > 0) {
-    const subSchema = {
-      fields: nestedSchema.map(sub => ({
-        ...sub,
-        label: sub.label || sub.name,
-        arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
-      })),
-    };
-    const subInitialData = Object.entries(value || {}).map(([n, v]) => ({
-      name: n, value: v,
-      arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
-    }));
-    return (
-      <BaseRoleInputForm
-        schema={subSchema}
-        initialData={subInitialData}
-        onChange={(subData) => {
-          const newObj = subData.reduce((acc, { name, value: v }) => { acc[name] = v; return acc; }, {});
-          onChange(newObj);
-        }}
-      />
-    );
+  if (nestedSubSchema) {
+    return <NestedClassDataField value={value} subSchema={nestedSubSchema} onChange={onChange} />;
   }
   return <TextField size="small" value={value ?? ''} onChange={(e) => onChange(e.target.value)} sx={{ minWidth: 160 }} />;
 }
@@ -690,12 +697,71 @@ function DictionaryValueEditor({ value, options, onChange, enumValues, classData
   );
 }
 
+// ============================================================
+// class_data / CustomClassData のネストしたフィールドを描画するための共通ラッパー。
+//
+// なぜこれが必要か:
+// renderField/renderSingle は BaseRoleInputForm の描画のたびに(配列要素ごとにも)
+// 呼び出される「ただの関数」であり、Reactコンポーネントではない
+// (Hooksのルール上、この中で直接useMemo/useCallbackは使えない)。
+// そのため、以前は呼び出し箇所で毎回
+//   const subInitialData = Object.entries(value || {}).map(...)
+// のように新しい配列を作って <BaseRoleInputForm initialData={subInitialData} .../> に
+// 渡していた。これだと「中身は同じでも参照は常に新しい」ため、フォームのどこか
+// 1文字を編集して親が再レンダーされるたびに、このネストしたインスタンス側の
+//   useEffect([initialData, schema, isLoading])
+// が「値が変わった」と誤検知してformDataをリセット+onChangeを呼び直し、それが
+// さらに親のonChangeを呼ぶ…という無駄な連鎖を引き起こしていた
+// (ClassData/CustomClassDataが多い・ネストが深いフォームほど、この連鎖が
+// 多重に発生して顕著に重くなっていた)。
+//
+// この専用コンポーネントに切り出すことで、
+//  - subInitialData は「値の中身」が変わった時だけ作り直す(useMemo)
+//  - 親から渡されるonChangeは毎回新しい関数でも、子への参照は安定させる(useRef)
+// ということができるようになる。
+function NestedClassDataField({ value, subSchema, onChange }) {
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; });
+
+  const subInitialData = useMemo(
+    () => Object.entries(value || {}).map(([n, v]) => ({
+      name: n,
+      value: v,
+      arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
+    })),
+    // 値の「参照」ではなく「中身」が変わった時だけ作り直したいのでJSON化して比較する。
+    // フォームの1フィールド分の値なので、このコストは無視できるレベル。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(value ?? null), subSchema]
+  );
+
+  const handleSubChange = useCallback((subData) => {
+    const newObj = subData.reduce((acc, { name, value: v }) => { acc[name] = v; return acc; }, {});
+    onChangeRef.current(newObj);
+  }, []);
+
+  return <BaseRoleInputForm schema={subSchema} initialData={subInitialData} onChange={handleSubChange} />;
+}
+
 const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, roleName }) => {
   const [formData, setFormData] = useState(initialData || []);
-  const [enumValues, setEnumValues] = useState({});
-  const [classDataSchemas, setClassDataSchemas] = useState({});
-  const [customClassSchemas, setCustomClassSchemas] = useState({}); // CustomClassData (ネストしたオブジェクト。bit/color/bezierフィールドを含みうる)
-  const [isLoading, setIsLoading] = useState(true);
+
+  // 親(呼び出し元)がすでにContextでenum/classData/customClassSchemasを
+  // 提供済みなら(=自分はネストした子インスタンス)、それをそのまま使い、
+  // 自分では何もフェッチしない。最上位インスタンス(Contextがまだ無い)だけが
+  // 下のuseEffectで実際にフェッチを行う。
+  const inherited = useContext(RoleFormTypeOptionsContext);
+  const isNested = inherited !== null;
+
+  const [ownEnumValues, setOwnEnumValues] = useState({});
+  const [ownClassDataSchemas, setOwnClassDataSchemas] = useState({});
+  const [ownCustomClassSchemas, setOwnCustomClassSchemas] = useState({}); // CustomClassData (ネストしたオブジェクト。bit/color/bezierフィールドを含みうる)
+  const [ownIsLoading, setOwnIsLoading] = useState(true);
+
+  const enumValues = isNested ? inherited.enumValues : ownEnumValues;
+  const classDataSchemas = isNested ? inherited.classDataSchemas : ownClassDataSchemas;
+  const customClassSchemas = isNested ? inherited.customClassSchemas : ownCustomClassSchemas;
+  const isLoading = isNested ? inherited.isLoading : ownIsLoading;
 
   const getDefaultValue = useCallback((type, arraySize, options) => {
     const baseDefault = () => {
@@ -719,7 +785,20 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
             return obj;
           }
           if (type in enumValues && enumValues[type].length > 0) return `${type}ID.None`;
-          if (type in classDataSchemas && classDataSchemas[type].length > 0) return `${type}ID.None`;
+          // classDataSchemas は「TypeName.EnumID」のように選ぶID参照ではなく、
+          // customClassSchemas と同じ「埋め込み構造体(ClassData)」。
+          // GUI側(renderSingle の classDataSubSchemaByType 分岐)もこれをネストした
+          // オブジェクトとして描画しているので、デフォルト値もオブジェクトを組み立てる
+          // 必要がある。以前はここが `${type}ID.None` という文字列を返しており、
+          // GUIでは Object.entries(文字列) が文字ごとに分解されてしまい描画が壊れ、
+          // DSL側ではその文字列がそのままシリアライズされて
+          // 「difference_id=CharacterDifferenceID.None」のような、本来ネストした
+          // { scale: 0, add_position: {...} } になるべき出力が壊れる原因になっていた。
+          if (type in classDataSchemas && classDataSchemas[type].length > 0) {
+            const obj = {};
+            (classDataSchemas[type] || []).forEach(f => { obj[f.name] = getDefaultValue(f.type, f.arraySize, f.options); });
+            return obj;
+          }
           return '';
       }
     };
@@ -745,14 +824,20 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
           arraySize: field.arraySize !== undefined ? field.arraySize : 0
         };
       });
+      // onChangeは上の「formData変化時」useEffectが一元的に呼ぶので、ここでは
+      // setFormDataだけ行う(以前はここでも直接onChangeを呼んでおり、二重通知に
+      // なっていた)。
       setFormData(formattedData);
-      onChange(formattedData);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialData, schema, isLoading]);
 
   useEffect(() => {
-    setIsLoading(true);
+    // ネストした子インスタンスはContextから受け取った結果を使い回すので、
+    // ここで自分でフェッチする必要はない(setOwnIsLoadingも動かさない=
+    // 上のisLoading変数はinherited.isLoadingをそのまま反映する)。
+    if (isNested) return;
+    setOwnIsLoading(true);
     const collectTypes = (fields) => {
       const types = new Set();
       fields.forEach(field => {
@@ -778,7 +863,7 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
         const customClassIdList = customOptions.custom_class_id_list || [];
         // custom_class_schemas はすでにフィールド一覧(bit/color/bezierのoptions込み)が
         // まとまって返ってくるので、CustomClassData型は個別フェッチ不要でそのまま使える。
-        setCustomClassSchemas(customOptions.custom_class_schemas || {});
+        setOwnCustomClassSchemas(customOptions.custom_class_schemas || {});
 
         const enumPromises = enumList
           .filter(e => types.includes(e.name))
@@ -828,28 +913,76 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
           }
         });
 
-        setEnumValues(prev => ({ ...prev, ...enumMap }));
-        setClassDataSchemas(prev => ({ ...prev, ...classDataMap }));
+        setOwnEnumValues(prev => ({ ...prev, ...enumMap }));
+        setOwnClassDataSchemas(prev => ({ ...prev, ...classDataMap }));
       } catch (error) {
         console.error('型オプション取得エラー:', error);
       } finally {
-        setIsLoading(false);
+        setOwnIsLoading(false);
       }
     };
 
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(schema.fields)]);
+  }, [JSON.stringify(schema.fields), isNested]);
+
+  // 自分がフェッチした(または継承した)結果を、ネストした子インスタンスへ配るための
+  // Context値。参照を安定させるためuseMemoでラップする。
+  const typeOptionsContextValue = useMemo(
+    () => ({ enumValues, classDataSchemas, customClassSchemas, isLoading }),
+    [enumValues, classDataSchemas, customClassSchemas, isLoading]
+  );
+
+  // class_data/CustomClassDataのネストしたフィールドを描画する際に使うsub-schemaを
+  // 事前に1回だけ組み立てておく(renderField内で毎レンダー新規オブジェクトを
+  // 作ると、配列項目ごとに呼ばれるrenderSingleの中でuseMemoが使えず(hooksの
+  // ルール上、可変長の配列要素ごとの呼び出しでは安全に使えない)、子コンポーネントの
+  // props参照が毎回変わってしまうため)。
+  const buildSubSchemaMap = (schemasByType) => {
+    const map = {};
+    Object.keys(schemasByType).forEach((type) => {
+      const fields = schemasByType[type];
+      if (fields && fields.length > 0) {
+        map[type] = {
+          fields: fields.map((sub) => ({
+            ...sub,
+            label: sub.label || sub.name,
+            arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
+          })),
+        };
+      }
+    });
+    return map;
+  };
+  // CustomClassDataとClassData(raw class_data)は別の名前空間・別の描画スタイル
+  // (Chipラベルが "CustomClass" / "Class" で異なる)なので、混同しないように
+  // マップは分けて持つ。
+  const customClassSubSchemaByType = useMemo(
+    () => buildSubSchemaMap(customClassSchemas), [customClassSchemas]
+  );
+  const classDataSubSchemaByType = useMemo(
+    () => buildSubSchemaMap(classDataSchemas), [classDataSchemas]
+  );
 
   const handleChange = (name, value, arraySize) => {
-    setFormData(prev => {
-      const newData = prev.map(item =>
-        item.name === name ? { ...item, value, arraySize: arraySize !== undefined ? arraySize : item.arraySize } : item
-      );
-      onChange(newData);
-      return newData;
-    });
+    setFormData(prev => prev.map(item =>
+      item.name === name ? { ...item, value, arraySize: arraySize !== undefined ? arraySize : item.arraySize } : item
+    ));
   };
+
+  // formData が実際に変化したときだけ親へ通知する(handleChangeのupdater内で
+  // 直接onChangeを呼ぶと、Reactのバッチ処理・StrictModeの二重呼び出しの影響で
+  // 親へ余計な回数通知してしまい、そのたびに下の「ネストしたinitialData再生成」
+  // 問題(後述)と合わさって入力が重くなる原因になっていた)。
+  const isFirstFormDataEffect = useRef(true);
+  useEffect(() => {
+    if (isFirstFormDataEffect.current) {
+      isFirstFormDataEffect.current = false;
+      return;
+    }
+    onChange(formData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData]);
 
   // ── フィールドの「デフォルト保存」 ──
   // 今このフォームに入力されている値を、Role定義側(scenario_role/<Role>/<Role>.json)の
@@ -923,31 +1056,14 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
       }
 
       // CustomClassData (ネストしたオブジェクト。中にbit/color/bezierを含んでもよい)
-      if (customClassSchemas[field.type] && customClassSchemas[field.type].length > 0) {
-        const subSchema = {
-          fields: customClassSchemas[field.type].map(sub => ({
-            ...sub,
-            label: sub.label || sub.name,
-            arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
-          })),
-        };
-        const subInitialData = Object.entries(value || {}).map(([n, v]) => ({
-          name: n, value: v,
-          arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
-        }));
+      if (customClassSubSchemaByType[field.type]) {
+        const subSchema = customClassSubSchemaByType[field.type];
         return (
           <Paper key={key} variant="outlined" sx={{ p: 1.5, mb: 1, bgcolor: 'secondary.50' }}>
             <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
               {field.label || field.name} <Chip label="CustomClass" size="small" color="secondary" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
             </Typography>
-            <BaseRoleInputForm
-              schema={subSchema}
-              initialData={subInitialData}
-              onChange={(subData) => {
-                const newObj = subData.reduce((acc, { name, value }) => { acc[name] = value; return acc; }, {});
-                onValueChange(newObj);
-              }}
-            />
+            <NestedClassDataField value={value} subSchema={subSchema} onChange={onValueChange} />
           </Paper>
         );
       }
@@ -978,31 +1094,14 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
       }
 
       // ClassData (nested)
-      if (classDataSchemas[field.type] && classDataSchemas[field.type].length > 0) {
-        const subSchema = {
-          fields: classDataSchemas[field.type].map(sub => ({
-            ...sub,
-            label: sub.label || sub.name,
-            arraySize: sub.arraySize !== undefined ? sub.arraySize : 0,
-          })),
-        };
-        const subInitialData = Object.entries(value || {}).map(([n, v]) => ({
-          name: n, value: v,
-          arraySize: subSchema.fields.find(f => f.name === n)?.arraySize || 0,
-        }));
+      if (classDataSubSchemaByType[field.type]) {
+        const subSchema = classDataSubSchemaByType[field.type];
         return (
           <Paper key={key} variant="outlined" sx={{ p: 1.5, mb: 1, bgcolor: 'grey.50' }}>
             <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
               {field.label || field.name} <Chip label="Class" size="small" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
             </Typography>
-            <BaseRoleInputForm
-              schema={subSchema}
-              initialData={subInitialData}
-              onChange={(subData) => {
-                const newObj = subData.reduce((acc, { name, value }) => { acc[name] = value; return acc; }, {});
-                onValueChange(newObj);
-              }}
-            />
+            <NestedClassDataField value={value} subSchema={subSchema} onChange={onValueChange} />
           </Paper>
         );
       }
@@ -1245,7 +1344,7 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
     );
   };
 
-  return (
+  const formBody = (
     <Box sx={{ p: 1 }}>
       {schema.fields.map((field, index) => (
         <Box key={field.name}>
@@ -1277,6 +1376,16 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
         </Box>
       ))}
     </Box>
+  );
+
+  // 自分がネストした子インスタンスの場合は、すでにどこかの先祖がProviderを
+  // 立てているので、ここで重ねてProviderを作る必要は無い(そのまま返す)。
+  // 最上位インスタンスの場合だけ、自分がフェッチした結果をProviderで配る。
+  if (isNested) return formBody;
+  return (
+    <RoleFormTypeOptionsContext.Provider value={typeOptionsContextValue}>
+      {formBody}
+    </RoleFormTypeOptionsContext.Provider>
   );
 };
 

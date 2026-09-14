@@ -184,6 +184,12 @@ const FLOAT_TYPES = new Set(['float', 'double', 'decimal']);
 const VECTOR_SIZES = { vector2: 2, vector3: 3, vector4: 4 };
 const VECTOR_FIELD_NAMES = { vector2: ['x', 'y'], vector3: ['x', 'y', 'z'], vector4: ['x', 'y', 'z', 'w'] };
 
+// スキーマ側の型名は "Vector2" / "Float" のように PascalCase で来る場合がある
+// (CharacterUI.class.json 等)。ビルトイン型の判定は常に小文字で行う。
+function normalizeBuiltinType(type) {
+  return (type || '').toLowerCase();
+}
+
 // bit / color / bezier は、GUI側(BaseRoleInputForm.js)では専用エディタで組み立てているが、
 // 実際に保存される値の形はどれも固定された名前付きフィールドを持つ「ただのオブジェクト」
 // （bit: {size, bits}、color: {r,g,b,a}、bezier: {points: [{time,value,inTangent,outTangent}, ...]}）。
@@ -215,12 +221,31 @@ const BUILTIN_STRUCT_SUBFIELDS = {
 // フィールドが実際に使うべきsubFieldsを解決する。
 // class_dataのようにスキーマ側(バックエンド)からsubFieldsが渡ってくる場合はそれを優先し、
 // 渡ってこない組み込み構造体型(bit/color/bezier/vector2/3/4)の場合はここで補う。
-function getEffectiveSubFields(fieldType, subFields) {
+// classDataSchemas: 型名 → フィールド一覧 のマップ(BaseRoleInputForm.js側の
+// classDataSchemas/customClassSchemasと同じ形。呼び出し側が省略した場合は{}扱い)。
+// role-form-schemaのfield定義自体にsubFieldsが埋め込まれていない場合(例:
+// class_data型フィールドは型名しか持たず、実フィールド一覧は別エンドポイントで
+// 型名ごとに配布されている、というバックエンド構成のとき)のフォールバックとして使う。
+// これが無いと、class_data型のフィールドはネストした { a: 1, b: 2 } という
+// DSLネイティブな形で読み書きできず、デフォルト値の組み立て・シリアライズ・
+// パース・補完のすべてが壊れる(型名だけの情報からはフィールド構成が分からないため)。
+function getEffectiveSubFields(fieldType, subFields, classDataSchemas) {
   if (Array.isArray(subFields) && subFields.length > 0) return subFields;
   const baseType = (fieldType || '').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
-  if (BUILTIN_STRUCT_SUBFIELDS[baseType]) return BUILTIN_STRUCT_SUBFIELDS[baseType];
-  if (VECTOR_FIELD_NAMES[baseType]) {
-    return VECTOR_FIELD_NAMES[baseType].map((n) => ({ name: n, type: 'float' }));
+  const baseLower = normalizeBuiltinType(baseType);
+  if (BUILTIN_STRUCT_SUBFIELDS[baseLower]) return BUILTIN_STRUCT_SUBFIELDS[baseLower];
+  if (VECTOR_FIELD_NAMES[baseLower]) {
+    return VECTOR_FIELD_NAMES[baseLower].map((n) => ({ name: n, type: 'float' }));
+  }
+  const fromMap = classDataSchemas && classDataSchemas[baseType];
+  if (Array.isArray(fromMap) && fromMap.length > 0) {
+    return fromMap.map((f) => ({
+      name: f.name,
+      type: f.type,
+      arraySize: f.arraySize,
+      options: f.options,
+      subFields: f.subFields,
+    }));
   }
   return subFields;
 }
@@ -309,11 +334,96 @@ export function computeNextSubgroupHeader(docText, cursorLine) {
 }
 
 /**
+ * セクション(見出し+本文)をコピーして別の場所に貼り付けた直後など、同じ親の中で
+ * IDが重複してしまったノードを検出し、重複した側にだけ未使用の新しいIDを
+ * 自動で割り振る(実行順は見出しがテキスト上に現れる位置がそのまま使われるため、
+ * ここではIDの重複解消だけを行えばよい)。
+ *
+ * 見出しは「テキスト上に現れる順序 = ドキュメントの深さ優先(pre-order)の並び」
+ * であることを前提にしている(RoleDataDrawer/ScenarioEventTransition.js側の
+ * ダンプ処理がその順序で出力しているため)。祖先ノードがリネームされた場合、
+ * そのスコープ内にある子孫の見出しのパスも追従して書き換える。
+ *
+ * 戻り値: { text: 書き換え後の全文, renamed: [{ subId, oldPath, newPath }, ...] }
+ */
+export function renumberDuplicateNodeIds(docText) {
+  const lines = docText.split('\n');
+  const headers = [];
+  lines.forEach((line, lineIndex) => {
+    const m = line.match(GROUP_HEADER_RE);
+    if (m) headers.push({ lineIndex, subId: m[1], path: m[2].split('/'), originalPath: m[2] });
+  });
+  if (headers.length === 0) return { text: docText, renamed: [] };
+
+  // 各「親パス(深さ込み)」ごとに、ドキュメント中で既に使われている全IDを
+  // 先に集計しておく(新IDを振る際、まだ処理していない後方のIDとも
+  // 衝突しないようにするため)。
+  const allIdsByParent = new Map(); // "parentKey" -> Set<string>
+  const parentKeyAt = (path, depth) => path.slice(0, depth).join('/');
+  for (const h of headers) {
+    for (let d = 0; d < h.path.length; d++) {
+      const key = parentKeyAt(h.path, d);
+      if (!allIdsByParent.has(key)) allIdsByParent.set(key, new Set());
+      allIdsByParent.get(key).add(h.path[d]);
+    }
+  }
+
+  const seenByParent = new Map(); // "parentKey" -> Set<string> (この時点までに確定したID)
+  const currentAncestorPath = []; // 深さごとの「直近に確定した(リネーム後の)祖先ID」
+  const renamed = [];
+
+  for (const h of headers) {
+    const depth = h.path.length - 1;
+    const newPathSegs = [...h.path];
+    for (let d = 0; d < depth; d++) {
+      if (currentAncestorPath[d] !== undefined) newPathSegs[d] = currentAncestorPath[d];
+    }
+    const parentKey = newPathSegs.slice(0, depth).join('/');
+    let id = newPathSegs[depth];
+
+    if (!seenByParent.has(parentKey)) seenByParent.set(parentKey, new Set());
+    const seenSet = seenByParent.get(parentKey);
+
+    if (seenSet.has(id)) {
+      // 同じ親の中で既に使われているID → コピー直後などで重複したとみなし、
+      // 未使用の新IDを割り当てる(数値ID前提。数値でないIDは対象外とし、
+      // 重複したまま残す＝手動での対応に委ねる)。
+      if (/^\d+$/.test(id)) {
+        const usedSet = allIdsByParent.get(parentKey) || new Set();
+        let n = 1;
+        while (usedSet.has(String(n)) || seenSet.has(String(n))) n += 1;
+        const newId = String(n);
+        usedSet.add(newId);
+        seenSet.add(newId);
+        newPathSegs[depth] = newId;
+        renamed.push({ subId: h.subId, oldPath: h.originalPath, newPath: newPathSegs.join('/') });
+        id = newId;
+      }
+    } else {
+      seenSet.add(id);
+    }
+
+    currentAncestorPath[depth] = id;
+    currentAncestorPath.length = depth + 1;
+    h.newPath = newPathSegs.join('/');
+  }
+
+  const newLines = [...lines];
+  for (const h of headers) {
+    if (h.newPath !== h.originalPath) {
+      newLines[h.lineIndex] = newLines[h.lineIndex].replace(`NODE:${h.originalPath}`, `NODE:${h.newPath}`);
+    }
+  }
+
+  return { text: newLines.join('\n'), renamed };
+}
+
+/**
  * DSLの "{ フィールド名: 値, ... }" オブジェクトリテラルを、指定されたsubFieldsの
  * スキーマに従ってパースする。class_data・bit・color・bezier・vector2/3/4のいずれの
  * オブジェクトリテラルもこの共通関数を通る（何段ネストしても再帰的に同じ処理になる）。
  */
-function parseObjectLiteralTokens(valueTokens, subFields, lineText) {
+function parseObjectLiteralTokens(valueTokens, subFields, lineText, classDataSchemas) {
   if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
     return { value: undefined, error: `{ フィールド名: 値, ... } の形式で指定してください（例: { x: 0, y: 0 }）` };
   }
@@ -335,7 +445,7 @@ function parseObjectLiteralTokens(valueTokens, subFields, lineText) {
       return { value: undefined, error: `存在しないフィールドです: ${subName}` };
     }
     const subValueTokens = g.slice(2);
-    const { value, error } = coerceValueTokens(subValueTokens, subField.type, subField.options, lineText, subField.subFields);
+    const { value, error } = coerceValueTokens(subValueTokens, subField.type, subField.options, lineText, subField.subFields, classDataSchemas);
     if (error) return { value: undefined, error: `${subName}: ${error}` };
     result[subName] = value;
   }
@@ -348,10 +458,11 @@ function parseObjectLiteralTokens(valueTokens, subFields, lineText) {
  * リンター/コンパイラ双方から使い回せるようにするため）。
  * lineText: dictionary（JSONリテラル）の復元に使う元の行文字列。
  */
-export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText, subFields) {
+export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText, subFields, classDataSchemas) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
-  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields);
+  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields, classDataSchemas);
+  const baseLower = normalizeBuiltinType(baseType);
 
   // 配列型([] 付き)は、まず [ 値, 値, ... ] を分解してから、各要素を
   // baseType(=[]を外した型)としてcoerceValueTokensに再帰させる。
@@ -364,7 +475,7 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     const items = splitByComma(inner);
     const result = [];
     for (const itemTokens of items) {
-      const { value, error } = coerceValueTokens(itemTokens, baseType, fieldOptions, lineText, subFields);
+      const { value, error } = coerceValueTokens(itemTokens, baseType, fieldOptions, lineText, subFields, classDataSchemas);
       if (error) return { value: undefined, error };
       result.push(value);
     }
@@ -374,10 +485,10 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   // vector2/3/4: アプリ内部では [x, y, ...] という配列で保持するが、DSL上は
   // class_data等と同じ { x: .., y: .. } の名前付きオブジェクトリテラルとして読み書きする
   // ("(0, 0)" のような位置だけの表記や "0,0" のような生の値は分かりにくいため)。
-  if (baseType in VECTOR_SIZES) {
-    const names = VECTOR_FIELD_NAMES[baseType];
+  if (baseLower in VECTOR_SIZES) {
+    const names = VECTOR_FIELD_NAMES[baseLower];
     const vecFields = names.map((n) => ({ name: n, type: 'float' }));
-    const { value: obj, error } = parseObjectLiteralTokens(valueTokens, vecFields, lineText);
+    const { value: obj, error } = parseObjectLiteralTokens(valueTokens, vecFields, lineText, classDataSchemas);
     if (error) return { value: undefined, error };
     const missing = names.filter((n) => !(n in obj));
     if (missing.length > 0) {
@@ -391,11 +502,11 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   // 1つ1つcoerceValueTokensを再帰適用する。フィールド名の予測変換もこれに合わせて
   // getCompletionsAt側で対応している)。
   if (Array.isArray(effectiveSubFields) && effectiveSubFields.length > 0) {
-    return parseObjectLiteralTokens(valueTokens, effectiveSubFields, lineText);
+    return parseObjectLiteralTokens(valueTokens, effectiveSubFields, lineText, classDataSchemas);
   }
 
   // dictionary型のみ、キーが動的なため引き続きJSONリテラルとして扱う
-  if (baseType === 'dictionary') {
+  if (baseLower === 'dictionary') {
     if (valueTokens.length === 0) return { value: undefined, error: '値が指定されていません' };
     const from = valueTokens[0].from;
     const to = valueTokens[valueTokens.length - 1].to;
@@ -407,8 +518,23 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     }
   }
 
+  // 保険: serializeValue側の同名フォールバック(subFieldsが解決できない型を
+  // JSON.stringifyで書き出す処理)と対になる読み込み側。本来ここに来るのは
+  // subFields解決が壊れているとき(現状は起きない想定)だけだが、その場合でも
+  // 値を破棄したりエラーにしたりせず、JSONとして読み戻せるようにしておく。
+  if (valueTokens.length > 0 && valueTokens[0].type === 'LBRACE') {
+    const from = valueTokens[0].from;
+    const to = valueTokens[valueTokens.length - 1].to;
+    const raw = typeof lineText === 'string' ? lineText.slice(from, to) : valueTokens.map((t) => t.value).join('');
+    try {
+      return { value: JSON.parse(raw), error: null };
+    } catch (e) {
+      // JSONとして読めなければ、下の通常のオブジェクトリテラル用エラーメッセージに委ねる
+    }
+  }
+
   if (valueTokens.length !== 1) {
-    if (baseType === 'string') {
+    if (baseLower === 'string') {
       return {
         value: undefined,
         error: '文字列は "" で囲んでください（例: text="Hello {name}"）。{ } , ( ) # = などの記号を含む文字列は、'
@@ -419,21 +545,21 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   }
   const tok = valueTokens[0];
 
-  if (NUMERIC_TYPES.has(baseType)) {
+  if (NUMERIC_TYPES.has(baseLower)) {
     if (tok.type !== 'NUMBER') return { value: undefined, error: `整数を指定してください` };
     return { value: Math.trunc(Number(tok.value)), error: null };
   }
-  if (FLOAT_TYPES.has(baseType)) {
+  if (FLOAT_TYPES.has(baseLower)) {
     if (tok.type !== 'NUMBER') return { value: undefined, error: `数値を指定してください` };
     return { value: Number(tok.value), error: null };
   }
-  if (baseType === 'bool') {
+  if (baseLower === 'bool') {
     if (tok.type === 'IDENT' && (tok.value === 'true' || tok.value === 'false')) {
       return { value: tok.value === 'true', error: null };
     }
     return { value: undefined, error: `true または false を指定してください` };
   }
-  if (baseType === 'char') {
+  if (baseLower === 'char') {
     const raw = tok.type === 'STRING' ? stripQuotes(tok.value) : tok.value;
     if (raw.length !== 1) return { value: undefined, error: `1文字だけ指定してください` };
     return { value: raw, error: null };
@@ -450,7 +576,7 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   // { } , ( ) # = のようなDSL予約記号が含まれた瞬間に複数トークンへ分裂して
   // しまい、原因の分かりにくい構文エラーになるため（enum等は元々候補が
   // 短い識別子中心なので、この問題が起きにくくバレワードを許容し続ける）。
-  if (baseType === 'string' && tok.type !== 'STRING') {
+  if (baseLower === 'string' && tok.type !== 'STRING') {
     return {
       value: undefined,
       error: '文字列は "" で囲んでください（例: text="Hello {name}"）',
@@ -496,17 +622,26 @@ function splitByComma(tokens) {
 // 値のシリアライズ（実値 → DSLソーステキスト）。decompile用。
 // ============================================================
 
-function serializeValue(value, fieldType, subFields) {
+function serializeValue(value, fieldType, subFields, classDataSchemas) {
   const baseType = (fieldType || 'string').endsWith('[]') ? fieldType.slice(0, -2) : fieldType;
   const isArrayType = (fieldType || '').endsWith('[]');
-  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields);
+  const effectiveSubFields = getEffectiveSubFields(fieldType, subFields, classDataSchemas);
+  const baseLower = normalizeBuiltinType(baseType);
 
   // vector2/3/4: 内部的には [x, y, ...] という配列で保持されているが、DSL上は
   // { x: .., y: .. } の名前付きオブジェクトリテラルとして出力する
   // ("(0, 0)"のような位置だけの表記や生の"0,0"は分かりにくいため)。
-  if (baseType in VECTOR_SIZES && !isArrayType) {
-    const names = VECTOR_FIELD_NAMES[baseType];
-    const arr = Array.isArray(value) ? value : [];
+  // 型名は "Vector2" のように来ることもあるので小文字に正規化する。
+  if (baseLower in VECTOR_SIZES && !isArrayType) {
+    const names = VECTOR_FIELD_NAMES[baseLower];
+    let arr;
+    if (Array.isArray(value)) {
+      arr = value;
+    } else if (value && typeof value === 'object') {
+      arr = names.map((n) => (value[n] !== undefined && value[n] !== null ? value[n] : 0));
+    } else {
+      arr = [];
+    }
     const parts = names.map((n, idx) => `${n}: ${arr[idx] ?? 0}`);
     return `{ ${parts.join(', ')} }`;
   }
@@ -514,33 +649,41 @@ function serializeValue(value, fieldType, subFields) {
   if (Array.isArray(effectiveSubFields) && effectiveSubFields.length > 0) {
     if (isArrayType) {
       const arr = Array.isArray(value) ? value : [];
-      return `[${arr.map((v) => serializeValue(v, baseType, effectiveSubFields)).join(', ')}]`;
+      return `[${arr.map((v) => serializeValue(v, baseType, effectiveSubFields, classDataSchemas)).join(', ')}]`;
     }
     const obj = value && typeof value === 'object' ? value : {};
-    const parts = effectiveSubFields.map((f) => `${f.name}: ${serializeValue(obj[f.name], f.type, f.subFields)}`);
+    const parts = effectiveSubFields.map((f) => `${f.name}: ${serializeValue(obj[f.name], f.type, f.subFields, classDataSchemas)}`);
     return `{ ${parts.join(', ')} }`;
   }
 
   if (isArrayType) {
     const arr = Array.isArray(value) ? value : [];
-    return `[${arr.map((v) => serializeValue(v, baseType)).join(', ')}]`;
+    return `[${arr.map((v) => serializeValue(v, baseType, undefined, classDataSchemas)).join(', ')}]`;
   }
-  if (NUMERIC_TYPES.has(baseType) || FLOAT_TYPES.has(baseType)) {
+  if (NUMERIC_TYPES.has(baseLower) || FLOAT_TYPES.has(baseLower)) {
     return String(value ?? 0);
   }
-  if (baseType === 'bool') {
+  if (baseLower === 'bool') {
     return value ? 'true' : 'false';
   }
   // dictionary型のみ、キーが動的なため引き続きJSONリテラルとして出力する
-  if (baseType === 'dictionary') {
+  if (baseLower === 'dictionary') {
     return JSON.stringify(value ?? {});
+  }
+  // 保険: 本来subFieldsが解決されるべきclass_data/CustomClassData型で、
+  // 何らかの理由でsubFields情報が渡ってこなかった場合の対策。
+  // このままString(value)へ進むと "[object Object]" という壊れた・往復不能な
+  // テキストになってしまうため、dictionary型と同じくJSONリテラルとして出力し、
+  // 見た目は多少ネイティブなDSL記法と異なっても、値自体は失わず読み書きできるようにする。
+  if (value !== null && typeof value === 'object') {
+    return JSON.stringify(value);
   }
   // string / enum / ID参照 / char 等
   const s = value === undefined || value === null ? '' : String(value);
   // fieldType(baseType)が素の "string"（自由入力のテキストフィールド）の場合は、
   // 中身に関わらず必ず "" で囲む。中に { } , ( ) 等のDSL予約記号が含まれていても
   // 安全に往復できるようにするため（例: talk_text="こんにちは{name}さん"）。
-  if (baseType === 'string') {
+  if (baseLower === 'string') {
     return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   }
   // enum / class_data_id / voice_ref / char など、通常は素のまま（無引用）で
@@ -557,7 +700,7 @@ function serializeValue(value, fieldType, subFields) {
 // roleSchemas: { [roleName]: { fields: [{name, type, options}] } }
 // ============================================================
 
-export function compileDocument(text, roleSchemas, existingRoles = []) {
+export function compileDocument(text, roleSchemas, existingRoles = [], classDataSchemas = {}) {
   const parsedLines = parseDocument(text);
   const diagnostics = [];
   const roles = [];
@@ -609,11 +752,30 @@ export function compileDocument(text, roleSchemas, existingRoles = []) {
       }
       seenFields.add(fieldName);
 
-      const { value, error, warningOnly } = coerceValueTokens(arg.valueTokens, field.type, field.options, node.raw, field.subFields);
+      const { value, error, warningOnly } = coerceValueTokens(arg.valueTokens, field.type, field.options, node.raw, field.subFields, classDataSchemas);
       if (error) {
         diagnostics.push(new DslIssue(error, arg.from, arg.to, node.line, warningOnly ? 'warning' : 'error'));
       }
       data.push({ name: fieldName, type: field.type, value: value === undefined ? null : value });
+    }
+
+    // 鍵マーク(必須)が付いているのに、この行で一度も指定されていないフィールドを
+    // 警告する。鍵マークが外れている(required===false)フィールドは省略してよく、
+    // 省略された場合はバイナリ生成側(scenario.py)がそのフィールドの「デフォルト値」
+    // (無ければ型ごとの初期値)を使う。
+    // ただし、1つもフィールドが書かれていない「丸裸」の行(例: GUIでRoleを
+    // 追加した直後、まだ何も入力していない状態)は、これからGUI側で入力する
+    // つもりの未編集行とみなし、この必須チェックの対象外にする(そうしないと、
+    // 追加しただけのRoleを開いた瞬間に大量のエラーが出てしまう)。
+    if (node.args.length > 0) {
+      for (const field of schema.fields) {
+        if (field.required === false) continue;
+        if (seenFields.has(field.name)) continue;
+        diagnostics.push(new DslIssue(
+          `Role「${roleName}」の必須フィールドが指定されていません: ${field.name}`,
+          node.name.from, node.name.to, node.line, 'error'
+        ));
+      }
     }
 
     const idx = usedCount.get(roleName) || 0;
@@ -636,7 +798,7 @@ export function compileDocument(text, roleSchemas, existingRoles = []) {
 // デコンパイル: roles[]（アプリ内部データ形式） → DSLテキスト
 // ============================================================
 
-export function decompileRoles(roles, roleSchemas) {
+export function decompileRoles(roles, roleSchemas, classDataSchemas = {}) {
   const lines = [];
   for (const role of roles || []) {
     const schema = roleSchemas[role.name];
@@ -644,7 +806,7 @@ export function decompileRoles(roles, roleSchemas) {
     for (const field of role.data || []) {
       const fieldDef = schema?.fields?.find((f) => f.name === field.name);
       const type = fieldDef?.type || field.type || 'string';
-      parts.push(`${field.name}=${serializeValue(field.value, type, fieldDef?.subFields)}`);
+      parts.push(`${field.name}=${serializeValue(field.value, type, fieldDef?.subFields, classDataSchemas)}`);
     }
     lines.push(parts.join(' '));
   }
@@ -655,8 +817,8 @@ export function decompileRoles(roles, roleSchemas) {
 // 診断一覧の取得（Linter用）
 // ============================================================
 
-export function lintDocument(text, roleSchemas) {
-  const { diagnostics } = compileDocument(text, roleSchemas, []);
+export function lintDocument(text, roleSchemas, classDataSchemas = {}) {
+  const { diagnostics } = compileDocument(text, roleSchemas, [], classDataSchemas);
   return diagnostics;
 }
 
@@ -670,7 +832,7 @@ export function lintDocument(text, roleSchemas) {
 // valueTokens: このフィールドの値領域全体のトークン列（先頭が '{' のはず）。
 // regionEnd: この値がまだ閉じられていない('}'が無い)場合に、どこまでを
 //   「入力中の領域」とみなすかの文字位置(行末、または親の領域の終端)。
-function completeObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd) {
+function completeObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd, classDataSchemas) {
   if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACE') {
     // '{' を打つ前の位置。ここでは候補を出さない({の入力を促す形)。
     return [];
@@ -745,19 +907,19 @@ function completeObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd
   if (!subField) return [];
   const subValueTokens = cursorGroup.slice(2);
 
-  const nestedSubFields = getEffectiveSubFields(subField.type, subField.subFields);
+  const nestedSubFields = getEffectiveSubFields(subField.type, subField.subFields, classDataSchemas);
   if (Array.isArray(nestedSubFields) && nestedSubFields.length > 0) {
     if ((subField.type || '').endsWith('[]')) {
-      return completeArrayOfObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end);
+      return completeArrayOfObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end, classDataSchemas);
     }
-    return completeObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end);
+    return completeObjectLiteral(line, subValueTokens, cursorCh, nestedSubFields, cursorEntry.end, classDataSchemas);
   }
   return completeScalarValue(line, subValueTokens, cursorCh, subField);
 }
 
 // class_data型の配列(例: MyItem[])向け: [ {...}, {...} ] の中で、カーソルが
 // どの要素の中にいるかを判定し、その要素の { フィールド名: 値, ... } をcompleteObjectLiteralに委譲する。
-function completeArrayOfObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd) {
+function completeArrayOfObjectLiteral(line, valueTokens, cursorCh, subFields, regionEnd, classDataSchemas) {
   if (valueTokens.length === 0 || valueTokens[0].type !== 'LBRACKET') return [];
 
   let depth = 0;
@@ -792,7 +954,7 @@ function completeArrayOfObjectLiteral(line, valueTokens, cursorCh, subFields, re
 
   const cursorEntry = entries.find((e) => cursorCh >= e.start && cursorCh <= e.end);
   if (!cursorEntry) return []; // 新しい要素の先頭( "{" をまだ打っていない) → 候補なし
-  return completeObjectLiteral(line, cursorEntry.tokens, cursorCh, subFields, cursorEntry.end);
+  return completeObjectLiteral(line, cursorEntry.tokens, cursorCh, subFields, cursorEntry.end, classDataSchemas);
 }
 
 // enum / class_data_id 等、"TypeName.Property" の完全修飾形式で保存するフィールドの
@@ -845,25 +1007,25 @@ function completeScalarValue(line, valueTokens, cursorCh, field) {
 // デフォルト値ごと書き込む(GUI側でRoleを新規追加した際に初期値が自動で入るのと同じ体験を
 // テキストDSL側でも再現する)。デフォルトが設定されていないフィールドは、ユーザーが
 // 自分で入力できるようそのままにしておく(勝手に埋めない)。
-function buildRoleInsertText(roleName, schema) {
+function buildRoleInsertText(roleName, schema, classDataSchemas) {
   if (!schema || !Array.isArray(schema.fields)) return roleName;
   const parts = [];
   for (const field of schema.fields) {
     if (field.default === undefined || field.default === null) continue;
-    const subFields = getEffectiveSubFields(field.type, field.subFields);
-    parts.push(`${field.name}=${serializeValue(field.default, field.type, subFields)}`);
+    const subFields = getEffectiveSubFields(field.type, field.subFields, classDataSchemas);
+    parts.push(`${field.name}=${serializeValue(field.default, field.type, subFields, classDataSchemas)}`);
   }
   if (parts.length === 0) return roleName;
   return `${roleName} ${parts.join(' ')}`;
 }
 
-export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas) {
+export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas, classDataSchemas = {}) {
   const lines = text.split('\n');
   const line = lines[cursorLine] ?? '';
   const tokens = tokenizeLine(line).filter((t) => t.type !== 'COMMENT');
 
   if (tokens.length === 0) {
-    return roleNames.map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n]) }));
+    return roleNames.map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n], classDataSchemas) }));
   }
 
   // 最初のトークン（Role名）を編集中かどうか
@@ -873,7 +1035,7 @@ export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSche
     const prefix = line.slice(first.from, cursorCh);
     return roleNames
       .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()))
-      .map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n]) }));
+      .map((n) => ({ label: n, type: 'role', insertText: buildRoleInsertText(n, roleSchemas[n], classDataSchemas) }));
   }
 
   const roleName = first.value;
@@ -900,12 +1062,12 @@ export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSche
 
     // class_data型・bit・color・bezier・vector2/3/4(いずれもネストした構造体):
     // { フィールド名: 値, ... } の中を予測変換する
-    const fieldSubFields = getEffectiveSubFields(field.type, field.subFields);
+    const fieldSubFields = getEffectiveSubFields(field.type, field.subFields, classDataSchemas);
     if (Array.isArray(fieldSubFields) && fieldSubFields.length > 0) {
       if ((field.type || '').endsWith('[]')) {
-        return completeArrayOfObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd);
+        return completeArrayOfObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd, classDataSchemas);
       }
-      return completeObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd);
+      return completeObjectLiteral(line, valueTokens, cursorCh, fieldSubFields, regionEnd, classDataSchemas);
     }
 
     return completeScalarValue(line, valueTokens, cursorCh, field);

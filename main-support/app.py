@@ -1912,38 +1912,6 @@ def handle_subgroup(eventId, subId, parentId):
             app.logger.error(f"Error saving subgroup for {eventId}/{subId}/{parentId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
-@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<nodeId>/role', methods=['POST'])
-def add_role(eventId, subId, nodeId):
-    try:
-        data = request.get_json()
-        sub_data = scenario.read_sub_event_transition(eventId, subId)
-        nodes = sub_data.get('nodes', [])
-        for node in nodes:
-            if node['id'] == nodeId:
-                node['data']['roles'] = node['data'].get('roles', []) + [{
-                    'id': data['roleId'],
-                    'name': data['name'],
-                    'branchType': data['branchType'],
-                    'data': []
-                }]
-                break
-            if node['data'].get('subgroups', {}).get(nodeId):
-                node['data']['subgroups'][nodeId]['nodes'][0]['data']['roles'] = (
-                    node['data']['subgroups'][nodeId]['nodes'][0]['data'].get('roles', []) + [{
-                        'id': data['roleId'],
-                        'name': data['name'],
-                        'branchType': data['branchType'],
-                        'data': []
-                    }]
-                )
-                break
-        sub_data['nodes'] = nodes
-        scenario.write_sub_event_transition(eventId, subId, sub_data)
-        return jsonify({'message': 'Role added'})
-    except Exception as e:
-        app.logger.error(f"Error adding role: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/scenario-role', methods=['GET', 'POST'])
 def handle_roles():
     roles_path = os.path.join(DATA_DIR, 'scenario_role.json')
@@ -2087,6 +2055,78 @@ def generate_all_event_bin_endpoint():
     except Exception as e:
         logger.error(f"Error generating all event bin: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<path:nodeId>/role', methods=['POST'])
+def add_role(eventId, subId, nodeId):
+    """指定したノード(nodeId)にRoleを1つ追加する。
+    nodeId は "親id/子id/孫id..." のようなパス形式を受け付ける(トップレベルの
+    ノードを指す場合は単に "id" のみ)。
+    以前は各階層でidが1から振り直される(例: トップレベル"1"の最初の子ノードも
+    やはり"1")ことを考慮せず、常にトップレベルのnodesリストと「1階層分だけの
+    subgroups」しか見ていなかったため、
+      - サブグループの子ノードに追加したはずのRoleが、同じidを持つ
+        トップレベルノード(またはたまたま同じidの別ノード)に追加されてしまう
+      - subgroups側のマッチ条件(node['data']['subgroups'].get(nodeId))が
+        「自分自身のidをキーとする自分のsubgroups」を見ていて、実質的に
+        親ノード自身を指す場合としか一致せず、本来の「深い階層の子ノードを探す」
+        という目的を果たせていなかった
+    という不具合があった。ここでは nodeId をパスとして分解し、
+    ensureAllEditNodePath(JS側)と同じ考え方で、1階層ずつ確実に降りて対象ノードを
+    特定する。
+    """
+    try:
+        data = request.get_json()
+        sub_data = scenario.read_sub_event_transition(eventId, subId)
+        nodes = sub_data.get('nodes', [])
+        if not isinstance(nodes, list):
+            nodes = []
+            sub_data['nodes'] = nodes
+
+        path_segments = [seg for seg in nodeId.split('/') if seg != '']
+        if not path_segments:
+            return jsonify({'error': 'Invalid nodeId'}), 400
+
+        target_node = None
+        current_list = nodes
+        for i, seg in enumerate(path_segments):
+            found = next((n for n in current_list if str(n.get('id')) == seg), None)
+            if found is None:
+                return jsonify({'error': f'Node not found: {"/".join(path_segments[:i + 1])}'}), 404
+            target_node = found
+            if i < len(path_segments) - 1:
+                # さらに深い階層へ降りる(サブグループは自分自身のidをキーに、
+                # 自分の中身を持つ、という既存の規約に合わせる)
+                found.setdefault('data', {})
+                found['data'].setdefault('subgroups', {})
+                sg_key = str(found.get('id'))
+                found['data']['subgroups'].setdefault(sg_key, {'nodes': [], 'edges': []})
+                if not isinstance(found['data']['subgroups'][sg_key].get('nodes'), list):
+                    found['data']['subgroups'][sg_key]['nodes'] = []
+                current_list = found['data']['subgroups'][sg_key]['nodes']
+
+        # 新しく追加するRoleのdataは、そのRoleの現在のフィールド定義「全件」を
+        # 埋めて初期化する(scenario.build_default_role_data: 保存済みdefault →
+        # subFields再構築 → 候補一覧の先頭 → 型ごとの汎用初期値、の優先順位)。
+        # 以前は保存済みdefaultを持つフィールドだけを入れていたため、
+        # デフォルト未保存のフィールドが丸ごと欠落し、「データ編集」を一度開いて
+        # 保存し直すまでDSL上そのフィールドが存在しない扱いになる不具合があった。
+        default_field_data = scenario.build_default_role_data(data.get('name'), DATA_DIR)
+
+        target_node.setdefault('data', {})
+        target_node['data']['roles'] = target_node['data'].get('roles', []) + [{
+            'id': data['roleId'],
+            'name': data['name'],
+            'branchType': data['branchType'],
+            'uniqueId': data.get('uniqueId'),
+            'data': default_field_data,
+        }]
+
+        sub_data['nodes'] = nodes
+        scenario.write_sub_event_transition(eventId, subId, sub_data)
+        return jsonify({'message': 'Role added', 'data': default_field_data})
+    except Exception as e:
+        app.logger.error(f"Error adding role: {str(e)}")
+        return jsonify({'error': str(e)}), 500
     
 
 #===============================================================================

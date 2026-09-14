@@ -34,6 +34,11 @@ STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
 CLASS_DATA_ID = 'class_data_id'
+# generate_role_form_schema がclass_data型フィールドをネストして解決する際に使う。
+# 以前はこの定数が無く、ネスト解決の再帰呼び出しが常に SCENARIO_ROLE 配下を
+# 探してしまっていた(存在しないパスなので必ずNoneが返り、結果として
+# subFieldsが空になって『DSL変換時に[object Object]になる』原因になっていた)。
+CLASS_DATA = 'class_data'
 
 SCENARIO_DATA = 'scenario_data'
 SCENARIO_ROLE =  os.path.join(SCENARIO_DATA, 'scenario_role')
@@ -1509,11 +1514,19 @@ def _get_class_data_id_options(table_name, data_dir=None):
         return []
 
 
-def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom_info=None):
+def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom_info=None, base_dir_name=None):
     if depth > max_depth:
         return {"fields": [], "error": "Max depth reached"}
 
-    role_path = os.path.join(data_dir, SCENARIO_ROLE, f"{role_name}", f"{role_name}.json")
+    # base_dir_name: このスキーマ定義がどのディレクトリ配下に置かれているか。
+    # 通常のRole解決(トップレベル呼び出し)は SCENARIO_ROLE 配下。
+    # class_data型フィールドのネスト解決(1647行目付近の再帰呼び出し)では
+    # CLASS_DATA 配下を見る必要がある(以前はここが常に SCENARIO_ROLE 固定
+    # だったため、class_data型のネストしたフィールド定義ファイルが絶対に
+    # 見つからず、sub_schemaが常にNone→subFieldsが空配列になっていた)。
+    base_dir_name = base_dir_name if base_dir_name is not None else SCENARIO_ROLE
+
+    role_path = os.path.join(data_dir, base_dir_name, f"{role_name}", f"{role_name}.json")
     if not os.path.exists(role_path):
         return None
     with open(role_path, 'r', encoding='utf-8') as f:
@@ -1528,9 +1541,12 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
     # schema.id が常に undefined になり、引き継ぎ元(同名・同順の既存Role)が
     # 無いケース(例: DSLでノードごとコピーしてIDだけ変更して保存)で
     # RoleのidがNoneのまま保存されてしまう不具合があった。
+    # (class_data型のネスト解決時はscenario_role_list.jsonに存在しないため、
+    #  下記は該当エントリなし=Noneのままになるが、ネストしたsub_schemaの
+    #  idは使用しないため問題ない)
     role_id = None
     role_list_path = os.path.join(data_dir, SCENARIO_ROLE, 'scenario_role_list.json')
-    if os.path.exists(role_list_path):
+    if base_dir_name == SCENARIO_ROLE and os.path.exists(role_list_path):
         try:
             with open(role_list_path, 'r', encoding='utf-8') as f:
                 role_list = json.load(f)
@@ -1552,6 +1568,11 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
 
     for var in role_data:
         field = {"name": var['name'], "label": var['name'], "arraySize": var.get("arraySize", 0), "description": var.get('description', '')}
+        # 鍵マーク(必須フィールド)。ScenarioRoleDetailGrid.js側で明示的にfalseに
+        # されていない限りTrue(必須)扱いにする(既存のRole定義との後方互換のため)。
+        # フロント(scenarioTransactionDsl.js)はこれを見て、DSL入力でこのフィールドを
+        # 省略してよいか(=lintでエラーにするかどうか)を判断する。
+        field['required'] = var.get('required', True) is not False
         # フィールドに保存済みのデフォルト値があれば渡す(無ければキー自体を付けない)。
         # フロント(BaseRoleInputForm.js)はこれをinitialDataより優先度低く、
         # 型ごとの汎用初期値(getDefaultValue)より優先度高く使う。
@@ -1637,9 +1658,13 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
             field['options'] = [f"{var_type}ID.None"] + [f"{var_type}ID.{o}" for o in raw_options]
 
         # class_data: ネストしたClassData
+        # ※ var_type(例: "CharacterUI")の定義ファイルは scenario_role ではなく
+        #   class_data 配下にあるため、base_dir_name=CLASS_DATA を明示して解決する。
         elif var_type in class_names:
             field['type'] = var_type
-            sub_schema = generate_role_form_schema(var_type, data_dir, depth + 1, max_depth, custom_info)
+            sub_schema = generate_role_form_schema(
+                var_type, data_dir, depth + 1, max_depth, custom_info, base_dir_name=CLASS_DATA
+            )
             field['subFields'] = sub_schema['fields'] if sub_schema else []
 
         else:
@@ -2384,22 +2409,64 @@ def get_initial_value(type_):
     else:  # enum, class_id など
         return 0
 
+
+def get_default_field_value(field):
+    """role-form-schema の1フィールド定義(dict)から、フロント(BaseRoleInputForm.js の
+    getDefaultValue / 733〜747行目の formattedData 計算)と同じ優先順位で初期値を決める。
+    優先順位:
+      ①保存済みdefault (Role定義側の "default")
+      ②subFields定義から再帰構築 (class_data / CustomClassData のネストしたオブジェクト)
+      ③候補一覧の先頭 (enum / class_data_id / custom_class_data_id は
+        "TypeID.None" が常に先頭に入っている規約)
+      ④型ごとの汎用初期値 (get_initial_value)
+    generate_role_form_schema() が返す options/subFields をそのまま使えるので、
+    ここではAPIを叩き直さない。"""
+    if field.get('default') is not None:
+        return field['default']
+    sub_fields = field.get('subFields')
+    if sub_fields:
+        return {f['name']: get_default_field_value(f) for f in sub_fields}
+    options = field.get('options')
+    if isinstance(options, list) and options and isinstance(options[0], str):
+        return options[0]
+    return get_initial_value(field['type'])
+
+
+def build_default_role_data(role_name, data_dir):
+    """新規にRoleをシナリオへ追加する際の data[] を、そのRoleの現在のフィールド定義
+    全件について生成する(get_default_field_valueで1件ずつ埋める)。
+    以前は「保存済みdefaultを持つフィールドだけ」を入れていたため、デフォルト未保存の
+    フィールドがまるごと欠落し、データ編集を一度開いて保存し直すまでDSL上で
+    そのフィールドが存在しない扱いになる不具合があった(add_role側参照)。"""
+    schema = generate_role_form_schema(role_name, data_dir)
+    if not schema or schema.get('error'):
+        return []
+    return [
+        {'name': f['name'], 'type': f['type'], 'value': get_default_field_value(f)}
+        for f in schema.get('fields', [])
+    ]
+
+
 # Fix 関数: 全 event を fix
 def fix_all_events():
-    # 全 role schema マップ（変更なし）
+    # 全 role schema マップ。
+    # 以前はRole定義ファイル(scenario_role/<Role>/<Role>.json)をそのまま読んで
+    # type/defaultだけの簡易マップを作っていたが、それだとenum/class_data_id/
+    # class_data型の初期値がoptions/subFieldsを使わず get_initial_value() の
+    # 単純な0フォールバックになってしまっていた(get_default_field_value と
+    # 挙動が食い違う原因)。generate_role_form_schema() を使えばoptions/subFields
+    # まで含めて解決済みのフィールド一覧が手に入るので、それをそのまま使う
+    # (同名Roleが複数箇所から参照されるため、role_name単位でキャッシュする)。
     role_schemas = {}
     role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
     for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
         role_name = os.path.basename(os.path.dirname(role_file))
-        with open(role_file, 'r', encoding='utf-8') as f:
-            schema_data = json.load(f)
-            if len(schema_data) == 0:
-                continue
-            fields = schema_data.get('data', [])
-            role_schemas[role_name] = {
-                field['name']: {'type': field['type'], 'default': field.get('default')}
-                for field in fields
-            }
+        if role_name in role_schemas:
+            continue
+        schema = generate_role_form_schema(role_name, DATA_DIR)
+        if not schema or schema.get('error'):
+            continue
+        role_schemas[role_name] = {field['name']: field for field in schema.get('fields', [])}
 
     # 全eventを走査(フォルダを直接globせず、scenario_event_list.jsonのid一覧を使う。
     # これによりイベントフォルダの命名規則(新レイアウトの名前ベースフォルダ)に
@@ -2473,13 +2540,12 @@ def fix_roles(roles, role_schemas):
             updated = True
         
         # schema に新しく追加された field を初期値で追加
-        # (保存済みのデフォルト値があればそれを優先し、無ければ型ごとの汎用初期値)
+        # (get_default_field_value: 保存済みdefault → subFields再構築 →
+        #  候補一覧の先頭 → 型ごとの汎用初期値、の優先順位で解決する)
         for field_name, field_meta in schema_fields.items():
             if field_name not in current_data:
                 updated = True
-                default_value = field_meta.get('default')
-                initial_value = default_value if default_value is not None else get_initial_value(field_meta.get('type'))
-                new_data.append({"name": field_name, "value": initial_value})
+                new_data.append({"name": field_name, "value": get_default_field_value(field_meta)})
         
         role['data'] = new_data
     return updated
@@ -2721,7 +2787,12 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
             field_type = schema_field['type']
             array_size = field.get('arraySize', schema_field.get('arraySize', 0))
             options = field.get('options', schema_field.get('options', {}))
-            write_field_value(sub_section, field.get('value', ''), field_type, array_size, options, type_info)
+            # フィールドが丸ごと省略されている場合(鍵マークが付いていない=必須でない
+            # フィールドをDSLで省略したケースなど)は、そのフィールドの「デフォルト値」
+            # (ScenarioRoleDetailGrid/データ入力フォームで設定したもの)を使う。
+            # デフォルト値も無ければ従来通り空文字列(=型ごとの初期値)にフォールバックする。
+            value = field.get('value', schema_field.get('default', ''))
+            write_field_value(sub_section, value, field_type, array_size, options, type_info)
 
     # 4. Data section generation（役割/グループ実データのみ。ランタイムのSeek対象。headerには含めない）
     sub_offsets = {}  # (event_id, sub_id) -> absolute offset

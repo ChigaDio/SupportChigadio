@@ -36,7 +36,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import RoleInputFactory from '../scenario/RoleInputFactory';
 import ScenarioTransactionCodeEditor from '../scenario/ScenarioTransactionCodeEditor';
-import { compileDocument, decompileRoles } from '../scenario/scenarioTransactionDsl';
+import { compileDocument, decompileRoles, renumberDuplicateNodeIds } from '../scenario/scenarioTransactionDsl';
 import { debounce } from 'lodash';
 
 // ============================================================
@@ -229,6 +229,44 @@ const invalidateRoleSchemaCache = (roleName) => {
 };
 
 // ============================================================
+// classDataSchemas（class_data / CustomClassData の型名 → フィールド一覧マップ）
+// ------------------------------------------------------------
+// scenarioTransactionDsl.js は class_data 型フィールドの
+// 「{ フィールド名: 値, ... }」リテラルを読み書きする際、型名だけでは
+// 実フィールド一覧が分からないため、このマップ(BaseRoleInputForm.js側の
+// classDataSchemas/customClassSchemasと同じ形にまとめたもの)を必要とする。
+// GUI側(BaseRoleInputForm.js)と同じエンドポイントから同じ形で取得し、
+// 両者(素のClassData / CustomClassData)を1つの名前空間にマージして返す
+// (DSL側は型名だけで引くため、名前空間を分ける必要が無い)。
+// ============================================================
+const fetchAllClassDataSchemas = async () => {
+  const [classDataListRes, customOptionsRes] = await Promise.all([
+    fetch('/api/class-data'),
+    fetch('/api/custom-class-data-type-options'),
+  ]);
+  const classDataList = classDataListRes.ok ? await classDataListRes.json() : [];
+  const customOptions = customOptionsRes.ok ? await customOptionsRes.json() : {};
+
+  const classDataEntries = await Promise.all(
+    (classDataList || []).map(async (c) => {
+      try {
+        const res = await fetch(`/api/class-data/${encodeURIComponent(c.name)}`);
+        const fields = res.ok ? await res.json() : [];
+        return [c.name, fields || []];
+      } catch (e) {
+        return [c.name, []];
+      }
+    })
+  );
+
+  // custom_class_schemas はすでにフィールド一覧(bit/color/bezierのoptions込み)が
+  // まとまって返ってくるので、そのままベースにし、素のClassDataで上書きマージする。
+  const merged = { ...(customOptions.custom_class_schemas || {}) };
+  classDataEntries.forEach(([name, fields]) => { merged[name] = fields; });
+  return merged;
+};
+
+// ============================================================
 // 接続線SVGコンポーネント（ブロック間の矢印）
 // ============================================================
 const ConnectionArrows = ({ nodes, edges }) => {
@@ -294,7 +332,7 @@ const ConnectionBadge = ({ nodeId, edges, onRemove }) => {
 // ============================================================
 const RoleDataDrawer = ({
   open, onClose, nodeId, roles, formDataState, setFormDataState,
-  roleFormSchemas, eventId, subId, onSave, onDeleteRole, onAddRole, flushStructureSave
+  roleFormSchemas, classDataSchemas, eventId, subId, onSave, onDeleteRole, onAddRole, flushStructureSave
 }) => {
   const [roleForms, setRoleForms] = useState({});
   const [formErrors, setFormErrors] = useState({});
@@ -318,7 +356,7 @@ const RoleDataDrawer = ({
       name: r.name,
       data: formDataState[r.uniqueId] || r.data || [],
     }));
-    setDslText(decompileRoles(rolesForDsl, effectiveSchemas));
+    setDslText(decompileRoles(rolesForDsl, effectiveSchemas, classDataSchemas));
     setDslDiagnostics([]);
     setInputMode('text');
   };
@@ -333,7 +371,7 @@ const RoleDataDrawer = ({
   };
 
   const handleApplyDsl = async () => {
-    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, effectiveSchemas, roles);
+    const { roles: compiledRoles, diagnostics } = compileDocument(dslText, effectiveSchemas, roles, classDataSchemas);
     setDslDiagnostics(diagnostics);
     const hasError = diagnostics.some((d) => d.severity === 'error');
     if (hasError) {
@@ -424,6 +462,9 @@ const RoleDataDrawer = ({
   // → 初期化完了(＝最初のonChange)まではformReady[uid]をfalseにし、保存ボタンを
   // 無効化することで、空データでの保存を防ぐ。
   const [formReady, setFormReady] = useState({});
+  // 一括保存/自動保存(Drawerを閉じる時)を1件ずつ順番に処理している間のフラグ。
+  // 保存中の二重クリックや、保存の途中でDrawerを閉じてしまうのを防ぐ。
+  const [batchSaving, setBatchSaving] = useState(false);
 
   const roleNamesForDsl = useMemo(
     () => Object.keys(effectiveSchemas || {}),
@@ -468,12 +509,25 @@ const RoleDataDrawer = ({
   // Drawer閉じたらキャッシュリセット（次回再ロード用）。
   // 閉じる際、初期化済み(formReady)のRoleについては未保存の変更を自動保存してから閉じる
   // （「モーダルを閉じたら保存されているはず」という期待に応えるため）。
-  const handleClose = () => {
-    roles.forEach((r) => {
-      if (formReady[r.uniqueId] && formDataState[r.uniqueId] !== undefined) {
-        onSave(r.uniqueId, formDataState[r.uniqueId]);
+  const handleClose = async () => {
+    const toSave = roles.filter((r) => formReady[r.uniqueId] && formDataState[r.uniqueId] !== undefined);
+    if (toSave.length > 0) {
+      setBatchSaving(true);
+      try {
+        // 同じSubのファイルへread-modify-writeするサーバー処理が複数Role分
+        // 並行に走ると、後発のリクエストが古いデータを読んで先の保存を
+        // 上書きしてしまうため、必ず1件ずつ順番にawaitする。
+        for (const r of toSave) {
+          // eslint-disable-next-line no-await-in-loop
+          await onSave(r.uniqueId, formDataState[r.uniqueId]);
+        }
+      } catch (e) {
+        // 個別のエラーはonSave(handleSaveRole)側で表示済み。ここでは
+        // Drawerを閉じる処理自体は継続する(閉じられなくなるのを避けるため)。
+      } finally {
+        setBatchSaving(false);
       }
-    });
+    }
     loadedRef.current = {};
     setRoleForms({});
     setFormErrors({});
@@ -489,14 +543,42 @@ const RoleDataDrawer = ({
     onSave(uniqueId, formDataState[uniqueId]);
     showSnack('保存しました');
   };
-  const handleBatchSave = () => {
+  const handleBatchSave = async () => {
     const notReady = roles.some((r) => !formReady[r.uniqueId]);
     if (notReady) {
       showSnack('フォームの読み込み中のRoleがあります。少し待ってから保存してください', 'warning');
       return;
     }
-    roles.forEach(r => onSave(r.uniqueId, formDataState[r.uniqueId]));
-    showSnack('一括保存しました');
+    setBatchSaving(true);
+    try {
+      // 同じSubのファイルへread-modify-writeするサーバー処理
+      // (/api/save-role-data → write_sub_event_transition)が複数Role分
+      // 並行に走ると、後発のリクエストが前の書き込み前の古いデータを読んでしまい、
+      // 先に保存したはずのRoleの変更がサーバー側では消えてしまう(見た目は保存済み
+      // なのにサーバーには一部しか反映されない)不具合があったため、Promise.allではなく
+      // 1件ずつ順番にawaitする。
+      // 保存対象は「今画面に出ている最新の formDataState」をスナップショットして使う。
+      const snapshot = { ...formDataState };
+      for (const r of roles) {
+        // eslint-disable-next-line no-await-in-loop
+        await onSave(r.uniqueId, snapshot[r.uniqueId]);
+      }
+      // 一括保存後も formDataState を保存した内容で確定させておく
+      // (親側の roles/roleDataCache 更新で古い値に戻されないようにする)。
+      setFormDataState((prev) => {
+        const next = { ...prev };
+        for (const r of roles) {
+          if (snapshot[r.uniqueId] !== undefined) next[r.uniqueId] = snapshot[r.uniqueId];
+        }
+        return next;
+      });
+      showSnack('一括保存しました');
+    } catch (e) {
+      // 個別のエラーはonSave(handleSaveRole)側で表示済みなので、ここでは
+      // 「一括保存しました」を出さずに黙って終える。
+    } finally {
+      setBatchSaving(false);
+    }
   };
 
   return (
@@ -529,10 +611,10 @@ const RoleDataDrawer = ({
               </>
             )}
             <Button variant="contained" size="small" color="success"
-              startIcon={<SaveIcon />} onClick={handleBatchSave} disabled={inputMode === 'text'}>
-              一括保存
+              startIcon={<SaveIcon />} onClick={handleBatchSave} disabled={inputMode === 'text' || batchSaving}>
+              {batchSaving ? '保存中...' : '一括保存'}
             </Button>
-            <IconButton onClick={handleClose} sx={{ color: 'white' }}><CloseIcon /></IconButton>
+            <IconButton onClick={handleClose} disabled={batchSaving} sx={{ color: 'white' }}><CloseIcon /></IconButton>
           </Box>
         </Box>
 
@@ -548,6 +630,7 @@ const RoleDataDrawer = ({
               onChange={setDslText}
               roleNames={roleNamesForDsl}
               roleSchemas={effectiveSchemas}
+              classDataSchemas={classDataSchemas}
               height="60vh"
             />
             {dslDiagnostics.length > 0 && (
@@ -594,7 +677,20 @@ const RoleDataDrawer = ({
                     <Typography variant="caption" color="text.secondary">フォームを読み込み中...</Typography>
                   </Box>
                 ) : roleForms[role.uniqueId] ? (
-                  (() => { const F = roleForms[role.uniqueId]; return <F />; })()
+                  (() => {
+                    const F = roleForms[role.uniqueId];
+                    // onChange は常に最新の setFormDataState を使う。
+                    // initialData はフォーム生成時のものを維持し、キー入力のたびに
+                    // BaseRoleInputForm が再初期化されないようにする(propsで上書きしない)。
+                    return (
+                      <F
+                        onChange={(formData) => {
+                          setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
+                          setFormReady(prev => ({ ...prev, [role.uniqueId]: true }));
+                        }}
+                      />
+                    );
+                  })()
                 ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5 }}>
                     <CircularProgress size={16} />
@@ -692,8 +788,8 @@ const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => {
 // BlockCard（スクラッチ/ティラノビルダー風ブロックカード）
 // ============================================================
 const BlockCard = ({
-  node, index, totalNodes, isSub, edges, allNodeIds,
-  globalRoles, roleDataCache, roleFormSchemas, eventId, subId, flushStructureSave, onRefreshRoles,
+  node, nodePath, index, totalNodes, isSub, edges, allNodeIds,
+  globalRoles, roleDataCache, roleFormSchemas, classDataSchemas, eventId, subId, flushStructureSave, onRefreshRoles,
   onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
@@ -721,24 +817,39 @@ const BlockCard = ({
   const headerBg = isSub ? 'secondary.main' : 'primary.main';
 
   // roleData初期化
+  // データ入力Drawerを開いている最中は、ユーザーがGUIで編集中の formDataStateを
+  // roles/roleDataCacheの更新(一括保存の結果など)で上書きしない。
+  // 上書きすると、画面上は新しい値なのに formDataState だけ古い値に戻り、
+  // 「一括保存→テキスト入力へ」でDSLに古い内容が出る原因になる。
   useEffect(() => {
+    if (showDataInput) return;
     const init = {};
     roles.forEach(r => {
-      init[r.uniqueId] = roleDataCache?.[node.id]?.[r.uniqueId] || r.data || [];
+      // node.id は階層ごとに振り直される(親も子も "1" がありうる)ため、
+      // キャッシュキーは nodePath(親/子まで含む)を使う。id だけだと子の編集が親に混ざる。
+      init[r.uniqueId] = roleDataCache?.[nodePath]?.[r.uniqueId] || r.data || [];
     });
     setFormDataState(init);
-  }, [roles, roleDataCache, node.id]);
+  }, [roles, roleDataCache, nodePath, showDataInput]);
 
   const handleAddRole = (role) => {
     const uniqueId = Date.now().toString();
-    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${node.id}/role`, {
+    // nodePath: サブグループ内なら "親id/自分のid"、トップレベルなら自分のidそのまま。
+    // 各階層でidが1から振り直される(例: トップレベル"1"の最初の子も"1")ため、
+    // node.id(自分の階層内でのローカルなid)だけをURLに渡すと、別の階層にある
+    // 同じidのノードと衝突し、意図しないノードにRoleが追加されてしまう不具合があった。
+    fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition/${nodePath}/role`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roleId: role.id, name: role.name, branchType: role.branchType || 'General', uniqueId }),
     })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
-      .then(() => {
-        onAddRole(node.id, { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: [] });
+      .then((result) => {
+        // サーバー側(add_role)が、そのRoleのフィールド定義に設定されている
+        // デフォルト値で初期化したdataを返すので、それをそのまま使う
+        // (以前はここで常に data: [] を渡していたため、GUIでRoleを追加した
+        // 直後にDSLを開いてもデフォルト値が入っていない不具合があった)。
+        onAddRole(node.id, { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: result.data || [] });
         showSnack(`${role.name} を追加`);
       })
       .catch(e => showSnack('追加エラー: ' + e.message, 'error'));
@@ -980,14 +1091,21 @@ const BlockCard = ({
         roles={roles}
         formDataState={formDataState}
         setFormDataState={(updater) => {
-          const newState = typeof updater === 'function' ? updater(formDataState) : updater;
-          setFormDataState(newState);
-          onUpdateFormData(node.id, newState);
+          // 関数updaterを「その時点の最新state」に対して適用する。
+          // 以前は描画時の formDataState クロージャを渡していたため、複数Roleや
+          // 連続入力で後勝ちになり、一括保存時点の formDataStateが古い値のまま
+          // 残る不具合があった。
+          setFormDataState((prev) => {
+            const newState = typeof updater === 'function' ? updater(prev) : updater;
+            onUpdateFormData(nodePath, newState);
+            return newState;
+          });
         }}
         roleFormSchemas={roleFormSchemas}
+        classDataSchemas={classDataSchemas}
         eventId={eventId}
         subId={subId}
-        onSave={(uid, data) => onSaveRole(node.id, uid, data)}
+        onSave={(uid, data) => onSaveRole(nodePath, node.id, uid, data)}
         onDeleteRole={(uid) => onDeleteRole(node.id, uid)}
         onAddRole={(newRole) => onAddRole(node.id, newRole)}
         flushStructureSave={flushStructureSave}
@@ -1053,7 +1171,7 @@ const BlockCard = ({
 // BlockCanvas（ブロック一覧ビュー）
 // ============================================================
 const BlockCanvas = ({
-  nodes, edges, isSub, globalRoles, roleDataCache, roleFormSchemas,
+  nodes, edges, isSub, parentId, globalRoles, roleDataCache, roleFormSchemas, classDataSchemas,
   eventId, subId, flushStructureSave, onRefreshRoles,
   onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
@@ -1080,6 +1198,7 @@ const BlockCanvas = ({
         <BlockCard
           key={node.id}
           node={node}
+          nodePath={isSub ? `${parentId}/${node.id}` : node.id}
           index={index}
           totalNodes={nodes.length}
           isSub={isSub}
@@ -1088,6 +1207,7 @@ const BlockCanvas = ({
           globalRoles={globalRoles}
           roleDataCache={roleDataCache}
           roleFormSchemas={roleFormSchemas}
+          classDataSchemas={classDataSchemas}
           eventId={eventId}
           subId={subId}
           flushStructureSave={flushStructureSave}
@@ -1142,6 +1262,12 @@ function ScenarioEventTransition() {
   );
   const [roleDataCache, setRoleDataCache] = useState({});
   const [roleFormSchemas, setRoleFormSchemas] = useState({});
+  // class_data / CustomClassData の型名 → フィールド一覧マップ。
+  // Role側のスキーマ(roleFormSchemas)とは別に保持し、DSLの
+  // compileDocument/decompileRoles、ScenarioTransactionCodeEditorの
+  // シンタックスハイライト・リンター・補完へそのまま渡す
+  // (class_data型フィールドの { フィールド名: 値, ... } を正しく扱うために必要)。
+  const [classDataSchemas, setClassDataSchemas] = useState({});
 
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
 
@@ -1227,8 +1353,9 @@ function ScenarioEventTransition() {
       // をここでも作っておかないと、DSL側だけノードの情報が欠落してしまう。
       const isSub = i > 0;
       const parentId = i > 0 ? pathSegments[i - 1] : null;
-      node = list.find((n) => String(n.id) === id);
-      if (!node) {
+      const isTargetLevel = i === pathSegments.length - 1;
+      const existingIndex = list.findIndex((n) => String(n.id) === id);
+      if (existingIndex === -1) {
         node = {
           id,
           type: isSub ? 'subGroupNode' : 'customGroup',
@@ -1243,6 +1370,21 @@ function ScenarioEventTransition() {
           },
         };
         list.push(node);
+      } else if (isTargetLevel) {
+        // このセクション自体(見出しが指す本来のノード)の場合のみ、テキスト上の
+        // 出現順に末尾へ積み直す。これにより、DSLエディタ上でセクション(見出し+本文)を
+        // 別の場所へ移動して「適用」するだけで、IDを一切変更しなくても
+        // 保存後の実行順(=nodes配列の並び)がテキストの並びに追従するようになる
+        // (GUIの上下ボタン/ドラッグ&ドロップによる並び替えと同じく、
+        //  並び順は配列の位置で管理されており、idの値自体は識別子でしかない)。
+        node = list[existingIndex];
+        list.splice(existingIndex, 1);
+        list.push(node);
+      } else {
+        // 単に子階層へ降りるための中間の祖先ノード。ここで並び替えてしまうと、
+        // 「子のセクションを処理するたびに親が末尾へ動く」という副作用で
+        // 親兄弟の順序が意図せず壊れるため、位置には一切触れず参照するだけ。
+        node = list[existingIndex];
       }
       if (i < pathSegments.length - 1) {
         // さらに深い階層(サブグループ)へ進む準備。サブグループは自分自身の
@@ -1258,6 +1400,76 @@ function ScenarioEventTransition() {
     return node;
   };
 
+  // ローカルの roleDataCache / tabData 上の最新Roleデータを、サーバーから取った
+  // ツリーへ上書きマージする。GUIの一括保存(save-role-data)はローカルstateと
+  // roleDataCacheを先に更新するが、サーバーの transition GET がまだ古い内容を
+  // 返すことがあるため、DSL一括編集を開いたときに「保存前の古い値」が出ないよう
+  // ローカル側を優先する。
+  const mergeLocalRoleDataIntoTree = (tree, sid) => {
+    if (!tree || !Array.isArray(tree.nodes)) return tree;
+    // 現在開いているSub以外はローカル状態を持たないのでサーバー内容のまま
+    if (String(sid) !== String(subId) || !currentTabData?.nodes) return tree;
+
+    // pathKey ("1", "1/1", ...) → roles[]  親子で同じ node.id でも混線しない
+    const localRolesByPath = {};
+    // サブグループタブ表示中は、タブ内ノードのパス先頭に parentId が付く
+    const pathPrefix = (isSub && parentId) ? [String(parentId)] : [];
+
+    const collectLocal = (nodes, pathIds) => {
+      (nodes || []).forEach((n) => {
+        if (!n) return;
+        const path = [...pathIds, String(n.id)];
+        const pathKey = path.join('/');
+        localRolesByPath[pathKey] = (n.data && n.data.roles) ? n.data.roles.map((r) => ({ ...r })) : [];
+        // roleDataCache も pathKey で載っていれば上書き
+        const cached = roleDataCache?.[pathKey];
+        if (cached && localRolesByPath[pathKey]) {
+          localRolesByPath[pathKey] = localRolesByPath[pathKey].map((r) => (
+            cached[r.uniqueId] !== undefined ? { ...r, data: cached[r.uniqueId] } : r
+          ));
+          // キャッシュにだけある uniqueId は追加しない（roles 配列の構成はノード側が正）
+        }
+        const sgs = (n.data && n.data.subgroups) || {};
+        Object.keys(sgs).forEach((k) => {
+          collectLocal(sgs[k] && sgs[k].nodes, path);
+        });
+      });
+    };
+    collectLocal(currentTabData.nodes, pathPrefix);
+
+    const applyLocal = (nodes, pathIds) => {
+      (nodes || []).forEach((node) => {
+        if (!node) return;
+        const path = [...pathIds, String(node.id)];
+        const pathKey = path.join('/');
+        const localRoles = localRolesByPath[pathKey];
+        if (localRoles) {
+          node.data = node.data || {};
+          // ローカルの roles を優先（中身の data を path 一致で転写）
+          const byUid = {};
+          localRoles.forEach((r) => { byUid[r.uniqueId] = r; });
+          const serverRoles = node.data.roles || [];
+          node.data.roles = serverRoles.map((r) => {
+            const lr = byUid[r.uniqueId];
+            return lr && lr.data !== undefined ? { ...r, data: lr.data } : r;
+          });
+          // ローカルにだけある Role は追加
+          localRoles.forEach((lr) => {
+            if (!node.data.roles.some((r) => r.uniqueId === lr.uniqueId)) {
+              node.data.roles.push({ ...lr });
+            }
+          });
+        }
+        const sgs = (node.data && node.data.subgroups) || {};
+        Object.keys(sgs).forEach((k) => {
+          applyLocal(sgs[k] && sgs[k].nodes, path);
+        });
+      });
+    };
+    applyLocal(tree.nodes, []);
+    return tree;
+  };
+
   // 指定した1つのSubのツリーから、Lua形式編集用のテキスト行を組み立てる。
   // 「全体編集(全Sub)」「Sub編集(現在のSubのみ)」の両方から共通で使う。
   // targetsOut には "subId::path" -> ノード の対応表を書き込む。
@@ -1271,7 +1483,7 @@ function ScenarioEventTransition() {
       const labelSuffix = t.label ? ` (${t.label})` : '';
       lines.push(`# ==== SUB:${sid} NODE:${pathKey}${labelSuffix} ====`);
       const roles = (t.node.data && t.node.data.roles) || [];
-      const bodyText = decompileRoles(roles, roleFormSchemas);
+      const bodyText = decompileRoles(roles, roleFormSchemas, classDataSchemas);
       if (bodyText) lines.push(bodyText);
       lines.push('');
     });
@@ -1347,7 +1559,7 @@ function ScenarioEventTransition() {
       }
       const existingRoles = (targetNode.data && targetNode.data.roles) || [];
       const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
-        section.bodyLines.join('\n'), roleFormSchemas, existingRoles
+        section.bodyLines.join('\n'), roleFormSchemas, existingRoles, classDataSchemas
       );
       sectionDiagnostics
         .filter((d) => d.severity === 'error')
@@ -1383,7 +1595,9 @@ function ScenarioEventTransition() {
 
       for (const sid of subIds) {
         const res = await fetch(`/api/scenario-event/${eventId}/sub/${sid}/transition`);
-        const tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+        let tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+        // 現在開いているSubはGUI一括保存のローカル最新を優先
+        tree = mergeLocalRoleDataIntoTree(tree, sid);
         allEditSubTreesRef.current[sid] = tree;
         lines.push(...buildEditLinesForSub(sid, tree, allEditTargetsRef.current));
       }
@@ -1445,6 +1659,21 @@ function ScenarioEventTransition() {
   // Sub編集(現在開いているSubのみをLua形式で編集)
   // 「全体編集」と同じ仕組みを、対象Subを現在のsubId 1件だけに限定して使う。
   // ------------------------------------------------------------
+
+  // コピー&ペーストでID(NODE:の見出し)が重複してしまった場合に、重複した側だけ
+  // 未使用の新しいIDへ自動で振り直す。実行順は見出しがテキスト上のどこにあるかで
+  // 決まる(handleApplySubEdit適用時の並び替え)ため、ここではID自体の重複解消だけ行う。
+  // 対象は「現在開いているSubの中だけ」(全体編集側には付けていない)。
+  const handleRenumberSubEditIds = () => {
+    const { text: newText, renamed } = renumberDuplicateNodeIds(subEditText);
+    if (renamed.length === 0) {
+      showSnack('重複しているIDは見つかりませんでした');
+      return;
+    }
+    setSubEditText(newText);
+    showSnack(`ID重複を解消しました: ${renamed.map(r => `${r.oldPath} → ${r.newPath}`).join(', ')}`);
+  };
+
   const handleOpenSubEditDialog = async () => {
     if (!eventId || !subId) return;
     setShowSubEditDialog(true);
@@ -1455,7 +1684,9 @@ function ScenarioEventTransition() {
       subEditTargetsRef.current = {};
 
       const res = await fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`);
-      const tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+      let tree = res.ok ? await res.json() : { nodes: [], edges: [] };
+      // GUI一括保存直後はサーバーが古いことがあるので、ローカルの最新Roleデータを優先マージ
+      tree = mergeLocalRoleDataIntoTree(tree, subId);
       subEditSubTreesRef.current[subId] = tree;
 
       const lines = buildEditLinesForSub(subId, tree, subEditTargetsRef.current);
@@ -1611,6 +1842,16 @@ function ScenarioEventTransition() {
       .catch(err => console.error('Role取得エラー:', err));
   }, []);
 
+  // ── classDataSchemas 初回取得 ──
+  // class_data / CustomClassData のフィールド定義一覧。Role本体とは独立して
+  // 変わりうるため、Role一覧とは別に一度だけ取得しておく
+  // (以後の最新化は「Roleスキーマ再取得」ボタン・各ダイアログを開くタイミングで行う)。
+  useEffect(() => {
+    fetchAllClassDataSchemas()
+      .then(setClassDataSchemas)
+      .catch(err => console.error('ClassDataスキーマ取得エラー:', err));
+  }, []);
+
   // Role一覧・全Roleスキーマを強制的に再取得する共通関数。
   // 「Roleスキーマ再取得」ボタンに加え、Role追加ダイアログ／データ入力ダイアログを
   // 開くタイミングでも自動的に呼び、新規作成したばかりのRole種別が一覧に出ない、
@@ -1632,6 +1873,15 @@ function ScenarioEventTransition() {
       setRoleFormSchemas(fresh);
     } catch (e) {
       console.error('Role一覧再取得エラー:', e);
+    }
+    // class_data / CustomClassData のフィールド定義も、Roleスキーマと同じ
+    // タイミングで併せて最新化する(片方だけ古いままだと、DSLの { .. } 補完・
+    // リント結果とGUIフォームの内容が食い違ってしまうため)。
+    try {
+      const freshClassData = await fetchAllClassDataSchemas();
+      setClassDataSchemas(freshClassData);
+    } catch (e) {
+      console.error('ClassDataスキーマ再取得エラー:', e);
     }
   }, []);
 
@@ -2002,18 +2252,42 @@ function ScenarioEventTransition() {
     scheduleSave();
   };
 
-  const handleSaveRole = (nodeId, uniqueId, formData) => {
-    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return; }
-    fetch(`/api/save-role-data/${eventId}/${subId}/${nodeId}/${uniqueId}`, {
+  const handleSaveRole = (nodePathOrId, nodeIdMaybe, uniqueIdMaybe, formDataMaybe) => {
+    // 後方互換: (nodeId, uniqueId, formData) でも (nodePath, nodeId, uniqueId, formData) でも呼べる
+    let nodePath, nodeId, uniqueId, formData;
+    if (formDataMaybe !== undefined) {
+      nodePath = nodePathOrId;
+      nodeId = nodeIdMaybe;
+      uniqueId = uniqueIdMaybe;
+      formData = formDataMaybe;
+    } else {
+      nodeId = nodePathOrId;
+      nodePath = String(nodeId);
+      uniqueId = nodeIdMaybe;
+      formData = uniqueIdMaybe;
+    }
+    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return Promise.resolve(); }
+    // このPromiseを返すようにしているのは、一括保存(handleBatchSave)や
+    // Drawerを閉じる際の自動保存(RoleDataDrawer.handleClose)が、同じSubの
+    // JSONファイルに対してread-modify-writeするサーバー側処理
+    // (/api/save-role-data → write_sub_event_transition)を、複数Role分
+    // "同時に(並行して)"叩いてしまわないようにするため。並行に投げると、
+    // 後から到着したリクエストが前の書き込み結果を読む前の古いデータを
+    // 読み込んでしまい、先に保存したはずのRoleの変更が上書きで消える
+    // (＝画面上は保存済みに見えるのにサーバー側には反映されない)不具合があった。
+    // 呼び出し側でこのPromiseをawaitし、1件ずつ順番に保存することで解消する。
+    return fetch(`/api/save-role-data/${eventId}/${subId}/${nodeId}/${uniqueId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ formData }),
     })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(() => {
+        // キャッシュキーは nodePath (例: "1" と "1/1" を区別)。node.id だけだと
+        // 親ノードとサブグループ内の同IDノードでデータが混線する。
         setRoleDataCache(prev => ({
           ...prev,
-          [nodeId]: { ...(prev[nodeId] || {}), [uniqueId]: formData }
+          [nodePath]: { ...(prev[nodePath] || {}), [uniqueId]: formData }
         }));
         updateTabData(prev => ({
           ...prev,
@@ -2027,15 +2301,19 @@ function ScenarioEventTransition() {
           }
         }));
       })
-      .catch(e => showSnack('保存エラー: ' + e.message, 'error'));
+      .catch(e => {
+        showSnack('保存エラー: ' + e.message, 'error');
+        throw e; // 呼び出し側(一括保存など)が失敗を検知して後続を止められるようにする
+      });
   };
 
-  const handleUpdateFormData = (nodeId, newState) => {
+  const handleUpdateFormData = (nodePath, newState) => {
     // フォームデータをキャッシュに反映（保存はhandleSaveRoleで行う）
+    // キーは nodePath (階層込み)。node.id だけだと親子で同IDのとき混線する。
     setRoleDataCache(prev => {
-      const nodeCache = prev[nodeId] || {};
+      const nodeCache = prev[nodePath] || {};
       const updated = { ...nodeCache, ...newState };
-      return { ...prev, [nodeId]: updated };
+      return { ...prev, [nodePath]: updated };
     });
   };
 
@@ -2293,9 +2571,11 @@ function ScenarioEventTransition() {
           nodes={currentTabData.nodes}
           edges={currentTabData.edges}
           isSub={isSub}
+          parentId={parentId}
           globalRoles={globalRoles}
           roleDataCache={roleDataCache}
           roleFormSchemas={roleFormSchemas}
+          classDataSchemas={classDataSchemas}
           eventId={eventId}
           subId={subId}
           flushStructureSave={saveCurrentTab}
@@ -2362,6 +2642,7 @@ function ScenarioEventTransition() {
                 onChange={setAllEditText}
                 roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
+                classDataSchemas={classDataSchemas}
                 height="60vh"
               />
               {allEditDiagnostics.length > 0 && (
@@ -2403,6 +2684,8 @@ function ScenarioEventTransition() {
             編集中は Ctrl(⌘)+Alt+G で新しいグループの見出しを、Ctrl(⌘)+Alt+H でカーソル位置のグループの
             中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます。
             Vector2/3/4・color・bit・bezierも class_data と同じ「{`{ フィールド名: 値, ... }`}」の書き方で入力できます。
+            セクションをコピー&amp;貼り付けして並び替えたい場合、実行順はそのまま貼り付けた位置になります。
+            IDが重複してしまったときは「重複IDを振り直す」ボタンで自動的にID重複だけを解消できます。
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>
@@ -2433,6 +2716,7 @@ function ScenarioEventTransition() {
                 onChange={setSubEditText}
                 roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
+                classDataSchemas={classDataSchemas}
                 height="60vh"
               />
               {subEditDiagnostics.length > 0 && (
@@ -2450,6 +2734,13 @@ function ScenarioEventTransition() {
         <DialogActions>
           <Button onClick={handleCloseSubEditDialog} disabled={subEditApplying}>閉じる</Button>
           <Button onClick={handleOpenSubEditDialog} disabled={subEditLoading || subEditApplying}>再取得</Button>
+          <Tooltip title="コピー&ペーストなどでNODE:のIDが重複してしまった箇所を検出し、重複した側だけ未使用の新しいIDへ自動で振り直します(実行順はテキスト上の位置のままでOKです)">
+            <span>
+              <Button onClick={handleRenumberSubEditIds} disabled={subEditLoading || subEditApplying}>
+                重複IDを振り直す
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             variant="contained"
             onClick={handleApplySubEdit}

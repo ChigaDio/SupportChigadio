@@ -3,10 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
-  Select, MenuItem, FormControl, InputLabel, Checkbox, FormControlLabel
+  Select, MenuItem, FormControl, InputLabel, Checkbox, FormControlLabel, IconButton, Tooltip
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 
 // bit の初期オプション
 function defaultOptionsForType(type) {
@@ -195,6 +199,9 @@ function ScenarioRoleDetailGrid() {
   const [newDescription, setNewDescription] = useState('');
   const [newArraySize, setNewArraySize] = useState(0);
   const [newOptions, setNewOptions] = useState({});
+  // 鍵マーク(必須フィールド)。既定はtrue(=必須)。falseにすると、DSL(Lua風テキスト)
+  // 入力でこのフィールドを省略してもエラーにならず、デフォルト値が使われる。
+  const [newRequired, setNewRequired] = useState(true);
 
   // bit の sizeMode="enum"/"classDataId"/"customClassDataId" 参照先候補
   const [enumNames, setEnumNames] = useState([]);
@@ -214,7 +221,7 @@ function ScenarioRoleDetailGrid() {
     fetch(`/api/scenario-role/${name}`)
       .then(response => response.json())
       .then(fetchedData => {
-        setData(fetchedData.data.map((item, index) => ({ ...item, id: item.id || index + 1 })));
+        setData(fetchedData.data.map((item, index) => ({ ...item, id: item.id || index + 1, required: item.required !== false })));
         setBranchType(fetchedData.branchType || 'General');
         setLoading(false);
       })
@@ -267,6 +274,7 @@ function ScenarioRoleDetailGrid() {
       description: newDescription,
       arraySize: parseInt(newArraySize, 10) || 0,
       options: ['bit', 'bezier', 'dictionary'].includes(newType) ? newOptions : undefined,
+      required: newRequired,
     };
     setData([...data, newRow]);
     setOpen(false);
@@ -275,6 +283,7 @@ function ScenarioRoleDetailGrid() {
     setNewDescription('');
     setNewArraySize(0);
     setNewOptions({});
+    setNewRequired(true);
   };
 
   // 既存行のoptionsを保存(bit/bezier)
@@ -289,12 +298,31 @@ function ScenarioRoleDetailGrid() {
   };
 
   // Reorder rows
-  const handleRowOrderChange = (params) => {
-    const { oldIndex, targetIndex } = params;
+  // 注: DataGridの rowReordering / onRowOrderChange はMUI X の Pro版限定機能で、
+  // Community版(@mui/x-data-grid)ではドラッグしても何も起きない(propsが無視される)。
+  // そのため上下ボタン(moveRow)での並び替えを別途用意している。この並び順がそのまま
+  // {role_name}.json の data 配列順として保存され、Transaction側のGUI入力フォーム・
+  // DSLの補完候補もこの順序に従う。
+
+  const moveRow = (id, direction) => {
+    const index = data.findIndex((r) => r.id === id);
+    const targetIndex = index + direction;
+    if (index === -1 || targetIndex < 0 || targetIndex >= data.length) return;
     const newData = [...data];
-    const [movedRow] = newData.splice(oldIndex, 1);
+    const [movedRow] = newData.splice(index, 1);
     newData.splice(targetIndex, 0, movedRow);
     setData(newData);
+  };
+
+  // 鍵マーク(必須フィールド)の切り替え。falseにすると、DSL入力時にこのフィールドを
+  // 省略してもエラーにならず、デフォルト値(このgridで設定した「デフォルト値」、
+  // 無ければ型ごとの初期値)がそのまま使われる。
+  const toggleRequired = (id) => {
+    setData(data.map((item) => {
+      if (item.id !== id) return item;
+      const isCurrentlyRequired = item.required !== false; // undefined/true => 必須扱い
+      return { ...item, required: !isCurrentlyRequired };
+    }));
   };
 
   // Save data
@@ -335,6 +363,38 @@ function ScenarioRoleDetailGrid() {
   };
 
   const columns = [
+    {
+      field: 'order',
+      headerName: '順序',
+      width: 90,
+      sortable: false,
+      renderCell: (params) => {
+        const index = data.findIndex((r) => r.id === params.row.id);
+        return (
+          <Box sx={{ display: 'flex' }}>
+            <IconButton size="small" disabled={index === 0} onClick={() => moveRow(params.row.id, -1)}>
+              <ArrowUpwardIcon fontSize="small" />
+            </IconButton>
+            <IconButton size="small" disabled={index === data.length - 1} onClick={() => moveRow(params.row.id, 1)}>
+              <ArrowDownwardIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        );
+      }
+    },
+    {
+      field: 'required',
+      headerName: '必須',
+      width: 70,
+      sortable: false,
+      renderCell: (params) => (
+        <Tooltip title={params.row.required !== false ? '必須（DSLで省略不可）。クリックで任意に切り替え' : '任意（DSLで省略可・省略時はデフォルト値）。クリックで必須に切り替え'}>
+          <IconButton size="small" onClick={() => toggleRequired(params.row.id)}>
+            {params.row.required !== false ? <LockIcon fontSize="small" color="warning" /> : <LockOpenIcon fontSize="small" color="disabled" />}
+          </IconButton>
+        </Tooltip>
+      )
+    },
     {
       field: 'type',
       headerName: 'タイプ',
@@ -415,8 +475,6 @@ function ScenarioRoleDetailGrid() {
             columns={columns}
             pageSizeOptions={[5]}
             getRowId={(row) => row.id}
-            rowReordering
-            onRowOrderChange={handleRowOrderChange}
           />
         </div>
       )}
@@ -436,6 +494,10 @@ function ScenarioRoleDetailGrid() {
           <TextField label="名前" margin="dense" fullWidth value={newName} onChange={(e) => setNewName(e.target.value)} />
           <TextField label="説明" margin="dense" fullWidth value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
           <TextField label="配列サイズ" margin="dense" fullWidth type="number" value={newArraySize} onChange={(e) => setNewArraySize(e.target.value)} />
+          <FormControlLabel
+            control={<Checkbox checked={newRequired} onChange={(e) => setNewRequired(e.target.checked)} />}
+            label="必須（鍵マーク・DSLで省略不可にする）"
+          />
           {newType === 'bit' && (
             <BitOptionsEditor
               options={newOptions} onChange={setNewOptions}

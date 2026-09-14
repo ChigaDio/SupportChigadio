@@ -3877,6 +3877,7 @@ def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     cs_content += f"    public enum {enum_name}ID\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, id in enumerate(sprites, start=1):
+        id = id.replace(" ","_")
         cs_content += f"        {id} = {i},\n"
     cs_content += f"        Max = {len(sprites) + 1}\n"
     cs_content += "    }\n}"

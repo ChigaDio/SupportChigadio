@@ -135,7 +135,7 @@ namespace GameCore.SaveSystem
         with open(os.path.join(SAVE_DATA_DIR, "SaveDataVersion.cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
-    if not os.path.exists(os.path.join(SAVE_DATA_DIR, "SaveManagerCore .cs")):
+    if not os.path.exists(os.path.join(SAVE_DATA_DIR, "SaveManagerCore.cs")):
         code_str = """
         using Cysharp.Threading.Tasks;
 using System;
@@ -163,7 +163,7 @@ namespace GameCore.SaveSystem
             base.AwakeSingleton();
             DontDestroyOnLoad(gameObject);
             saveManager = new SaveManager(gameObject);
-            LoadAllDataAsync().Forget();
+            //LoadAllDataAsync().Forget();
         }
 
         public async UniTask LoadAllDataAsync(Action onComplete = null)
@@ -203,11 +203,12 @@ namespace GameCore.SaveSystem
     }
 }
         """
-        with open(os.path.join(SAVE_DATA_DIR, "SaveManagerCore .cs"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(SAVE_DATA_DIR, "SaveManagerCore cs"), 'w', encoding='utf-8') as f:
             f.write(code_str)
 
     if not os.path.exists(os.path.join(SAVE_DATA_DIR, "SaveManager.cs")):
         code_str = """
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -231,13 +232,18 @@ namespace GameCore.SaveSystem
         public bool IsSaving { get; private set; }
         public bool IsLoading { get; private set; }
 
+        public bool IsPlayerSaving { get; private set; }
+        public bool IsSystemSaving { get; private set; }
+        public bool IsPlayerLoading { get; private set; }
+        public bool IsSystemLoading { get; private set; }
+
         public SaveManager(GameObject linkedGameObject)
         {
             string saveDir;
-#if UNITY_EDITOR
+#if UNITY_EDITOR || DEBUG
             saveDir = Path.Combine(Application.dataPath, "SaveData");
 #else
-            saveDir = Path.Combine(Application.dataPath, "SaveData");
+            saveDir = Path.Combine(Application.persistentDataPath, "SaveData");
 #endif
             Directory.CreateDirectory(saveDir);
 
@@ -279,6 +285,7 @@ namespace GameCore.SaveSystem
         {
             try
             {
+                if(IsLoading) return;
                 IsLoading = true;
                 await UniTask.WhenAll(
                     LoadSystemDataAsync(),
@@ -288,16 +295,15 @@ namespace GameCore.SaveSystem
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("LoadAllDataAsyncがキャンセルされました。");
+                Debug.Log("LoadAllDataAsync���L�����Z������܂����B");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"LoadAllDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"LoadAllDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
                 IsLoading = false;
-                onComplete?.Invoke();
             }
         }
 
@@ -305,6 +311,7 @@ namespace GameCore.SaveSystem
         {
             try
             {
+                if(IsSaving) return;
                 IsSaving = true;
                 await UniTask.WhenAll(
                     SaveSystemDataAsync(),
@@ -314,16 +321,15 @@ namespace GameCore.SaveSystem
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("SaveAllDataAsyncがキャンセルされました。");
+                Debug.Log("SaveAllDataAsync���L�����Z������܂����B");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"SaveAllDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"SaveAllDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
                 IsSaving = false;
-                onComplete?.Invoke();
             }
         }
 
@@ -331,7 +337,8 @@ namespace GameCore.SaveSystem
         {
             try
             {
-                IsLoading = true;
+                if(IsSystemLoading) return;
+                IsSystemLoading = true;
                 await UniTask.RunOnThreadPool(() =>
                 {
                     if (File.Exists(systemDataPath))
@@ -340,45 +347,44 @@ namespace GameCore.SaveSystem
                         byte[] decryptedData = EncryptDecrypt(encryptedData);
                         SystemSettings = DeserializeFromBinary<SystemData>(decryptedData) ?? new SystemData();
                         ValidateAndUpgradeSystemDataVersion();
-                        Debug.Log($"システムデータを読み込みました: {systemDataPath}");
+                        Debug.Log($"�V�X�e���f�[�^��ǂݍ��݂܂���: {systemDataPath}");
                     }
                     else
                     {
                         SystemSettings = new SystemData();
                         SaveSystemDataAsync().Forget();
-                        Debug.Log($"システムデータファイルが見つかりませんでした。デフォルトを使用: {systemDataPath}");
+                        Debug.Log($"�V�X�e���f�[�^�t�@�C����������܂���ł����B�f�t�H���g���g�p: {systemDataPath}");
                     }
                 }, cancellationToken: cts.Token);
                 onComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("LoadSystemDataAsyncがキャンセルされました。");
+                Debug.Log("LoadSystemDataAsync���L�����Z������܂����B");
             }
             catch (SaveDataDowngradeException)
             {
-                // ダウングレード(セーブデータの方がプログラムより新しい)はDebug.Errorで
-                // 揉み消さず、呼び出し元がcatchして対処(エラー画面表示等)できるよう再送出する。
-                IsLoading = false;
+                // �_�E���O���[�h(�Z�[�u�f�[�^�̕����v���O�������V����)��Debug.Error��
+                // ���ݏ������A�Ăяo������catch���đΏ�(�G���[��ʕ\����)�ł���悤�đ��o����B
+                IsSystemLoading = false;
                 throw;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"LoadSystemDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"LoadSystemDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
-                IsLoading = false;
-                onComplete?.Invoke();
+                IsSystemLoading = false;
             }
         }
 
         /// <summary>
-        /// ロードしたSystemSettings.SavedVersion*と、現在のプログラムが持つ
-        /// SystemData.VersionMain/Sub/Details(const)を比較する。
-        /// セーブデータの方が新しければ SaveDataDowngradeException を投げる(ダウングレード禁止)。
-        /// プログラムの方が新しければ、SystemSettings側のSavedVersion*をプログラムの
-        /// バージョンで上書きする(次回保存時にアップグレードされたバージョンが書き戻る)。
+        /// ���[�h����SystemSettings.SavedVersion*�ƁA���݂̃v���O����������
+        /// SystemData.VersionMain/Sub/Details(const)���r����B
+        /// �Z�[�u�f�[�^�̕����V������� SaveDataDowngradeException �𓊂���(�_�E���O���[�h�֎~)�B
+        /// �v���O�����̕����V������΁ASystemSettings����SavedVersion*���v���O������
+        /// �o�[�W�����ŏ㏑������(����ۑ����ɃA�b�v�O���[�h���ꂽ�o�[�W�����������߂�)�B
         /// </summary>
         private void ValidateAndUpgradeSystemDataVersion()
         {
@@ -394,28 +400,28 @@ namespace GameCore.SaveSystem
         {
             try
             {
-                IsSaving = true;
+                if(IsSystemSaving) return;
+                IsSystemSaving = true;
                 await UniTask.RunOnThreadPool(() =>
                 {
                     byte[] data = SerializeToBinary(SystemSettings);
                     byte[] encryptedData = EncryptDecrypt(data);
                     File.WriteAllBytes(systemDataPath, encryptedData);
-                    Debug.Log($"システムデータを保存しました: {systemDataPath}");
+                    Debug.Log($"�V�X�e���f�[�^��ۑ����܂���: {systemDataPath}");
                 }, cancellationToken: cts.Token);
                 onComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("SaveSystemDataAsyncがキャンセルされました。");
+                Debug.Log("SaveSystemDataAsync���L�����Z������܂����B");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"SaveSystemDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"SaveSystemDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
-                IsSaving = false;
-                onComplete?.Invoke();
+                IsSystemSaving = false;
             }
         }
 
@@ -423,8 +429,9 @@ namespace GameCore.SaveSystem
         {
             try
             {
-                IsLoading = true;
-                await UniTask.RunOnThreadPool(() =>
+                if(IsPlayerLoading) return;
+                IsPlayerLoading = true;
+                await UniTask.RunOnThreadPool(async () =>
                 {
                     if (File.Exists(playerDataPath))
                     {
@@ -432,45 +439,44 @@ namespace GameCore.SaveSystem
                         byte[] decryptedData = EncryptDecrypt(encryptedData);
                         PlayerProgress = DeserializeFromBinary<PlayerData>(decryptedData) ?? new PlayerData();
                         ValidateAndUpgradePlayerDataVersion();
-                        Debug.Log($"プレイヤーデータを読み込みました: {playerDataPath}");
+                        Debug.Log($"�v���C���[�f�[�^��ǂݍ��݂܂���: {playerDataPath}");
                     }
                     else
                     {
                         PlayerProgress = new PlayerData();
-                        SavePlayerDataAsync().Forget();
-                        Debug.Log($"プレイヤーデータファイルが見つかりませんでした。新規作成: {playerDataPath}");
+                        await SavePlayerDataAsync();
+                        Debug.Log($"�v���C���[�f�[�^�t�@�C����������܂���ł����B�V�K�쐬: {playerDataPath}");
                     }
                 }, cancellationToken: cts.Token);
                 onComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("LoadPlayerDataAsyncがキャンセルされました。");
+                Debug.Log("LoadPlayerDataAsync���L�����Z������܂����B");
             }
             catch (SaveDataDowngradeException)
             {
-                // ダウングレード(セーブデータの方がプログラムより新しい)はDebug.Errorで
-                // 揉み消さず、呼び出し元がcatchして対処(エラー画面表示等)できるよう再送出する。
-                IsLoading = false;
+                // �_�E���O���[�h(�Z�[�u�f�[�^�̕����v���O�������V����)��Debug.Error��
+                // ���ݏ������A�Ăяo������catch���đΏ�(�G���[��ʕ\����)�ł���悤�đ��o����B
+                IsPlayerLoading = false;
                 throw;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"LoadPlayerDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"LoadPlayerDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
-                IsLoading = false;
-                onComplete?.Invoke();
+                IsPlayerLoading = false;
             }
         }
 
         /// <summary>
-        /// ロードしたPlayerProgress.SavedVersion*と、現在のプログラムが持つ
-        /// PlayerData.VersionMain/Sub/Details(const)を比較する。
-        /// セーブデータの方が新しければ SaveDataDowngradeException を投げる(ダウングレード禁止)。
-        /// プログラムの方が新しければ、PlayerProgress側のSavedVersion*をプログラムの
-        /// バージョンで上書きする(次回保存時にアップグレードされたバージョンが書き戻る)。
+        /// ���[�h����PlayerProgress.SavedVersion*�ƁA���݂̃v���O����������
+        /// PlayerData.VersionMain/Sub/Details(const)���r����B
+        /// �Z�[�u�f�[�^�̕����V������� SaveDataDowngradeException �𓊂���(�_�E���O���[�h�֎~)�B
+        /// �v���O�����̕����V������΁APlayerProgress����SavedVersion*���v���O������
+        /// �o�[�W�����ŏ㏑������(����ۑ����ɃA�b�v�O���[�h���ꂽ�o�[�W�����������߂�)�B
         /// </summary>
         private void ValidateAndUpgradePlayerDataVersion()
         {
@@ -486,28 +492,28 @@ namespace GameCore.SaveSystem
         {
             try
             {
-                IsSaving = true;
+                if(IsPlayerSaving) return;
+                IsPlayerSaving = true;
                 await UniTask.RunOnThreadPool(() =>
                 {
                     byte[] data = SerializeToBinary(PlayerProgress);
                     byte[] encryptedData = EncryptDecrypt(data);
                     File.WriteAllBytes(playerDataPath, encryptedData);
-                    Debug.Log($"プレイヤーデータを保存しました: {playerDataPath}");
+                    Debug.Log($"�v���C���[�f�[�^��ۑ����܂���: {playerDataPath}");
                 }, cancellationToken: cts.Token);
                 onComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                Debug.Log("SavePlayerDataAsyncがキャンセルされました。");
+                Debug.Log("SavePlayerDataAsync���L�����Z������܂����B");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"SavePlayerDataAsyncでエラー: {ex.Message}");
+                Debug.LogError($"SavePlayerDataAsync�ŃG���[: {ex.Message}");
             }
             finally
             {
-                IsSaving = false;
-                onComplete?.Invoke();
+                IsPlayerSaving = false;
             }
         }
 
@@ -518,6 +524,7 @@ namespace GameCore.SaveSystem
         }
     }
 }
+        
         """
 
         with open(os.path.join(SAVE_DATA_DIR, "SaveManager.cs"), "w") as f:

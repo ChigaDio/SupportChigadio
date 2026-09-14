@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { linter as createLinter } from '@codemirror/lint';
@@ -62,10 +62,10 @@ export function buildDslLanguage() {
   });
 }
 
-export function buildLintSource(roleSchemas) {
+export function buildLintSource(roleSchemas, classDataSchemas) {
   return (view) => {
     const text = view.state.doc.toString();
-    const issues = lintDocument(text, roleSchemas || {});
+    const issues = lintDocument(text, roleSchemas || {}, classDataSchemas || {});
     const diagnostics = [];
     for (const issue of issues) {
       const line = view.state.doc.line(Math.min(issue.line + 1, view.state.doc.lines));
@@ -82,22 +82,22 @@ export function buildLintSource(roleSchemas) {
   };
 }
 
-export function buildLinter(roleSchemas) {
+export function buildLinter(roleSchemas, classDataSchemas) {
   // delay: ドキュメント変更のたびに即リント(=毎キー入力でcompileDocumentが走る)すると
   // 特に「全体編集(全Sub一括)」のような長いドキュメントで入力がもたつくため、
   // 入力が少し落ち着いてからリントする(デフォルトの750msのままだと重い環境では
   // まだ長く感じるため、体感速度とのバランスで400msに短縮)。
-  return createLinter(buildLintSource(roleSchemas), { delay: 400 });
+  return createLinter(buildLintSource(roleSchemas, classDataSchemas), { delay: 400 });
 }
 
-export function buildCompletionSource(roleNames, roleSchemas) {
+export function buildCompletionSource(roleNames, roleSchemas, classDataSchemas) {
   return (context) => {
     const line = context.state.doc.lineAt(context.pos);
     const cursorCh = context.pos - line.from;
     const cursorLine = line.number - 1;
     const fullText = context.state.doc.toString();
 
-    const items = getCompletionsAt(fullText, cursorLine, cursorCh, roleNames, roleSchemas || {});
+    const items = getCompletionsAt(fullText, cursorLine, cursorCh, roleNames, roleSchemas || {}, classDataSchemas || {});
     if (items.length === 0) return null;
 
     // 補完のトリガー開始位置（現在編集中の単語の先頭）を求める。
@@ -194,18 +194,48 @@ const BASIC_SETUP = {
   tabSize: 2,
 };
 
-function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas, height = '420px' }) {
+function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas, classDataSchemas, height = '420px' }) {
+  // roleNames/roleSchemas/classDataSchemas は、呼び出し元(GUI側)の state から
+  // 毎レンダー新しい参照で渡されてくることが多い。そのままextensionsのuseMemoの
+  // 依存配列に入れると、内容が同じでも参照が変わるたびにCodeMirrorの
+  // 言語定義・リンター・オートコンプリートが丸ごと再構築されてしまい、
+  // (GUI側でのClassData関連の入力遅延と同種の原因で)DSLエディタ側でも
+  // 入力がもたつく要因になる。
+  // 最新値はrefで持ち、linter/補完は「呼ばれた時点のrefを読む」薄いラッパーに
+  // することで、extensions自体は中身が実際に変わった時だけ作り直せばよいようにする。
+  const roleNamesRef = useRef(roleNames);
+  const roleSchemasRef = useRef(roleSchemas);
+  const classDataSchemasRef = useRef(classDataSchemas);
+  useEffect(() => { roleNamesRef.current = roleNames; });
+  useEffect(() => { roleSchemasRef.current = roleSchemas; });
+  useEffect(() => { classDataSchemasRef.current = classDataSchemas; });
+
+  // 依存配列を「参照」ではなく「中身」で比較するためのキー。
+  // これらは1ドキュメント分のスキーマ情報であり、頻繁に変わるものでもないため
+  // JSON.stringifyのコストは無視できる。
+  const roleNamesKey = useMemo(() => (roleNames || []).join(','), [roleNames]);
+  const roleSchemasKey = useMemo(() => JSON.stringify(roleSchemas || {}), [roleSchemas]);
+  const classDataSchemasKey = useMemo(() => JSON.stringify(classDataSchemas || {}), [classDataSchemas]);
+
   const extensions = useMemo(() => [
     buildDslLanguage(),
-    buildLinter(roleSchemas),
-    autocompletion({ override: [buildCompletionSource(roleNames || [], roleSchemas || {})] }),
+    createLinter(
+      (view) => buildLintSource(roleSchemasRef.current, classDataSchemasRef.current)(view),
+      { delay: 400 }
+    ),
+    autocompletion({
+      override: [
+        (context) => buildCompletionSource(roleNamesRef.current || [], roleSchemasRef.current || {}, classDataSchemasRef.current || {})(context),
+      ],
+    }),
     keymap.of([
       indentWithTab,
       { key: 'Mod-Alt-g', run: insertNewGroupCommand, preventDefault: true },
       { key: 'Mod-Alt-h', run: insertNewSubgroupCommand, preventDefault: true },
     ]),
     EditorView.lineWrapping,
-  ], [roleNames, roleSchemas]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [roleNamesKey, roleSchemasKey, classDataSchemasKey]);
 
   return (
     <CodeMirror
