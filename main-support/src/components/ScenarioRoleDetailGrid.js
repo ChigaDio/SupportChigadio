@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
-  Select, MenuItem, FormControl, InputLabel, Checkbox, FormControlLabel, IconButton, Tooltip
+  Select, MenuItem, FormControl, InputLabel, Checkbox, FormControlLabel, IconButton, Tooltip,
+  Chip, Divider
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -11,6 +12,115 @@ import LockIcon from '@mui/icons-material/Lock';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import SubdirectoryArrowRightIcon from '@mui/icons-material/SubdirectoryArrowRight';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+
+/**
+ * 依存関係の「有効になる値」選択 UI
+ * - bool: True / False
+ * - enum / class_data_id: 検索付きドロップダウン
+ * - ＋ボタンで複数条件を OR 追加
+ */
+function DependencyValuesEditor({
+  parentType,
+  values,          // string[] 現在の enableValues
+  onChange,        // (next: string[]) => void
+  enumMemberOptions, // [{ value, label }] 親が enum/class_data_id のとき
+}) {
+  const isBool = parentType && ['bool', 'boolean'].includes(String(parentType).toLowerCase());
+  const [pending, setPending] = React.useState(null); // 追加用の一時選択
+
+  const options = isBool
+    ? [
+      { value: 'true', label: 'True' },
+      { value: 'false', label: 'False' },
+    ]
+    : (enumMemberOptions || []);
+
+  const selected = (values || []).map(String);
+
+  const addValue = (v) => {
+    if (v == null || v === '') return;
+    const s = String(v);
+    if (selected.includes(s)) return;
+    onChange([...selected, s]);
+    setPending(null);
+  };
+
+  const removeValue = (v) => {
+    onChange(selected.filter(x => x !== v));
+  };
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      {/* 選択済みチップ */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1, minHeight: 28 }}>
+        {selected.length === 0 && (
+          <Typography variant="caption" color="text.disabled">
+            まだ条件がありません。下から追加してください
+          </Typography>
+        )}
+        {selected.map((v) => {
+          const label = options.find(o => o.value === v || o.label === v)?.label || v;
+          return (
+            <Chip
+              key={v}
+              size="small"
+              label={label}
+              onDelete={() => removeValue(v)}
+              variant="outlined"
+              color="primary"
+              sx={{ borderStyle: 'dashed' }}
+            />
+          );
+        })}
+      </Box>
+
+      {/* 追加用ドロップダウン + ＋ボタン */}
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+        <Autocomplete
+          size="small"
+          sx={{ flex: 1, minWidth: 220 }}
+          options={options.filter(o => !selected.includes(String(o.value)))}
+          getOptionLabel={(o) => (typeof o === 'string' ? o : o.label)}
+          value={options.find(o => o.value === pending) || null}
+          onChange={(e, v) => setPending(v ? v.value : null)}
+          isOptionEqualToValue={(a, b) => a?.value === b?.value}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label={isBool ? 'True / False を選択' : '値を検索して選択'}
+              placeholder={isBool ? 'True または False' : '検索...'}
+            />
+          )}
+        />
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<AddIcon />}
+          disabled={pending == null}
+          onClick={() => addValue(pending)}
+          sx={{ whiteSpace: 'nowrap', height: 40 }}
+        >
+          追加
+        </Button>
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        親がこれらの値のいずれかと一致するとき編集可能（OR）
+      </Typography>
+    </Box>
+  );
+}
+
+/** 親になれる型かどうか（bool / enum名 / class_data_id名） */
+function isParentCandidateType(type, enumNames, classDataIdNames) {
+  if (!type) return false;
+  const t = String(type).toLowerCase();
+  if (t === 'bool' || t === 'boolean') return true;
+  if ((enumNames || []).includes(type)) return true;
+  if ((classDataIdNames || []).includes(type)) return true;
+  return false;
+}
 
 // bit の初期オプション
 function defaultOptionsForType(type) {
@@ -27,8 +137,8 @@ function BitOptionsEditor({ options, onChange, enumNames, classDataIdNames, cust
   const sizeMode = options.sizeMode || 'manual';
   const sourceNames = sizeMode === 'enum' ? enumNames
     : sizeMode === 'classDataId' ? classDataIdNames
-    : sizeMode === 'customClassDataId' ? customClassDataIdNames
-    : [];
+      : sizeMode === 'customClassDataId' ? customClassDataIdNames
+        : [];
   const flagNames = options.flagNames || [];
   const size = options.size ?? flagNames.length ?? 8;
 
@@ -202,6 +312,9 @@ function ScenarioRoleDetailGrid() {
   // 鍵マーク(必須フィールド)。既定はtrue(=必須)。falseにすると、DSL(Lua風テキスト)
   // 入力でこのフィールドを省略してもエラーにならず、デフォルト値が使われる。
   const [newRequired, setNewRequired] = useState(true);
+  // 新規追加時の依存関係
+  const [addDepParent, setAddDepParent] = useState(null);
+  const [addDepValues, setAddDepValues] = useState([]);
 
   // bit の sizeMode="enum"/"classDataId"/"customClassDataId" 参照先候補
   const [enumNames, setEnumNames] = useState([]);
@@ -210,11 +323,64 @@ function ScenarioRoleDetailGrid() {
 
   // 既存行のoptions編集用
   const [optionsEditRow, setOptionsEditRow] = useState(null); // { id, type, options }
+  // 依存関係編集用
+  const [depEditRow, setDepEditRow] = useState(null); // { id, name, type, dependency }
+  const [editDepParent, setEditDepParent] = useState(null);
+  const [editDepValues, setEditDepValues] = useState([]);
 
   // dictionaryのキー型候補: int(数値) + Enum + ClassDataID + CustomClassDataID のみ
   const keyTypeOptions = React.useMemo(() => Array.from(new Set([
     'int', ...enumNames, ...classDataIdNames, ...customClassDataIdNames,
   ])), [enumNames, classDataIdNames, customClassDataIdNames]);
+
+  // 例: 編集ダイアログ用
+  const [editParentMemberOptions, setEditParentMemberOptions] = useState([]);
+
+  useEffect(() => {
+    if (!editDepParent) {
+      setEditParentMemberOptions([]);
+      return;
+    }
+    const parentField = data.find(f => f.name === editDepParent);
+    if (!parentField) return;
+    const t = parentField.type;
+    if (['bool', 'boolean'].includes(String(t).toLowerCase())) {
+      setEditParentMemberOptions([
+        { value: 'true', label: 'True' },
+        { value: 'false', label: 'False' },
+      ]);
+      return;
+    }
+    if (enumNames.includes(t)) {
+      fetch(`/api/enum/${encodeURIComponent(t)}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(list => {
+          setEditParentMemberOptions(
+            (list || []).map(item => {
+              const p = item.property || item.enum_property || item;
+              return { value: String(p), label: String(p) };
+            })
+          );
+        })
+        .catch(() => setEditParentMemberOptions([]));
+      return;
+    }
+    if (classDataIdNames.includes(t)) {
+      fetch(`/api/class-data-id/${encodeURIComponent(t)}`)
+        .then(r => r.ok ? r.json() : { rows: [] })
+        .then(d => {
+          setEditParentMemberOptions(
+            (d.rows || []).map(row => ({
+              value: String(row.enum_property),
+              label: String(row.enum_property),
+            }))
+          );
+        })
+        .catch(() => setEditParentMemberOptions([]));
+      return;
+    }
+    setEditParentMemberOptions([]);
+  }, [editDepParent, data, enumNames, classDataIdNames]);
 
   // Fetch data for the role
   useEffect(() => {
@@ -267,6 +433,17 @@ function ScenarioRoleDetailGrid() {
       return;
     }
     const maxId = Math.max(...data.map(item => item.id), 0) + 1;
+    let dependency;
+    if (addDepParent) {
+      const parentField = data.find(f => f.name === addDepParent);
+      dependency = {
+        parentFieldName: addDepParent,
+        enableValues: addDepValues.length > 0
+          ? addDepValues
+          : (parentField && String(parentField.type).toLowerCase() === 'bool' ? [true] : []),
+        hideWhenDisabled: true,
+      };
+    }
     const newRow = {
       id: maxId,
       type: newType,
@@ -275,6 +452,7 @@ function ScenarioRoleDetailGrid() {
       arraySize: parseInt(newArraySize, 10) || 0,
       options: ['bit', 'bezier', 'dictionary'].includes(newType) ? newOptions : undefined,
       required: newRequired,
+      ...(dependency ? { dependency } : {}),
     };
     setData([...data, newRow]);
     setOpen(false);
@@ -284,6 +462,8 @@ function ScenarioRoleDetailGrid() {
     setNewArraySize(0);
     setNewOptions({});
     setNewRequired(true);
+    setAddDepParent(null);
+    setAddDepValues([]);
   };
 
   // 既存行のoptionsを保存(bit/bezier)
@@ -292,9 +472,51 @@ function ScenarioRoleDetailGrid() {
     setOptionsEditRow(null);
   };
 
-  // Delete row
+  const openDepEdit = (row) => {
+    setDepEditRow(row);
+    setEditDepParent(row.dependency?.parentFieldName || null);
+    setEditDepValues(Array.isArray(row.dependency?.enableValues) ? row.dependency.enableValues.map(String) : []);
+  };
+
+  const handleSaveDependency = () => {
+    if (!depEditRow) return;
+    let dependency;
+    if (editDepParent) {
+      const parentField = data.find(f => f.name === editDepParent && f.id !== depEditRow.id);
+      dependency = {
+        parentFieldName: editDepParent,
+        enableValues: editDepValues.length > 0
+          ? editDepValues
+          : (parentField && String(parentField.type).toLowerCase() === 'bool' ? [true] : []),
+        hideWhenDisabled: true,
+      };
+    }
+    setData(data.map(item => {
+      if (item.id !== depEditRow.id) return item;
+      if (dependency) return { ...item, dependency };
+      const { dependency: _removed, ...rest } = item;
+      return rest;
+    }));
+    setDepEditRow(null);
+    setEditDepParent(null);
+    setEditDepValues([]);
+  };
+
+  // Delete row（親を消した場合は子の dependency もクリア）
   const handleDeleteRow = (id) => {
-    setData(data.filter(item => item.id !== id));
+    const deleted = data.find(item => item.id === id);
+    const deletedName = deleted?.name;
+    setData(
+      data
+        .filter(item => item.id !== id)
+        .map(item => {
+          if (deletedName && item.dependency?.parentFieldName === deletedName) {
+            const { dependency, ...rest } = item;
+            return rest;
+          }
+          return item;
+        })
+    );
   };
 
   // Reorder rows
@@ -362,6 +584,18 @@ function ScenarioRoleDetailGrid() {
       .catch(error => alert('C#生成エラー: ' + error));
   };
 
+  const childrenByParent = useMemo(() => {
+    const map = {};
+    data.forEach(f => {
+      const p = f.dependency?.parentFieldName;
+      if (p) {
+        if (!map[p]) map[p] = [];
+        map[p].push(f.name);
+      }
+    });
+    return map;
+  }, [data]);
+
   const columns = [
     {
       field: 'order',
@@ -398,7 +632,7 @@ function ScenarioRoleDetailGrid() {
     {
       field: 'type',
       headerName: 'タイプ',
-      width: 200,
+      width: 160,
       renderCell: (params) => params.value,
       editable: true,
       renderEditCell: (params) => (
@@ -411,13 +645,13 @@ function ScenarioRoleDetailGrid() {
         />
       )
     },
-    { field: 'name', headerName: '名前', width: 150, editable: true },
-    { field: 'description', headerName: '説明', width: 250, editable: true },
-    { field: 'arraySize', headerName: '配列サイズ', width: 150, editable: true, type: 'number' },
+    { field: 'name', headerName: '名前', width: 120, editable: true },
+    { field: 'description', headerName: '説明', width: 160, editable: true },
+    { field: 'arraySize', headerName: '配列サイズ', width: 110, editable: true, type: 'number' },
     {
       field: 'options',
       headerName: 'オプション',
-      width: 110,
+      width: 90,
       renderCell: (params) => (
         ['bit', 'bezier', 'dictionary'].includes(params.row.type) ? (
           <Button
@@ -430,9 +664,80 @@ function ScenarioRoleDetailGrid() {
       )
     },
     {
+      field: 'dependency',
+      headerName: '依存関係',
+      width: 240,
+      sortable: false,
+      renderCell: (params) => {
+        const row = params.row;
+        const dep = row.dependency;
+        const kids = childrenByParent[row.name] || [];
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, py: 0.5, width: '100%' }}>
+            {dep?.parentFieldName && (
+              <Tooltip title={`親「${dep.parentFieldName}」が [${(dep.enableValues || []).join(' | ')}] のとき編集可能`}>
+                <Box
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    px: 1,
+                    py: 0.25,
+                    borderRadius: 1,
+                    border: '1.5px dashed',
+                    borderColor: 'primary.light',
+                    bgcolor: 'primary.50',
+                    maxWidth: '100%',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => openDepEdit(row)}
+                >
+                  <SubdirectoryArrowRightIcon sx={{ fontSize: 16, color: 'primary.main', opacity: 0.8 }} />
+                  <Typography variant="caption" noWrap sx={{ fontWeight: 600, color: 'primary.dark' }}>
+                    {dep.parentFieldName}
+                  </Typography>
+                  <Typography variant="caption" noWrap color="text.secondary">
+                    = {(dep.enableValues || []).map(String).join(' | ') || '…'}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+            {kids.length > 0 && (
+              <Tooltip title={`子: ${kids.join(', ')}`}>
+                <Box
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    px: 1,
+                    py: 0.25,
+                    borderRadius: 1,
+                    border: '1.5px dashed',
+                    borderColor: 'secondary.light',
+                    bgcolor: 'secondary.50',
+                    maxWidth: '100%',
+                  }}
+                >
+                  <AccountTreeIcon sx={{ fontSize: 14, color: 'secondary.main' }} />
+                  <Typography variant="caption" noWrap color="secondary.dark">
+                    → {kids.join(', ')}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+            {!dep?.parentFieldName && kids.length === 0 && (
+              <Button size="small" variant="text" onClick={() => openDepEdit(row)} sx={{ minWidth: 0, p: 0.25 }}>
+                <Typography variant="caption" color="text.disabled">設定</Typography>
+              </Button>
+            )}
+          </Box>
+        );
+      },
+    },
+    {
       field: 'actions',
       headerName: 'アクション',
-      width: 150,
+      width: 100,
       renderCell: (params) => (
         <Button variant="contained" color="error" size="small" onClick={() => handleDeleteRow(params.id)}>
           削除
@@ -515,6 +820,59 @@ function ScenarioRoleDetailGrid() {
               enumNames={enumNames} classDataIdNames={classDataIdNames} customClassDataIdNames={customClassDataIdNames}
             />
           )}
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <AccountTreeIcon fontSize="small" color="primary" />
+            依存関係（親フィールド）
+          </Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            enum / bool / class_data_id を親に指定。条件値は OR（いずれか一致）。
+          </Typography>
+          <Autocomplete
+            size="small"
+            options={data.filter(f => isParentCandidateType(f.type, enumNames, classDataIdNames))}
+            getOptionLabel={(opt) => `${opt.name} (${opt.type})`}
+            value={data.find(f => f.name === addDepParent) || null}
+            onChange={(e, v) => {
+              setAddDepParent(v ? v.name : null);
+              if (v && String(v.type).toLowerCase() === 'bool') setAddDepValues(['true']);
+              else if (!v) setAddDepValues([]);
+            }}
+            renderInput={(params) => (
+              <TextField {...params} label="親フィールド" margin="dense" fullWidth placeholder="なし（独立）" />
+            )}
+            isOptionEqualToValue={(a, b) => a?.name === b?.name}
+          />
+          {addDepParent && (
+            <Autocomplete
+              multiple
+              freeSolo
+              size="small"
+              options={
+                (() => {
+                  const p = data.find(f => f.name === addDepParent);
+                  return p && String(p.type).toLowerCase() === 'bool' ? ['true', 'false'] : [];
+                })()
+              }
+              value={addDepValues}
+              onChange={(e, v) => setAddDepValues(v.map(String))}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="有効になる値（OR・複数可）"
+                  margin="dense"
+                  fullWidth
+                  placeholder="例: hoge, fuga（Enterで追加）"
+                  helperText="親がこれらの値のいずれかと一致するとき編集可能"
+                />
+              )}
+              renderTags={(value, getTagProps) =>
+                value.map((option, index) => (
+                  <Chip variant="outlined" size="small" label={String(option)} {...getTagProps({ index })} key={`${option}-${index}`} sx={{ borderStyle: 'dashed' }} />
+                ))
+              }
+            />
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>キャンセル</Button>
@@ -552,6 +910,48 @@ function ScenarioRoleDetailGrid() {
         <DialogActions>
           <Button onClick={() => setOptionsEditRow(null)}>キャンセル</Button>
           <Button onClick={handleSaveRowOptions}>保存</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 依存関係編集 */}
+      <Dialog open={!!depEditRow} onClose={() => setDepEditRow(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          依存関係の編集
+          {depEditRow ? ` — ${depEditRow.name}` : ''}
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            親は enum / bool / class_data_id のみ。子は親を1人だけ持てます。条件値は OR です。
+          </Typography>
+          <Autocomplete
+            size="small"
+            options={data.filter(f =>
+              depEditRow && f.id !== depEditRow.id && isParentCandidateType(f.type, enumNames, classDataIdNames)
+            )}
+            getOptionLabel={(opt) => `${opt.name} (${opt.type})`}
+            value={data.find(f => f.name === editDepParent) || null}
+            onChange={(e, v) => {
+              setEditDepParent(v ? v.name : null);
+              if (v && String(v.type).toLowerCase() === 'bool') setEditDepValues(['true']);
+              else if (!v) setEditDepValues([]);
+            }}
+            renderInput={(params) => (
+              <TextField {...params} label="親フィールド" margin="dense" fullWidth placeholder="なし（独立）" />
+            )}
+            isOptionEqualToValue={(a, b) => a?.name === b?.name}
+          />
+          {editDepParent && (
+            <DependencyValuesEditor
+              parentType={data.find(f => f.name === editDepParent)?.type}
+              values={editDepValues}
+              onChange={setEditDepValues}
+              enumMemberOptions={editParentMemberOptions}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDepEditRow(null)}>キャンセル</Button>
+          <Button onClick={handleSaveDependency} variant="contained">保存</Button>
         </DialogActions>
       </Dialog>
     </Box>

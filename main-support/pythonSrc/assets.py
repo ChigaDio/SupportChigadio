@@ -1492,7 +1492,7 @@ def reload_sound_file(group_name, index):
     if not initial_dir:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
 
-    file_path = select_file(initial_dir, [("音声ファイル", "*.mp3 *.wav")])
+    file_path = select_file(initial_dir, [("音声ファイル", "*.mp3 *.wav *.ogg")])
     if not file_path:
         raise Exception("ファイルが選択されていません。")
     addr_path = get_addressable_path(file_path)

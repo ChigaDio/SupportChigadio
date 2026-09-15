@@ -1344,37 +1344,79 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
     );
   };
 
+  /**
+   * 依存関係（dependency）を評価する。
+   * - 親が bool: enableValues に true/false が含まれるか
+   * - 親が enum / class_data_id: 値が "TypeID.name" 形式でも短縮名でも一致すれば OK（OR）
+   * - dependency が無い / 親が無い場合は常に表示
+   */
+  const isFieldEnabledByDependency = (field) => {
+    const dep = field.dependency;
+    if (!dep || !dep.parentFieldName) return true;
+    const parentItem = formData.find(d => d.name === dep.parentFieldName);
+    const parentVal = parentItem?.value;
+    const enableValues = dep.enableValues || [];
+    // 条件値が空のときは「親さえいれば常に有効」とみなす
+    if (enableValues.length === 0) return true;
+
+    // bool
+    if (typeof parentVal === 'boolean') {
+      return enableValues.some(v => {
+        if (typeof v === 'boolean') return v === parentVal;
+        const s = String(v).toLowerCase();
+        return (s === 'true' && parentVal === true) || (s === 'false' && parentVal === false);
+      });
+    }
+
+    // enum / class_data_id など文字列系
+    const strVal = parentVal == null ? '' : String(parentVal);
+    // "HogeID.hoge" → "hoge"
+    const shortVal = strVal.includes('.') ? strVal.split('.').pop() : strVal;
+    // None は常に不一致扱い
+    if (!strVal || shortVal === 'None' || strVal.endsWith('.None')) return false;
+
+    return enableValues.some(v => {
+      const sv = String(v);
+      const shortEnable = sv.includes('.') ? sv.split('.').pop() : sv;
+      return sv === strVal || shortEnable === shortVal || sv === shortVal || shortEnable === strVal;
+    });
+  };
+
   const formBody = (
     <Box sx={{ p: 1 }}>
-      {schema.fields.map((field, index) => (
-        <Box key={field.name}>
-          <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              {renderField(field)}
+      {schema.fields.map((field, index) => {
+        // 条件を満たさない子フィールドは非表示
+        if (!isFieldEnabledByDependency(field)) return null;
+        return (
+          <Box key={field.name}>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                {renderField(field)}
+              </Box>
+              {roleName && (
+                <Tooltip title={field.default !== undefined && field.default !== null
+                  ? `デフォルト保存済み（現在の値で更新できます）`
+                  : `今の値をこのフィールドのデフォルト値として保存（次にこのRoleを追加した時の初期値になります）`}>
+                  <span>
+                    <IconButton
+                      size="small"
+                      color={field.default !== undefined && field.default !== null ? 'primary' : 'default'}
+                      disabled={savingDefaultField === field.name}
+                      onClick={() => handleSaveAsDefault(field)}
+                      sx={{ mt: 0.5 }}
+                    >
+                      <BookmarkAddIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
             </Box>
-            {roleName && (
-              <Tooltip title={field.default !== undefined && field.default !== null
-                ? `デフォルト保存済み（現在の値で更新できます）`
-                : `今の値をこのフィールドのデフォルト値として保存（次にこのRoleを追加した時の初期値になります）`}>
-                <span>
-                  <IconButton
-                    size="small"
-                    color={field.default !== undefined && field.default !== null ? 'primary' : 'default'}
-                    disabled={savingDefaultField === field.name}
-                    onClick={() => handleSaveAsDefault(field)}
-                    sx={{ mt: 0.5 }}
-                  >
-                    <BookmarkAddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
+            {index < schema.fields.length - 1 && field.arraySize !== 0 && (
+              <Divider sx={{ mb: 1 }} />
             )}
           </Box>
-          {index < schema.fields.length - 1 && field.arraySize !== 0 && (
-            <Divider sx={{ mb: 1 }} />
-          )}
-        </Box>
-      ))}
+        );
+      })}
     </Box>
   );
 

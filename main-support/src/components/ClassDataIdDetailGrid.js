@@ -829,7 +829,37 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
     </Box>
   );
 }
+/**
+ * ClassData フィールドの dependency（条件付き表示）を評価する。
+ * - parentValues: 同じ ClassData オブジェクト内の現在値 { fieldName: value }
+ * - enableValues は OR。bool / enum / class_data_id に対応。
+ * - 値は "TypeID.name" でも短縮名でも一致可。
+ */
+export function isFieldEnabledByDependency(field, parentValues) {
+  const dep = field?.dependency;
+  if (!dep || !dep.parentFieldName) return true;
+  const parentVal = parentValues ? parentValues[dep.parentFieldName] : undefined;
+  const enableValues = dep.enableValues || [];
+  if (enableValues.length === 0) return true;
 
+  if (typeof parentVal === 'boolean') {
+    return enableValues.some(v => {
+      if (typeof v === 'boolean') return v === parentVal;
+      const s = String(v).toLowerCase();
+      return (s === 'true' && parentVal === true) || (s === 'false' && parentVal === false);
+    });
+  }
+
+  const strVal = parentVal == null ? '' : String(parentVal);
+  const shortVal = strVal.includes('.') ? strVal.split('.').pop() : strVal;
+  if (!strVal || shortVal === 'None' || strVal.endsWith('.None')) return false;
+
+  return enableValues.some(v => {
+    const sv = String(v);
+    const shortEnable = sv.includes('.') ? sv.split('.').pop() : sv;
+    return sv === strVal || shortEnable === shortVal || sv === shortVal || shortEnable === strVal;
+  });
+}
 // ============================================================
 // ClassFieldEditor: classData型のネスト入力コンポーネント（折り畳み対応）
 // ============================================================
@@ -841,19 +871,21 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
     onChange({ ...obj, [fieldName]: fieldVal });
   };
 
+  // 表示中のフィールド名（依存で非表示のものは除く）をサマリに使う
+  const visibleFields = schema.filter(f => isFieldEnabledByDependency(f, obj));
+
   return (
     <Accordion
       disableGutters
       defaultExpanded={defaultExpanded}
       sx={{ border: '1px solid', borderColor: 'divider', boxShadow: 'none' }}
       onChange={(_, expanded) => {
-        // 開閉時に行高さ再計算を要求
         if (onSizeChange) onSizeChange();
       }}
     >
       <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 32, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
         <Typography variant="caption" color="text.secondary">
-          {typeName} ▸ {schema.map(f => f.name).join(', ') || '（フィールドなし）'}
+          {typeName} ▸ {visibleFields.map(f => f.name).join(', ') || '（フィールドなし）'}
         </Typography>
       </AccordionSummary>
       <AccordionDetails sx={{ p: 1 }}>
@@ -861,10 +893,11 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
           <Typography variant="caption" color="text.disabled">スキーマが未定義です</Typography>
         ) : (
           schema.map(field => {
-            // classDataスキーマは { name, type, arraySize, description }
-            // arraySize: -1=動的配列, >0=固定配列, 0=単一値
+            // 依存関係: 親の現在値に応じて非表示
+            if (!isFieldEnabledByDependency(field, obj)) return null;
+
             const { isDynamic, isArray: fieldIsArray, arraySize: fieldArraySize } = getFieldArrayInfo(field);
-            const baseType = field.type; // arraySize管理なので型名はそのまま
+            const baseType = field.type;
 
             const defaultVal = fieldIsArray
               ? Array.from({ length: Math.max(fieldArraySize, 0) }, () => getDefaultValueForType(baseType, enumValues, classSchemas))
@@ -872,12 +905,22 @@ export function ClassFieldEditor({ value, typeName, enumValues, classSchemas, on
             const fieldValue = obj[field.name] !== undefined ? obj[field.name] : defaultVal;
 
             const arraySizeLabel = isDynamic ? 'List' : fieldArraySize > 0 ? `[${fieldArraySize}]` : '';
+            const hasDep = !!(field.dependency && field.dependency.parentFieldName);
 
             return (
               <Box key={field.name} sx={{ mb: 1 }}>
                 <Typography variant="caption" fontWeight="bold" display="block" sx={{ mb: 0.5 }}>
                   {field.name}{field.description ? `（${field.description}）` : ''}
                   <Chip label={`${field.type}${arraySizeLabel}`} size="small" sx={{ ml: 0.5, height: 16, fontSize: 10 }} />
+                  {hasDep && (
+                    <Chip
+                      label={`↳ ${field.dependency.parentFieldName}`}
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                      sx={{ ml: 0.5, height: 16, fontSize: 10, borderStyle: 'dashed' }}
+                    />
+                  )}
                 </Typography>
                 {fieldIsArray ? (
                   <ArrayFieldEditor

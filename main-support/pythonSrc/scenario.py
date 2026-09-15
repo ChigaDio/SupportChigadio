@@ -1578,6 +1578,15 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         # 型ごとの汎用初期値(getDefaultValue)より優先度高く使う。
         if 'default' in var and var['default'] is not None:
             field['default'] = var['default']
+        # 依存関係（enum/bool/class_data_id を親として子フィールドの表示制御）
+        # ScenarioRoleDetailGrid / ClassDataDetailGrid で設定した dependency を
+        # BaseRoleInputForm 側へそのまま渡す。
+        if isinstance(var.get('dependency'), dict) and var['dependency'].get('parentFieldName'):
+            field['dependency'] = {
+                'parentFieldName': var['dependency']['parentFieldName'],
+                'enableValues': list(var['dependency'].get('enableValues') or []),
+                'hideWhenDisabled': var['dependency'].get('hideWhenDisabled', True),
+            }
         var_type = var['type']
 
         # bit / color / bezier / dictionary: 値編集に必要な options をそのままフロントへ渡す
