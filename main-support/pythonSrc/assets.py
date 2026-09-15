@@ -139,7 +139,8 @@ def generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroup_
 def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                               data_dir=None, namespace=None, class_name=None,
                               group_enum_name=None, id_enum_name=None,
-                              global_key_field='name'):
+                              global_key_field='name',
+                              subgroup_in_id=True):
     """
     現在のgroups_dict（{group_name: {'items':[...], 'subgroups':[...]}}）に基づいて
     SubGroup enumファイル一式を再生成し、既に存在しない（削除された）グループ／
@@ -150,6 +151,12 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
     {id_enum_name}（グローバルなID enum）へ static readonly 配列で高速変換したうえで
     LoadSingle/UnloadSingle を呼び出すオーバーロードを {class_name}Single.cs に生成する。
     （ローカルenumの値をそのまま配列インデックスとして使うのでO(1)変換）
+
+    subgroup_in_id (bool): グローバルID（{id_enum_name}）の命名にSubGroup名を
+        含めるかどうか。Sound/Texture/GameObjectは
+        "{group}_{subgroup}_{name}" という命名なのでTrue（デフォルト）。
+        Materialは "{group}_{class_name}" とSubGroupを含めない命名なので
+        呼び出し側でFalseを指定する。
 
     Returns:
         list[str]: 生成された{category_name}_{group}ID の一覧（enum_list.json登録用）
@@ -202,7 +209,13 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append(f"            {id_enum_name}.None, // {detail_enum_name}.None")
                 for item in value:
                     global_key = item.get(global_key_field) or item.get("name", item.get("class_name",""))
-                    global_name = f"{group_name}_{global_key}"
+                    # ★修正箇所：グローバルIDの命名規則をカテゴリ側と一致させる。
+                    # Sound/Texture/GameObjectは "{group}_{subgroup}_{name}"、
+                    # Materialは "{group}_{class_name}"（SubGroup無し）。
+                    if subgroup_in_id:
+                        global_name = f"{group_name}_{key}_{global_key}"
+                    else:
+                        global_name = f"{group_name}_{global_key}"
                     single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item.get("name",item.get("class_name",""))}")
                 single_lines.append("        };")
                 single_lines.append("")
@@ -282,7 +295,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append(f"        public async UniTask UnloadSingleAsync_{detail_enum_name}(int index, Action onCompleted = null)")
                 single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal(index, onCompleted);")
                 single_lines.append("")
-                
+
                 #各自のGetの修正
                 if "GameObjectCore" == class_name:
                     single_lines.append(f"       public UnityEngine.GameObject GetGameObject({detail_enum_name}ID id)")
@@ -1629,7 +1642,7 @@ def generate_sound_csharp():
     subgroup_enum_names = sync_subgroup_enum_files(
     ENUM_DIR, "Sound", data['groups'],
     data_dir=SOUND_DATA, namespace="GameCore.Sound", class_name="SoundCore",
-    group_enum_name="SoundGroup", id_enum_name="SoundID"
+    group_enum_name="SoundGroup", id_enum_name="SoundID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
 
@@ -3963,7 +3976,7 @@ def generate_texture_csharp():
     subgroup_enum_names = sync_subgroup_enum_files(
     ENUM_DIR, "Texture", data['groups'],
     data_dir=TEXTURE_DATA, namespace="GameCore.Texture", class_name="TextureCore",
-    group_enum_name="TextureGroup", id_enum_name="TextureID"
+    group_enum_name="TextureGroup", id_enum_name="TextureID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
 
@@ -4996,7 +5009,7 @@ def generate_gameobject_csharp():
     subgroup_enum_names = sync_subgroup_enum_files(
     ENUM_DIR, "GameObject", data['groups'],
     data_dir=GAMEOBJECT_DATA, namespace="GameCore.Gameobject", class_name="GameObjectCore",
-    group_enum_name="GameObjectGroup", id_enum_name="GameObjectID"
+    group_enum_name="GameObjectGroup", id_enum_name="GameObjectID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
 
