@@ -1424,7 +1424,7 @@ def add_sound(group_name, name, desc, volume, sound_type, subgroup_name=None):
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
-    file_path = select_file(project_path, [("音声ファイル", "*.mp3 *.wav")])
+    file_path = select_file(project_path, [("音声ファイル", "*.mp3 *.wav *.ogg")])
     if not file_path:
         raise Exception("ファイルが選択されていません。")
     addr_path = get_addressable_path(file_path)
