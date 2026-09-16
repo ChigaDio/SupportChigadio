@@ -266,7 +266,26 @@ def get_json_texture():
 
 
 #バイナリ書き込み
-def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=None):
+def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=None, custom_type_info=None, array_size=0):
+
+    # ★ 呼び出し元が type_str に "[]" を付けず、arraySize を別途持っているケース
+    #   (Matrixのフィールドなど)に対応する。type_str 自体が "xxx[]" 形式のときは
+    #   従来通り下の type_str.endswith('[]') 側のロジックに任せる。
+    if array_size and not type_str.endswith('[]'):
+        if array_size == -1:  # 可変長List
+            values = value if isinstance(value, list) else []
+            f.write(struct.pack('i', len(values)))
+            for v in values:
+                write_binary_field(f, v, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
+            return
+        elif array_size > 0:  # 固定長配列
+            # ★ C#側は array_size を決め打ちで for(int i=0;i<array_size;i++) と読むため、
+            #   JSON側の要素数が足りなくても必ず array_size 個ぶん書き込んでバイト数を揃える。
+            values = value if isinstance(value, list) else []
+            padded = (values + [None] * array_size)[:array_size]
+            for v in padded:
+                write_binary_field(f, v, type_str, basic_types, unity_types, enum_list, class_list, class_data_id_list, enum_data, class_data_id, class_data, options=options, custom_type_info=custom_type_info)
+            return
 
     if type_str.endswith('[]'):
         inner_type = type_str[:-2]
@@ -366,7 +385,9 @@ def write_binary_field(f, value, type_str, basic_types, unity_types, enum_list, 
 
     elif type_str in enum_list:
         #数値ではなければ
-        if not isinstance(value, (int, float)):
+        if value is None:
+            value = 0
+        elif not isinstance(value, (int, float)):
             # 文字列ならTextureID.以降を取得、辞書ならvalueを使用
             property_name = value.split('.')[-1]
             actual_id = next((item['id'] for item in enum_data[type_str + 'ID'] if item['property'] == property_name), 0) if property_name else 0

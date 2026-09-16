@@ -651,7 +651,8 @@ def generate_binary_matrix(name):
                             f, value, field['type'],
                             basic_types, unity_types, enum_list, class_list,
                             class_data_id_list, enum_data, class_data_id, class_data,
-                            options=field.get('options'), custom_type_info=custom_type_info
+                            options=field.get('options'), custom_type_info=custom_type_info,
+                            array_size=field.get('arraySize', 0) or 0
                         )
 
         return jsonify({"message": f"Binary generated for {name}"})
@@ -720,7 +721,8 @@ def generate_binary_matrix_data(name, json_data):
                     cf, value, field['type'],
                     basic_types, unity_types, enum_list, class_list,
                     class_data_id_list, enum_data, class_data_id, class_data,
-                    options=field.get('options'), custom_type_info=custom_type_info
+                    options=field.get('options'), custom_type_info=custom_type_info,
+                    array_size=field.get('arraySize', 0) or 0
                 )
             cell_bytes_list.append(cf.getvalue())
 
