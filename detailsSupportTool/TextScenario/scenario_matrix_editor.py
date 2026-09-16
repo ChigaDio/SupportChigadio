@@ -54,7 +54,7 @@ CONFIG_FOLDER_NAME = "editor_config"
 
 def _resolve_data_dir() -> str:
     """<script>/../../data を最優先。無ければ上位を遡って data を探す。"""
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..","data"))
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..","..", "data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
@@ -623,6 +623,7 @@ class ScenarioMatrixEditor(tk.Tk):
         self.path: Optional[str] = None
         self._items: List[str] = []
         self._comments: List[str] = []
+        self._loaded_keys: Tuple[Optional[str], Optional[str], Optional[str]] = (None, None, None)
         self._dirty = False
         self._loading = False
 
@@ -1104,7 +1105,12 @@ class ScenarioMatrixEditor(tk.Tk):
     def _reload_list(self) -> None:
         if not self.matrix:
             return
-        self._flush_current_cell(mark_dirty=False)
+        # 直前に self._items へ読み込んでいた「実際のセル」に対してのみ書き戻す。
+        # コンボボックスは既に新しいセルを指している場合があるため、
+        # _current_keys() (= 表示先) をそのまま使うと新セルへ古い内容を
+        # 上書きしてしまう（初回読込時は空リストで潰れる、列切替時は
+        # 前の列の内容が新しい列にコピーされる、というバグの原因だった）。
+        self._flush_loaded_cell(mark_dirty=False)
         row = self.row_var.get()
         cols = list_col_keys(self.matrix, row or None)
         self.col_combo["values"] = cols
@@ -1113,6 +1119,7 @@ class ScenarioMatrixEditor(tk.Tk):
         row, col, field = self._current_keys()
         self._items = get_cell_list(self.matrix, row, col, field) if row and col else []
         self._comments = self.comments_store.get(self.path, row, col, field, len(self._items))
+        self._loaded_keys = (row, col, field)
         self._redraw_listbox()
         self.editor.delete("1.0", tk.END)
         self.comment_box.delete("1.0", tk.END)
@@ -1162,7 +1169,21 @@ class ScenarioMatrixEditor(tk.Tk):
         self.comment_box.delete("1.0", tk.END)
         self.comment_box.insert("1.0", self._comments[idx])
 
+    def _flush_loaded_cell(self, mark_dirty: bool = True) -> None:
+        """self._items/self._comments を「実際に読み込んだセル」(_loaded_keys) へ書き戻す。"""
+        if not self.matrix:
+            return
+        row, col, field = getattr(self, "_loaded_keys", (None, None, None))
+        if row and col:
+            set_cell_list(self.matrix, row, col, self._items, field)
+            self._sync_comment_length()
+            self.comments_store.set(self.path, row, col, field, self._comments)
+            if mark_dirty:
+                self._dirty = True
+
     def _flush_current_cell(self, mark_dirty: bool = True) -> None:
+        """編集操作（追加・削除・並べ替え等）の直後に呼ぶ。
+        この時点ではコンボボックスと _loaded_keys は一致しているはず。"""
         if not self.matrix:
             return
         row, col, field = self._current_keys()
@@ -1170,6 +1191,7 @@ class ScenarioMatrixEditor(tk.Tk):
             set_cell_list(self.matrix, row, col, self._items, field)
             self._sync_comment_length()
             self.comments_store.set(self.path, row, col, field, self._comments)
+            self._loaded_keys = (row, col, field)
             if mark_dirty:
                 self._dirty = True
 
