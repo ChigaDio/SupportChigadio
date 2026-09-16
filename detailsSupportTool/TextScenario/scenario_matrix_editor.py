@@ -54,7 +54,7 @@ CONFIG_FOLDER_NAME = "editor_config"
 
 def _resolve_data_dir() -> str:
     """<script>/../../data を最優先。無ければ上位を遡って data を探す。"""
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "data"))
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..","data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
