@@ -20,12 +20,27 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional, Tuple
+from deep_translator import GoogleTranslator
+
+# PyInstaller で exe 化すると certifi の証明書バンドルの場所が変わり、
+# 翻訳機能の HTTPS 通信が SSL エラーで失敗することがある
+# （例外は握り潰されて「翻訳が反映されない」だけに見える）。
+# 明示的に certifi の証明書を指すよう環境変数を設定しておく。
+try:
+    import certifi
+
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except Exception:
+    pass
 
 C = {
     "bg": "#0f1419",
@@ -100,7 +115,7 @@ def _resolve_data_dir() -> str:
         print(f"[config] data_dir_override.txt を使用: {override}")
         return override
 
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..", "data"))
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..","..", "data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
@@ -312,6 +327,8 @@ def restore_tags(text: str, tags: List[str]) -> str:
 
 
 def try_translate(text: str, source: str = "ja", target: str = "en") -> str:
+    """後方互換用（失敗時は元のテキストを返す・単発呼び出し向け）。
+    バッチ翻訳では translate_text() + 共有 translator を使う。"""
     protected, tags = protect_tags(text)
     if not protected.strip():
         return text
@@ -323,6 +340,94 @@ def try_translate(text: str, source: str = "ja", target: str = "en") -> str:
     except Exception as e:
         print(f"[translate] skip: {e}", file=sys.stderr)
         return text
+
+
+def translate_text(text: str, translator) -> str:
+    """1件を翻訳する。タグは保護し、失敗時は例外をそのまま呼び出し側に投げる
+    （バッチ処理側で件数を数えて後から報告するため、ここでは握り潰さない）。"""
+    protected, tags = protect_tags(text)
+    if not protected.strip():
+        return text
+    out = translator.translate(protected)
+    return restore_tags(out or text, tags)
+
+
+# 選択できる翻訳先言語（表示名, deep_translator/Google 用の言語コード）
+TRANSLATE_LANGUAGES: List[Tuple[str, str]] = [
+    ("English", "en"),
+    ("日本語", "ja"),
+    ("中文（簡体字）", "zh-CN"),
+    ("中文（繁体字）", "zh-TW"),
+    ("한국어", "ko"),
+    ("Français", "fr"),
+    ("Español", "es"),
+    ("Deutsch", "de"),
+    ("Português", "pt"),
+    ("Русский", "ru"),
+    ("Italiano", "it"),
+    ("ภาษาไทย", "th"),
+    ("Tiếng Việt", "vi"),
+    ("Bahasa Indonesia", "id"),
+]
+
+# 行キーの見た目から言語コードを推測するための表
+_LANG_CODE_GUESS = {
+    "ja": "ja", "jp": "ja", "japanese": "ja",
+    "en": "en", "eng": "en", "english": "en",
+    "zh": "zh-CN", "cn": "zh-CN", "chinese": "zh-CN", "zhcn": "zh-CN",
+    "zhtw": "zh-TW", "tw": "zh-TW",
+    "ko": "ko", "kr": "ko", "korean": "ko",
+    "fr": "fr", "french": "fr",
+    "es": "es", "spanish": "es",
+    "de": "de", "german": "de",
+    "pt": "pt", "portuguese": "pt",
+    "ru": "ru", "russian": "ru",
+    "it": "it", "italian": "it",
+    "th": "th", "thai": "th",
+    "vi": "vi", "vietnamese": "vi",
+    "id": "id", "indonesian": "id",
+}
+
+# 言語コードから新規行キーを提案するための表
+_ROW_NAME_SUGGESTION = {
+    "en": "En", "ja": "Ja", "zh-CN": "ZhCN", "zh-TW": "ZhTW", "ko": "Ko",
+    "fr": "Fr", "es": "Es", "de": "De", "pt": "Pt", "ru": "Ru", "it": "It",
+    "th": "Th", "vi": "Vi", "id": "Id",
+}
+
+
+def guess_lang_code(row_key: str) -> Optional[str]:
+    key = re.sub(r"[^a-z]", "", normalize_row_key(row_key).lower())
+    return _LANG_CODE_GUESS.get(key)
+
+
+def suggest_row_name(lang_code: str) -> str:
+    return _ROW_NAME_SUGGESTION.get(lang_code, lang_code.replace("-", ""))
+
+
+_TRANSLATOR_CHECKED = False
+_TRANSLATOR_OK = False
+_TRANSLATOR_IMPORT_ERROR: Optional[str] = None
+
+
+def ensure_translator_available(force: bool = False) -> bool:
+    """翻訳エンジンが実際に使えるかを1回だけ（force指定時は再度）実際に通信して確認する。
+    deep_translator が無い／証明書が無い／ネット未接続、のいずれでも False になり、
+    理由は _TRANSLATOR_IMPORT_ERROR に残す。"""
+    global _TRANSLATOR_CHECKED, _TRANSLATOR_OK, _TRANSLATOR_IMPORT_ERROR
+    if _TRANSLATOR_CHECKED and not force:
+        return _TRANSLATOR_OK
+    _TRANSLATOR_CHECKED = True
+    try:
+        from deep_translator import GoogleTranslator  # type: ignore
+
+        GoogleTranslator(source="ja", target="en").translate("テスト")
+        _TRANSLATOR_OK = True
+        _TRANSLATOR_IMPORT_ERROR = None
+    except Exception as e:
+        _TRANSLATOR_OK = False
+        _TRANSLATOR_IMPORT_ERROR = f"{type(e).__name__}: {e}"
+    return _TRANSLATOR_OK
 
 
 def load_matrix(path: str) -> dict:
@@ -643,6 +748,171 @@ def ask_insert_index(parent, max_index: int, title: str = "位置指定で挿入
 
 
 # ---------------------------------------------------------------------------
+# 翻訳用ダイアログ（進捗バー / 言語・出力先の選択）
+# ---------------------------------------------------------------------------
+
+class ProgressDialog(tk.Toplevel):
+    """バックグラウンドスレッドで動く処理の進捗（件数・％）を表示するモーダル。
+    キャンセルボタンを押すと self.cancelled が True になる（実際の停止は
+    呼び出し側が threading.Event 等でスレッドに伝える）。"""
+
+    def __init__(self, parent, title: str, total: int):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=C["bg"])
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+        self.geometry("440x170")
+        self.cancelled = False
+
+        self.label = tk.Label(
+            self, text="準備中…", bg=C["bg"], fg=C["text"], font=("Segoe UI", 10), wraplength=400, justify=tk.LEFT
+        )
+        self.label.pack(pady=(20, 10), padx=20, fill=tk.X)
+
+        self.pbar = ttk.Progressbar(self, orient=tk.HORIZONTAL, length=380, mode="determinate", maximum=max(total, 1))
+        self.pbar.pack(pady=4)
+
+        self.pct_label = tk.Label(self, text=f"0%  (0/{total})", bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 9))
+        self.pct_label.pack(pady=(2, 0))
+
+        self.cancel_btn = ttk.Button(self, text="キャンセル", command=self._on_cancel, style="Ghost.TButton")
+        self.cancel_btn.pack(pady=(14, 0))
+
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def update_progress(self, done: int, total: int, text: str = "") -> None:
+        total = max(total, 1)
+        pct = int(done / total * 100)
+        self.pbar["maximum"] = total
+        self.pbar["value"] = done
+        self.pct_label.config(text=f"{pct}%  ({done}/{total})")
+        if text:
+            self.label.config(text=text)
+
+    def _on_cancel(self) -> None:
+        self.cancelled = True
+        self.cancel_btn.config(state=tk.DISABLED, text="キャンセル中…")
+        self.label.config(text="キャンセル中… 現在の処理が終わったら停止します")
+
+
+class TranslateOptionsDialog(tk.Toplevel):
+    """翻訳元の行・翻訳先の言語・出力先の行・追記/置換 を選ぶダイアログ。
+    OK で self.result に dict をセットして閉じる（キャンセル時は None）。"""
+
+    def __init__(self, parent, rows: List[str], current_row: str, current_col: str, current_field: str):
+        super().__init__(parent)
+        self.title("翻訳")
+        self.configure(bg=C["bg"])
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("480x460")
+        self.resizable(False, False)
+        self.result: Optional[dict] = None
+        self._rows = rows
+
+        pad = dict(padx=18, pady=(12, 0))
+
+        tk.Label(
+            self,
+            text=f"対象: 列「{current_col}」 / フィールド「{current_field}」",
+            bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 9),
+        ).pack(anchor=tk.W, **pad)
+
+        tk.Label(self, text="元の行（翻訳元）", bg=C["bg"], fg=C["text"], font=("Segoe UI", 10)).pack(anchor=tk.W, **pad)
+        self.src_var = tk.StringVar(value=current_row)
+        src_combo = ttk.Combobox(self, textvariable=self.src_var, values=rows, state="readonly", width=32)
+        src_combo.pack(anchor=tk.W, padx=18, pady=(2, 0))
+        src_combo.bind("<<ComboboxSelected>>", lambda e: self._on_src_changed())
+
+        tk.Label(
+            self, text="元の言語コード（自動判定・変更可 / 'auto' で自動検出）",
+            bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 8),
+        ).pack(anchor=tk.W, **pad)
+        self.src_lang_var = tk.StringVar(value=guess_lang_code(current_row) or "ja")
+        tk.Entry(
+            self, textvariable=self.src_lang_var, width=14,
+            bg=C["input_bg"], fg=C["text"], insertbackground=C["text"], relief=tk.FLAT,
+            highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["accent"],
+            font=("Consolas", 10),
+        ).pack(anchor=tk.W, padx=18, pady=(2, 0))
+
+        tk.Label(self, text="翻訳先の言語", bg=C["bg"], fg=C["text"], font=("Segoe UI", 10)).pack(anchor=tk.W, **pad)
+        self.lang_var = tk.StringVar(value=TRANSLATE_LANGUAGES[0][0])
+        lang_combo = ttk.Combobox(
+            self, textvariable=self.lang_var, values=[lbl for lbl, _ in TRANSLATE_LANGUAGES],
+            state="readonly", width=32,
+        )
+        lang_combo.pack(anchor=tk.W, padx=18, pady=(2, 0))
+        lang_combo.bind("<<ComboboxSelected>>", lambda e: self._on_lang_changed())
+
+        tk.Label(self, text="出力先の行（既存を選ぶ / 新しい名前を直接入力）", bg=C["bg"], fg=C["text"], font=("Segoe UI", 10)).pack(
+            anchor=tk.W, **pad
+        )
+        self.dst_var = tk.StringVar()
+        self.dst_combo = ttk.Combobox(self, textvariable=self.dst_var, values=rows, width=32)
+        self.dst_combo.pack(anchor=tk.W, padx=18, pady=(2, 0))
+
+        mode_frame = tk.Frame(self, bg=C["bg"])
+        mode_frame.pack(anchor=tk.W, padx=18, pady=(14, 0))
+        self.mode_var = tk.StringVar(value="append")
+        ttk.Radiobutton(mode_frame, text="末尾に追記", value="append", variable=self.mode_var).pack(side=tk.LEFT)
+        ttk.Radiobutton(mode_frame, text="全体を置換", value="replace", variable=self.mode_var).pack(side=tk.LEFT, padx=(16, 0))
+
+        tk.Label(
+            self, text="※ Text Animator タグ（<...> / {...}）は翻訳対象から保護されます",
+            bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 8),
+        ).pack(anchor=tk.W, padx=18, pady=(10, 0))
+
+        btn_row = tk.Frame(self, bg=C["bg"])
+        btn_row.pack(pady=18)
+        ttk.Button(btn_row, text="翻訳開始", command=self._ok, style="Accent.TButton").pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_row, text="キャンセル", command=self.destroy, style="Ghost.TButton").pack(side=tk.LEFT, padx=6)
+
+        self._on_lang_changed()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _selected_lang_code(self) -> str:
+        label = self.lang_var.get()
+        for lbl, code in TRANSLATE_LANGUAGES:
+            if lbl == label:
+                return code
+        return "en"
+
+    def _on_src_changed(self) -> None:
+        code = guess_lang_code(self.src_var.get())
+        if code:
+            self.src_lang_var.set(code)
+
+    def _on_lang_changed(self) -> None:
+        code = self._selected_lang_code()
+        existing = next((r for r in self._rows if guess_lang_code(r) == code and r != self.src_var.get()), None)
+        self.dst_var.set(existing or suggest_row_name(code))
+
+    def _ok(self) -> None:
+        src_row = self.src_var.get().strip()
+        dst_row = self.dst_var.get().strip()
+        if not src_row:
+            messagebox.showerror("エラー", "元の行を選択してください", parent=self)
+            return
+        if not dst_row:
+            messagebox.showerror("エラー", "出力先の行を入力してください", parent=self)
+            return
+        if dst_row == src_row:
+            messagebox.showerror("エラー", "出力先の行は元の行と別にしてください", parent=self)
+            return
+        self.result = {
+            "src_row": src_row,
+            "src_lang": self.src_lang_var.get().strip() or "auto",
+            "dst_row": dst_row,
+            "dst_lang": self._selected_lang_code(),
+            "mode": self.mode_var.get(),
+        }
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
 # メインウィンドウ
 # ---------------------------------------------------------------------------
 
@@ -838,7 +1108,7 @@ class ScenarioMatrixEditor(tk.Tk):
         tk.Frame(tools, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
         self._btn(tools, "テキスト取込…", self.import_text).pack(side=tk.LEFT, padx=2)
         self._btn(tools, "テキスト出力…", self.export_text).pack(side=tk.LEFT, padx=2)
-        self._btn(tools, "Ja→En 翻訳追記", self.translate_ja_to_en).pack(side=tk.LEFT, padx=2)
+        self._btn(tools, "翻訳…", self.open_translate_dialog).pack(side=tk.LEFT, padx=2)
         self._btn(tools, "全文プレビュー", self.preview_all).pack(side=tk.LEFT, padx=2)
         tk.Frame(tools, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
         self._btn(tools, "タグ定義の編集…", self.open_tag_editor, accent=True).pack(side=tk.LEFT, padx=2)
@@ -1517,46 +1787,146 @@ class ScenarioMatrixEditor(tk.Tk):
         txt.configure(state=tk.DISABLED)
 
     # -- 翻訳 ---------------------------------------------------------------
-    def translate_ja_to_en(self) -> None:
+    def open_translate_dialog(self) -> None:
+        """翻訳ダイアログを開く。実行はバックグラウンドスレッドで行い、
+        進捗バー（％表示）とキャンセルボタン付きのダイアログを出す。"""
         if not self.matrix:
             return
+        if not ensure_translator_available():
+            messagebox.showerror(
+                "翻訳エンジンが利用できません",
+                "翻訳機能を使うには 'deep-translator' パッケージと、\n"
+                "インターネット経由でのHTTPS通信が必要です。\n\n"
+                f"詳細: {_TRANSLATOR_IMPORT_ERROR}\n\n"
+                "exe化している場合によくある原因:\n"
+                "  ・PyInstaller のビルドに deep_translator が同梱されていない\n"
+                "    （--hidden-import=deep_translator や --collect-all=deep_translator を検討）\n"
+                "  ・certifi の証明書ファイル (cacert.pem) が同梱されていない\n"
+                "  ・実行環境から translate.google.com へ到達できない\n"
+                "    （社内ネットワークやプロキシ設定の可能性）",
+            )
+            return
+
+        row, col, field = self._current_keys()
+        if not row or not col:
+            messagebox.showwarning("翻訳", "行と列を選択してください")
+            return
+
+        # 現在編集中のセルの内容を確実に反映してから翻訳元を読む
+        self._flush_loaded_cell(mark_dirty=True)
+
         rows = list_row_keys(self.matrix)
-        ja_key = next((r for r in rows if normalize_row_key(r).lower() in ("ja", "jp", "japanese")), None)
-        en_key = next((r for r in rows if normalize_row_key(r).lower() in ("en", "eng", "english")), None)
-        if not ja_key:
-            messagebox.showwarning("翻訳", "日本語行（Ja）が見つかりません")
+        dlg = TranslateOptionsDialog(self, rows, row, col, field)
+        self.wait_window(dlg)
+        opts = dlg.result
+        if not opts:
             return
-        if not en_key:
-            en_key = "En"
-            self.matrix.setdefault("data", {})[en_key] = {}
-            self._refresh_combos({"row": self.row_var.get(), "col": self.col_var.get(), "field": self.field_var.get()})
-        col = self.col_var.get()
-        field = self.field_var.get() or "texts"
-        if not col:
-            messagebox.showwarning("翻訳", "列を選択してください")
+
+        src_list = get_cell_list(self.matrix, opts["src_row"], col, field)
+        if not src_list:
+            messagebox.showinfo("翻訳", "元の行にテキストがありません")
             return
-        ja_list = get_cell_list(self.matrix, ja_key, col, field)
-        if not ja_list:
-            messagebox.showinfo("翻訳", "日本語側にテキストがありません")
-            return
+
         if not messagebox.askyesno(
             "翻訳確認",
-            f"{ja_key} → {en_key}\n列: {col}\n{len(ja_list)} 件を翻訳して英語配列へ追記します。\n"
+            f"{opts['src_row']} → {opts['dst_row']}\n"
+            f"列: {col}\n{len(src_list)} 件を翻訳します。\n"
             "（Text Animator タグは翻訳しません）\n続行しますか？",
         ):
             return
-        en_list = get_cell_list(self.matrix, en_key, col, field)
-        translated: List[str] = []
-        for i, src in enumerate(ja_list):
-            self._set_status(f"翻訳中… {i + 1}/{len(ja_list)}")
-            self.update_idletasks()
-            translated.append(try_translate(src, "ja", "en"))
-        en_list.extend(translated)
-        set_cell_list(self.matrix, en_key, col, en_list, field)
+
+        self._start_translation_job(opts, col, field, src_list)
+
+    def _start_translation_job(self, opts: dict, col: str, field: str, src_list: List[str]) -> None:
+        total = len(src_list)
+        progress = ProgressDialog(self, "翻訳中…", total)
+        q: "queue.Queue" = queue.Queue()
+        cancel_event = threading.Event()
+
+        def worker() -> None:
+            try:
+                from deep_translator import GoogleTranslator  # type: ignore
+
+                translator = GoogleTranslator(source=opts["src_lang"] or "auto", target=opts["dst_lang"])
+            except Exception as e:
+                q.put(("error", str(e)))
+                return
+            results: List[str] = []
+            fail_count = 0
+            for i, text in enumerate(src_list):
+                if cancel_event.is_set():
+                    q.put(("cancelled", i, results, fail_count))
+                    return
+                try:
+                    out = translate_text(text, translator)
+                except Exception as e:
+                    out = text
+                    fail_count += 1
+                    print(f"[translate] #{i} failed: {e}", file=sys.stderr)
+                results.append(out)
+                preview = text if len(text) <= 28 else text[:25] + "…"
+                q.put(("progress", i + 1, total, f"翻訳中… {preview}"))
+            q.put(("done", results, fail_count))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def poll() -> None:
+            try:
+                while True:
+                    item = q.get_nowait()
+                    kind = item[0]
+                    if kind == "progress":
+                        _, done, tot, text = item
+                        progress.update_progress(done, tot, text)
+                    elif kind == "error":
+                        progress.destroy()
+                        messagebox.showerror("翻訳エラー", item[1])
+                        return
+                    elif kind == "cancelled":
+                        _, done, results, fail_count = item
+                        progress.destroy()
+                        self._apply_translation_results(opts, col, field, results, fail_count, cancelled=True, done=done, total=total)
+                        return
+                    elif kind == "done":
+                        _, results, fail_count = item
+                        progress.destroy()
+                        self._apply_translation_results(opts, col, field, results, fail_count, cancelled=False, done=total, total=total)
+                        return
+            except queue.Empty:
+                pass
+            if progress.cancelled and not cancel_event.is_set():
+                cancel_event.set()
+            if progress.winfo_exists():
+                self.after(80, poll)
+
+        self.after(80, poll)
+
+    def _apply_translation_results(
+        self, opts: dict, col: str, field: str, results: List[str], fail_count: int,
+        cancelled: bool, done: int, total: int,
+    ) -> None:
+        dst_row = opts["dst_row"]
+        self.matrix.setdefault("data", {}).setdefault(dst_row, {})
+        existing = get_cell_list(self.matrix, dst_row, col, field)
+        merged = list(results) if opts["mode"] == "replace" else existing + results
+        set_cell_list(self.matrix, dst_row, col, merged, field)
         self._dirty = True
-        self.row_var.set(en_key)
-        self._reload_list()
-        self._set_status(f"翻訳完了: {len(translated)} 件を {en_key} に追記")
+        self.row_var.set(dst_row)
+        self._refresh_combos({"row": dst_row, "col": col, "field": field})
+
+        msg = f"翻訳完了: {done}/{total} 件を {dst_row} に反映"
+        if fail_count:
+            msg += f"（失敗 {fail_count} 件は元の文言のまま）"
+        if cancelled:
+            msg += "（キャンセル：途中まで反映）"
+        self._set_status(msg)
+        if fail_count and not cancelled:
+            messagebox.showwarning(
+                "翻訳",
+                f"{fail_count} 件は翻訳に失敗し、元のテキストのまま反映されました。\n"
+                "ネットワーク状況や文字数制限などをご確認ください。",
+            )
+
 
     # -- タグ定義 -----------------------------------------------------------
     def open_tag_editor(self) -> None:
