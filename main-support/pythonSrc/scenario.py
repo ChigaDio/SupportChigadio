@@ -1460,13 +1460,13 @@ def get_type_lists():
     class_id_dir = os.path.join(DATA_DIR, 'class_data_id')
     enum_list = json.load(open(os.path.join(enum_dir, 'enum_list.json'))) if os.path.exists(os.path.join(enum_dir, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(class_dir, 'class_list.json'))) if os.path.exists(os.path.join(class_dir, 'class_list.json')) else []
-    class_id_list = json.load(open(os.path.join(class_id_dir, 'class_data_id_list.json'))) if os.path.exists(os.path.join(class_id_dir, 'class_data_id_list.json')) else []
+    class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'), encoding='utf-8')) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
     return (
         basic_types,
         unity_types,
         [e.get('name') for e in enum_list],
         [c.get('name') for c in class_list],
-        [c.get('name') for c in class_id_list]
+        [c.get('name') for c in class_data_id_list]
     )
 
 # CustomClassData のフィールド一覧(name.customclass.json由来)を、role-form-schema と
@@ -1485,7 +1485,7 @@ def _build_custom_class_subfields(fields, custom_info, depth, max_depth):
             "description": f.get('description', ''),
             "type": f['type'],
         }
-        if f['type'] in ('bit', 'color', 'bezier', 'dictionary'):
+        if f['type'] in ('bit', 'color', 'bezier', 'dictionary', 'voice_ref', 'text_list_index'):
             sub['options'] = f.get('options', {})
         elif f['type'] in custom_class_list:
             sub['subFields'] = _build_custom_class_subfields(
@@ -1595,7 +1595,9 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         # VoiceLineロールでのみ使う。フロント(BaseRoleInputForm.js)側で、
         # そのサブイベントの物語設定のvoice_series_idから絞り込んだSoundID一覧を
         # 選ぶドロップダウンとして特別描画する。
-        if var_type in ('bit', 'color', 'bezier', 'dictionary', 'voice_ref'):
+        # text_list_index: ScenarioText Matrix の List インデックス(int)。
+        # options.matrixName / fieldName / previewLanguage で対象セルを指定。
+        if var_type in ('bit', 'color', 'bezier', 'dictionary', 'voice_ref', 'text_list_index'):
             field['type'] = var_type
             field['options'] = var.get('options', {})
 

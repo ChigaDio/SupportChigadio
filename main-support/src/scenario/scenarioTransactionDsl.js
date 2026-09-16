@@ -179,7 +179,11 @@ function tokensToSourceText(tokens) {
   return { from, to };
 }
 
-const NUMERIC_TYPES = new Set(['int', 'uint', 'short', 'long', 'byte']);
+// text_list_index は「ScenarioText Matrix の List<string> の何番目か」を指す
+// 特殊型だが、保存される値も送られるバイナリも単なる int（-1 = 未選択）。
+// GUI側(BaseRoleInputForm.js)だけが専用のプルダウンを出しているので、
+// DSL側では素の整数として読み書きできれば十分。
+const NUMERIC_TYPES = new Set(['int', 'uint', 'short', 'long', 'byte', 'text_list_index']);
 const FLOAT_TYPES = new Set(['float', 'double', 'decimal']);
 const VECTOR_SIZES = { vector2: 2, vector3: 3, vector4: 4 };
 const VECTOR_FIELD_NAMES = { vector2: ['x', 'y'], vector3: ['x', 'y', 'z'], vector4: ['x', 'y', 'z', 'w'] };
@@ -546,7 +550,14 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
   const tok = valueTokens[0];
 
   if (NUMERIC_TYPES.has(baseLower)) {
-    if (tok.type !== 'NUMBER') return { value: undefined, error: `整数を指定してください` };
+    if (tok.type !== 'NUMBER') {
+      return {
+        value: undefined,
+        error: baseLower === 'text_list_index'
+          ? `テキストのインデックス(整数)を指定してください（-1 = 未選択）`
+          : `整数を指定してください`,
+      };
+    }
     return { value: Math.trunc(Number(tok.value)), error: null };
   }
   if (FLOAT_TYPES.has(baseLower)) {
@@ -661,7 +672,8 @@ function serializeValue(value, fieldType, subFields, classDataSchemas) {
     return `[${arr.map((v) => serializeValue(v, baseType, undefined, classDataSchemas)).join(', ')}]`;
   }
   if (NUMERIC_TYPES.has(baseLower) || FLOAT_TYPES.has(baseLower)) {
-    return String(value ?? 0);
+    // text_list_index の未設定は 0 ではなく -1（未選択）が正しい既定値。
+    return String(value ?? (baseLower === 'text_list_index' ? -1 : 0));
   }
   if (baseLower === 'bool') {
     return value ? 'true' : 'false';

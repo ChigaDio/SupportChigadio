@@ -2601,9 +2601,99 @@ namespace GameCore.Enums
             f.write(code_str)
 
 
+# ============================================================
+# Language テーブル (class_data_id)
+# 多言語対応の基準テーブル。Matrix の RowId や Role の言語選択で参照する。
+# columns に string 型の name を持ち、表示名（日本語 / English 等）を入れる。
+# ============================================================
+LANGUAGE_TABLE_NAME = 'Language'
+
+
+def ensure_language_table():
+    """Language class_data_id が無ければ作成する。
+    - enum_property: Ja / En / Zh など識別子
+    - columns.name (string): 表示名（日本語 / English / 中文）
+    既存がある場合は columns に name が無ければ追加するだけ（行データは極力触らない）。
+    """
+    class_data_id_dir = os.path.join(DATA_DIR, CLASS_DATA_ID)
+    os.makedirs(class_data_id_dir, exist_ok=True)
+    list_path = os.path.join(class_data_id_dir, 'class_data_id_list.json')
+    table_dir = os.path.join(class_data_id_dir, LANGUAGE_TABLE_NAME)
+    table_path = os.path.join(table_dir, f'{LANGUAGE_TABLE_NAME}.json')
+
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            id_list = json.load(f)
+        if not isinstance(id_list, list):
+            id_list = []
+    except (FileNotFoundError, json.JSONDecodeError):
+        id_list = []
+
+    if not any(item.get('name') == LANGUAGE_TABLE_NAME for item in id_list):
+        next_id = max([item.get('id', 0) for item in id_list], default=0) + 1
+        id_list.append({
+            'id': next_id,
+            'name': LANGUAGE_TABLE_NAME,
+            'description': '多言語対応用ランゲージ定義（表示名は name カラム）',
+            'tag': None,
+        })
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(id_list, f, ensure_ascii=False, indent=2)
+        logger.info(f'ClassDataID list に {LANGUAGE_TABLE_NAME} を登録しました')
+
+    name_column = {
+        'name': 'name',
+        'type': 'string',
+        'arraySize': 0,
+        'description': '表示名（日本語 / English など）',
+    }
+
+    default_rows = [
+        {'id': 1, 'enum_property': 'Ja', 'description': '日本語', 'name': '日本語'},
+        {'id': 2, 'enum_property': 'En', 'description': 'English', 'name': 'English'},
+        {'id': 3, 'enum_property': 'Zh', 'description': '中文', 'name': '中文'},
+    ]
+
+    if not os.path.isfile(table_path):
+        os.makedirs(table_dir, exist_ok=True)
+        table_data = {
+            'columns': [name_column],
+            'rows': default_rows,
+        }
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f'{LANGUAGE_TABLE_NAME} テーブルを新規作成しました（name カラム + 初期行）')
+        return True
+
+    try:
+        with open(table_path, 'r', encoding='utf-8') as f:
+            table_data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f'{LANGUAGE_TABLE_NAME} 読み込み失敗: {e}')
+        return False
+
+    columns = table_data.get('columns') or []
+    if not any(c.get('name') == 'name' for c in columns):
+        columns.append(name_column)
+        table_data['columns'] = columns
+        for row in table_data.get('rows') or []:
+            if 'name' not in row:
+                row['name'] = row.get('description') or row.get('enum_property') or ''
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f'{LANGUAGE_TABLE_NAME} に name カラムを追加しました')
+        return True
+
+    return False
+
+
 def register(app, data_dir):
     """app.py から呼び出し、DATA_DIR を設定・ボイラープレート生成した上でルートを登録する。"""
     global DATA_DIR
     DATA_DIR = data_dir
     generate_base(data_dir)
+    try:
+        ensure_language_table()
+    except Exception as e:
+        logger.error(f'ensure_language_table 失敗: {e}')
     app.register_blueprint(bp)

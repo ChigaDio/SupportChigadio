@@ -2463,9 +2463,94 @@ namespace GameCore.Tables
             f.write(code_str)
 
 
+# ============================================================
+# ScenarioText Matrix
+# Col = ScenarioEvent（シナリオ/イベント識別）, Row = Language
+# Cell.texts = List<string>（arraySize=-1）
+# ============================================================
+SCENARIO_TEXT_MATRIX_NAME = 'ScenarioText'
+
+
+def ensure_scenario_text_matrix():
+    """ScenarioText Matrix が無ければ作成する。
+    rowId=Language, colId=ScenarioEvent, fields=[{name:texts, type:string, arraySize:-1}]
+    """
+    matrix_root = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    os.makedirs(matrix_root, exist_ok=True)
+    list_path = os.path.join(matrix_root, 'class_data_matrix_id_list.json')
+    table_dir = os.path.join(matrix_root, SCENARIO_TEXT_MATRIX_NAME)
+    table_path = os.path.join(table_dir, f'{SCENARIO_TEXT_MATRIX_NAME}.json')
+
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            id_list = json.load(f)
+        if not isinstance(id_list, list):
+            id_list = []
+    except (FileNotFoundError, json.JSONDecodeError):
+        id_list = []
+
+    if not any(item.get('name') == SCENARIO_TEXT_MATRIX_NAME for item in id_list):
+        next_id = max([item.get('id', 0) for item in id_list], default=0) + 1
+        id_list.append({
+            'id': next_id,
+            'name': SCENARIO_TEXT_MATRIX_NAME,
+            'description': 'シナリオ×言語のテキストリスト（Role の text_list_index から参照）',
+            'rowId': 'Language',
+            'colId': 'ScenarioEvent',
+            'tag': None,
+        })
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(id_list, f, ensure_ascii=False, indent=2)
+        logger.info(f'Matrix list に {SCENARIO_TEXT_MATRIX_NAME} を登録しました')
+
+    texts_field = {
+        'name': 'texts',
+        'type': 'string',
+        'arraySize': -1,
+        'description': 'そのシナリオ×言語のテキスト一覧（インデックスで参照）',
+        'options': {},
+    }
+
+    if not os.path.isfile(table_path):
+        os.makedirs(table_dir, exist_ok=True)
+        table_data = {
+            'name': SCENARIO_TEXT_MATRIX_NAME,
+            'rowId': 'Language',
+            'colId': 'ScenarioEvent',
+            'fields': [texts_field],
+            'data': {},
+        }
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f'{SCENARIO_TEXT_MATRIX_NAME} Matrix を新規作成しました')
+        return True
+
+    try:
+        with open(table_path, 'r', encoding='utf-8') as f:
+            table_data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f'{SCENARIO_TEXT_MATRIX_NAME} 読み込み失敗: {e}')
+        return False
+
+    fields = table_data.get('fields') or []
+    if not any(f.get('name') == 'texts' for f in fields):
+        fields.append(texts_field)
+        table_data['fields'] = fields
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f'{SCENARIO_TEXT_MATRIX_NAME} に texts フィールドを追加しました')
+        return True
+
+    return False
+
+
 def register(app, data_dir):
     """app.py から呼び出し、DATA_DIR を設定・ボイラープレート生成した上でルートを登録する。"""
     global DATA_DIR
     DATA_DIR = data_dir
     generate_base(data_dir)
+    try:
+        ensure_scenario_text_matrix()
+    except Exception as e:
+        logger.error(f'ensure_scenario_text_matrix 失敗: {e}')
     app.register_blueprint(bp)

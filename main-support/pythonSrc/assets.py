@@ -10,6 +10,427 @@ import shutil
 import uuid
 from collections import defaultdict
 
+
+# ===========================================================================
+# Enum名ヘルパー（IDID二重付与防止）
+# ===========================================================================
+def _cs_enum_type_name(base: str) -> str:
+    """末尾にIDを1つだけ付ける。IDIDになったらIDに畳む。"""
+    if not base:
+        return "ID"
+    name = base if base.endswith("ID") else (base + "ID")
+    while "IDID" in name:
+        name = name.replace("IDID", "ID")
+    return name
+
+def _cs_enum_file_name(base: str) -> str:
+    return _cs_enum_type_name(base) + ".cs"
+
+def _cs_enum_base_name(base: str) -> str:
+    t = _cs_enum_type_name(base)
+    return t[:-2] if t.endswith("ID") else t
+
+# ===========================================================================
+# 任意深度ネスト（nests ツリー）
+# groups[G] = { items, subgroups, nests: { Name: { nests: {...} } } }
+# item.nest_path = ["Test", "AAA"]
+# ===========================================================================
+def _empty_nest_node():
+    return {"nests": {}}
+
+def _ensure_nests_root(group_value: dict) -> dict:
+    if not isinstance(group_value, dict):
+        return {"items": [], "subgroups": [], "nests": {}}
+    group_value.setdefault("items", [])
+    group_value.setdefault("subgroups", [])
+    if "nests" not in group_value or not isinstance(group_value.get("nests"), dict):
+        group_value["nests"] = {}
+    for sg in list(group_value.get("subgroups", [])):
+        if sg and sg not in group_value["nests"]:
+            group_value["nests"][sg] = _empty_nest_node()
+    for key in list(group_value["nests"].keys()):
+        if key not in group_value["subgroups"]:
+            group_value["subgroups"].append(key)
+    for item in group_value.get("items", []):
+        if not item.get("nest_path"):
+            sg = item.get("subgroup")
+            item["nest_path"] = [sg] if sg else []
+    return group_value
+
+def _get_nest_node(group_value: dict, path: list):
+    if not path:
+        return group_value
+    children = group_value.get("nests", {})
+    node = None
+    for name in path:
+        if name not in children:
+            return None
+        node = children[name]
+        children = node.get("nests", {}) if isinstance(node, dict) else {}
+    return node
+
+def _ensure_nest_path(group_value: dict, path: list) -> dict:
+    _ensure_nests_root(group_value)
+    children = group_value["nests"]
+    node = group_value
+    for i, name in enumerate(path):
+        if name not in children:
+            children[name] = _empty_nest_node()
+        node = children[name]
+        children = node.setdefault("nests", {})
+        if i == 0 and name not in group_value["subgroups"]:
+            group_value["subgroups"].append(name)
+    return node
+
+def add_nest(data, group_name: str, parent_path, nest_name: str):
+    if group_name not in data["groups"]:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    if not nest_name or not str(nest_name).strip():
+        raise Exception("ネスト名を入力してください。")
+    nest_name = str(nest_name).strip()
+    if "/" in nest_name or "\\" in nest_name:
+        raise Exception("ネスト名に / は使えません。階層はUIで追加してください。")
+    parent_path = list(parent_path or [])
+    group_value = _ensure_nests_root(data["groups"][group_name])
+    parent = _get_nest_node(group_value, parent_path)
+    if parent is None:
+        raise Exception(f"親パス {parent_path} が見つかりません。")
+    children = group_value["nests"] if not parent_path else parent.setdefault("nests", {})
+    if nest_name in children:
+        raise Exception(f"ネスト '{nest_name}' は既に存在します。")
+    children[nest_name] = _empty_nest_node()
+    if not parent_path and nest_name not in group_value["subgroups"]:
+        group_value["subgroups"].append(nest_name)
+    return data
+
+def delete_nest(data, group_name: str, path):
+    if group_name not in data["groups"]:
+        return data
+    path = list(path or [])
+    if not path:
+        raise Exception("削除するネストパスが空です。")
+    group_value = _ensure_nests_root(data["groups"][group_name])
+    parent_path, name = path[:-1], path[-1]
+    parent = _get_nest_node(group_value, parent_path)
+    if parent is None:
+        return data
+    children = group_value["nests"] if not parent_path else parent.get("nests", {})
+    if name in children:
+        del children[name]
+    if not parent_path and name in group_value.get("subgroups", []):
+        group_value["subgroups"].remove(name)
+    for item in group_value.get("items", []):
+        np = list(item.get("nest_path") or [])
+        if len(np) >= len(path) and np[:len(path)] == path:
+            item["nest_path"] = []
+            item["subgroup"] = None
+        elif item.get("subgroup") == name and not parent_path:
+            item["subgroup"] = None
+            item["nest_path"] = []
+    return data
+
+def rename_nest(data, group_name: str, path, new_name: str):
+    if group_name not in data["groups"]:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    path = list(path or [])
+    if not path:
+        raise Exception("リネーム対象パスが空です。")
+    if not new_name or not str(new_name).strip():
+        raise Exception("新しい名前を入力してください。")
+    new_name = str(new_name).strip()
+    if "/" in new_name or "\\" in new_name:
+        raise Exception("ネスト名に / は使えません。")
+    group_value = _ensure_nests_root(data["groups"][group_name])
+    parent_path, old_name = path[:-1], path[-1]
+    if old_name == new_name:
+        return data
+    parent = _get_nest_node(group_value, parent_path)
+    if parent is None:
+        raise Exception(f"親パス {parent_path} が見つかりません。")
+    children = group_value["nests"] if not parent_path else parent.get("nests", {})
+    if old_name not in children:
+        raise Exception(f"ネスト '{old_name}' が見つかりません。")
+    if new_name in children:
+        raise Exception(f"ネスト '{new_name}' は既に存在します。")
+    children[new_name] = children.pop(old_name)
+    if not parent_path:
+        subs = group_value.get("subgroups", [])
+        if old_name in subs:
+            subs[subs.index(old_name)] = new_name
+        elif new_name not in subs:
+            subs.append(new_name)
+    for item in group_value.get("items", []):
+        np = list(item.get("nest_path") or [])
+        if len(np) >= len(path) and np[:len(path)] == path:
+            np[len(path) - 1] = new_name
+            item["nest_path"] = np
+            item["subgroup"] = np[0] if np else None
+        elif not parent_path and item.get("subgroup") == old_name:
+            item["subgroup"] = new_name
+            if item.get("nest_path") and item["nest_path"][0] == old_name:
+                item["nest_path"][0] = new_name
+    return data
+
+def _item_nest_path(item) -> list:
+    if not isinstance(item, dict):
+        return []
+    np = item.get("nest_path")
+    if isinstance(np, list) and np:
+        return [str(x) for x in np if x]
+    sg = item.get("subgroup")
+    return [str(sg)] if sg else []
+
+def _nest_path_key(path: list) -> str:
+    return "_".join(path) if path else ""
+
+def _item_nest_key(item) -> str:
+    """アイテムが属するネストパスを "_" 連結したキー（グループ直下なら ""）。
+
+    item["subgroup"] は nest_path[0]（=第1階層）しか持っていないため、
+    2階層以上のネスト配下にあるアイテムのIDを組み立てる用途には使えない。
+    グローバルID（TextureID/SoundID など）の命名は必ずこちらを使う。
+    """
+    return _nest_path_key(_item_nest_path(item))
+
+def _asset_global_name(group_name: str, item: dict, name_field: str = 'name') -> str:
+    """グローバルID enum（TextureID など）に載せる項目名を、ネスト階層込みで組み立てる。
+
+    - グループ直下          : "{group}_{name}"
+    - ネスト配下（何階層でも）: "{group}_{nest1}_{nest2}..._{name}"
+
+    sync_subgroup_enum_files（{Class}Single.cs 生成）は元々この規則で
+    グローバルIDを参照していたのに対し、カテゴリ側（TextureEnums.cs や
+    バイナリ書き出し）は item["subgroup"]（第1階層のみ）で組み立てていたため、
+    2階層以上のネストに置いたアセットは「Single.cs が参照するIDが
+    TextureID に存在しない」状態になりコンパイルできなかった。
+    """
+    base = item.get(name_field) or item.get('name') or item.get('class_name', '')
+    key = _item_nest_key(item)
+    return f"{group_name}_{key}_{base}" if key else f"{group_name}_{base}"
+
+def _texture_detail_enum_base(group_name: str, nest_key: str) -> str:
+    """そのネスト位置の「詳細enum」のベース名（末尾のIDは付けない）。
+
+    generate_subgroup_enum_details_csharp が作る enum と同じ名前になるよう、
+    同じ式（_cs_enum_base_name）で組み立てる。
+    例: Texture_Scenario_Character_Alice
+    """
+    base = f"Texture_{group_name}_{nest_key}" if nest_key else f"Texture_{group_name}"
+    return _cs_enum_base_name(base)
+
+def _texture_is_sprite(texture: dict) -> bool:
+    """このテクスチャを Sprite として扱うかどうか。
+
+    バイナリには isSpriteRender をそのまま書き出しており、C#側は
+    TextureData.IsSpriteSheet としてこのフラグを見て Sprite でロードする。
+    GetSprite 系APIの生成もこのフラグに揃える（Texture2Dとしてしか
+    ロードしないアセットに GetSprite を生やしても必ず失敗するため）。
+    """
+    return bool(texture.get('isSpriteRender', False))
+
+def _walk_nests(nests: dict, prefix=None):
+    prefix = list(prefix or [])
+    nests = nests or {}
+    for name, node in nests.items():
+        path = prefix + [name]
+        children = node.get("nests", {}) if isinstance(node, dict) else {}
+        yield path, node, list(children.keys())
+        yield from _walk_nests(children, path)
+
+def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: str, namespace: str,
+                                 class_name: str = None, group_enum_name: str = None, id_enum_name: str = None):
+    """
+    {Category}NestGroup.cs を生成する。
+
+    Single / SubGroup と同じく「詳細 enum」を受け取る API にする。
+    TextureID を直接渡すラッパーは作らない（大本の ID と二重で意味がない）。
+
+    - ノードに直下アイテムがある → Texture_Scenario_DissolveID 等で Load / GetTexture
+    - ノードに子ネストがある → Texture_ScenarioID 等で LoadSubGroup
+    - どちらも無い空ノード → Path / ChildNames のみ
+    UniTask 版（LoadAsync / UnloadAsync / LoadSubGroupAsync）も生成する。
+    """
+    class_name = class_name or f"{category_name}Core"
+    group_enum_name = group_enum_name or f"{category_name}Group"
+    id_enum_name = id_enum_name or f"{category_name}ID"
+
+    lines = []
+    lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
+    lines.append("using System;")
+    lines.append("using System.Collections.Generic;")
+    lines.append("using GameCore.Enums;")
+    lines.append("using Cysharp.Threading.Tasks;")
+    lines.append("using UnityEngine;")
+    lines.append("")
+    lines.append(f"namespace {namespace}")
+    lines.append("{")
+    lines.append(f"    /// <summary>ネスト階層。API は Single/SubGroup の詳細 enum と同じ引数体系。</summary>")
+    lines.append(f"    public static class {category_name}NestGroup")
+    lines.append("    {")
+
+    def items_at_exact_path(group_value, path):
+        out = []
+        for item in group_value.get("items", []):
+            if _item_nest_path(item) == list(path):
+                out.append(item)
+        return out
+
+    def detail_enum_type(group_name, path):
+        # Texture_Scenario_Character_AliceID
+        if path:
+            base = f"{category_name}_{group_name}_{_nest_path_key(path)}"
+        else:
+            base = f"{category_name}_{group_name}"
+        return _cs_enum_type_name(base)
+
+    def child_list_enum_type(group_name, path):
+        # 子ネスト一覧 enum: path 空なら Texture_ScenarioID、深ければ Texture_Scenario_Character_AliceID 相当
+        # ただし path にアイテム用 detail と同名になりうる。
+        # 既存: トップの子一覧は Texture_ScenarioID、詳細は Texture_Scenario_Character_AliceID
+        # 中間ノードの「子ネスト一覧」: Texture_Scenario_Character_Alice に子がいれば
+        # generate_subgroup_enum_csharp で Texture_Scenario_Character_Alice_xxx になる
+        # トップ: category_group, 深い子一覧: category_group_pathjoined
+        if not path:
+            return _cs_enum_type_name(f"{category_name}_{group_name}")
+        return _cs_enum_type_name(f"{category_name}_{group_name}_{_nest_path_key(path)}")
+
+    def emit_item_apis(indent, group_name, path, items):
+        if not items:
+            return
+        ind = "    " * indent
+        det = detail_enum_type(group_name, path)
+        # Load / Unload (callback)
+        lines.append(f"{ind}public static void Load({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"{ind}    => {class_name}.Instance.LoadSingle(id, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static async UniTask LoadAsync({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"{ind}    => await {class_name}.Instance.LoadSingleAsync(id, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static void Unload({det} id, Action onCompleted = null)")
+        lines.append(f"{ind}    => {class_name}.Instance.UnloadSingle(id, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static async UniTask UnloadAsync({det} id, Action onCompleted = null)")
+        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSingleAsync(id, onCompleted);")
+        lines.append("")
+
+        if category_name == "Texture":
+            lines.append(f"{ind}public static Texture2D GetTexture({det} id)")
+            lines.append(f"{ind}    => {class_name}.Instance.GetTexture(id);")
+            lines.append("")
+            # GetSprite は「Sprite として登録されたテクスチャ」がこのノードに
+            # 1つでもあるときだけ生やす（Texture2Dとしてしかロードしない
+            # ノードに生やしても実行時に必ず失敗するため）。
+            if any(_texture_is_sprite(it) for it in items):
+                lines.append(f"{ind}public static Sprite GetSprite({det} id)")
+                lines.append(f"{ind}    => {class_name}.Instance.GetSprite(id);")
+                lines.append("")
+            # スプライトシート1枚ごとの「スプライト番号」enum
+            # （Texture_{group}_{ネストパス}_{テクスチャ名}ID）を引数に取る
+            # GetSprite を、そのテクスチャが置かれているネストノードの直下に生やす。
+            # 実体は TextureCore 側（{Class}Single.cs で生成される
+            # GetSprite<TEnum>(...) ラッパー）に委譲する。
+            detail_base = _cs_enum_base_name(det)
+            for it in items:
+                tex_name = it.get("name", "")
+                if not tex_name or not _texture_is_sprite(it) or not it.get("sprites"):
+                    continue
+                sprite_enum = _cs_enum_type_name(f"{detail_base}_{tex_name}")
+                lines.append(f"{ind}public static Sprite GetSprite({sprite_enum} spriteIndex, int fallbackIndex = -1)")
+                lines.append(f"{ind}    => {class_name}.Instance.GetSprite(spriteIndex, fallbackIndex);")
+                lines.append("")
+        elif category_name == "Sound":
+            lines.append(f"{ind}public static void PlaySE({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlaySE(id, volume, is3D, position, maxDistance);")
+            lines.append("")
+            lines.append(f"{ind}public static void PlaySE_System({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlaySE_System(id, volume, is3D, position, maxDistance);")
+            lines.append("")
+            lines.append(f"{ind}public static void PlayBGM({det} id, float volume = 1f, float fadeTime = 0f)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlayBGM(id, volume, fadeTime);")
+            lines.append("")
+            lines.append(f"{ind}public static void CrossFadeBGM({det} id, float volume = 1f, float fadeTime = 1f)")
+            lines.append(f"{ind}    => {class_name}.Instance.CrossFadeBGM(id, volume, fadeTime);")
+            lines.append("")
+            lines.append(f"{ind}public static void StopSE({det} id)")
+            lines.append(f"{ind}    => {class_name}.Instance.StopSE(id);")
+            lines.append("")
+            lines.append(f"{ind}public static void StopSE_System({det} id)")
+            lines.append(f"{ind}    => {class_name}.Instance.StopSE_System(id);")
+            lines.append("")
+        elif category_name == "Material":
+            lines.append(f"{ind}public static Material GetMaterial({det} id)")
+            lines.append(f"{ind}    => {class_name}.Instance.GetMaterial(id);")
+            lines.append("")
+        elif category_name == "GameObject":
+            lines.append(f"{ind}public static GameObject GetGameObject({det} id)")
+            lines.append(f"{ind}    => {class_name}.Instance.GetGameObject(id);")
+            lines.append("")
+
+    def emit_child_apis(indent, group_name, path, child_names):
+        if not child_names:
+            return
+        ind = "    " * indent
+        # 子ネスト一覧 enum（トップ: Texture_ScenarioID）
+        cen = child_list_enum_type(group_name, path)
+        lines.append(f"{ind}public static void LoadSubGroup({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"{ind}    => {class_name}.Instance.LoadSubGroup(subGroupId, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static async UniTask LoadSubGroupAsync({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"{ind}    => await {class_name}.Instance.LoadSubGroupAsync(subGroupId, groupCategory, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static void UnloadSubGroup({cen} subGroupId, Action onCompleted = null)")
+        lines.append(f"{ind}    => {class_name}.Instance.UnloadSubGroup(subGroupId, onCompleted);")
+        lines.append("")
+        lines.append(f"{ind}public static async UniTask UnloadSubGroupAsync({cen} subGroupId, Action onCompleted = null)")
+        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSubGroupAsync(subGroupId, onCompleted);")
+        lines.append("")
+
+    def emit_node(class_name_node, path, children, group_name, group_value, indent):
+        ind = "    " * indent
+        path_str = "/".join([group_name] + list(path)) if path else group_name
+        lines.append(f"{ind}public static class {class_name_node}")
+        lines.append(f"{ind}{{")
+        lines.append(f'{ind}    public const string Path = "{path_str}";')
+        child_names = list(children.keys()) if children else []
+        if child_names:
+            joined = ", ".join(f'"{c}"' for c in child_names)
+            lines.append(f"{ind}    public static readonly string[] ChildNames = new string[] {{ {joined} }};")
+        else:
+            lines.append(f"{ind}    public static readonly string[] ChildNames = System.Array.Empty<string>();")
+        lines.append("")
+
+        exact = items_at_exact_path(group_value, path)
+        emit_item_apis(indent + 1, group_name, path, exact)
+        emit_child_apis(indent + 1, group_name, path, child_names)
+
+        for cname, cnode in (children or {}).items():
+            child_path = list(path) + [cname]
+            emit_node(cname, child_path, cnode.get("nests", {}) if isinstance(cnode, dict) else {}, group_name, group_value, indent + 1)
+        lines.append(f"{ind}}}")
+        lines.append("")
+
+    for group_name, group_value in groups_dict.items():
+        if not isinstance(group_value, dict):
+            continue
+        gv = _ensure_nests_root(group_value)
+        emit_node(group_name, [], gv.get("nests", {}), group_name, gv, 2)
+
+    gnames = list(groups_dict.keys())
+    if gnames:
+        joined = ", ".join(f'"{g}"' for g in gnames)
+        lines.append(f"        public static readonly string[] GroupNames = new string[] {{ {joined} }};")
+    else:
+        lines.append("        public static readonly string[] GroupNames = System.Array.Empty<string>();")
+    lines.append("    }")
+    lines.append("}")
+    os.makedirs(data_dir, exist_ok=True)
+    out_path = os.path.join(data_dir, f"{category_name}NestGroup.cs")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return out_path
+
+
+
 def generate_enum_csharp(json_path, name, enum_dir):
     """
     指定されたJSONファイルからC#のenumコードを生成する
@@ -30,7 +451,9 @@ def generate_enum_csharp(json_path, name, enum_dir):
 
     # C# enumコードを生成
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {name}ID\n    {{\n"
+    type_name = _cs_enum_type_name(name)
+    base_name = _cs_enum_base_name(name)
+    cs_content += f"    public enum {type_name}\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for item in valid_data:
         cs_content += f"        {item['property']} = {item['value']}, // {item['description']}\n"
@@ -39,7 +462,7 @@ def generate_enum_csharp(json_path, name, enum_dir):
     cs_content += "    }\n}"
 
     # 出力パスを構築
-    cs_path = os.path.join(enum_dir, name, f"{name}ID.cs")
+    cs_path = os.path.join(enum_dir, base_name, f"{type_name}.cs")
     os.makedirs(os.path.dirname(cs_path), exist_ok=True)
 
     # C#ファイルを保存
@@ -50,18 +473,20 @@ def generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, s
     
     target_dir = os.path.join(enum_dir, f"{category_name}_{group_name}_{subgroup_name}")
     os.makedirs(target_dir, exist_ok=True)
-    enum_name = f"{category_name}_{group_name}_{subgroup_name}"
+    enum_base = f"{category_name}_{group_name}_{subgroup_name}" if subgroup_name else f"{category_name}_{group_name}"
+    enum_name = _cs_enum_base_name(enum_base)
+    type_name = _cs_enum_type_name(enum_base)
     
     #enum作成
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {enum_name}ID\n    {{\n"
+    cs_content += f"    public enum {type_name}\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, id in enumerate(items, start=1):
         cs_content += f"        {id.get("name", id.get("class_name",""))} = {i},\n"
     cs_content += f"        Max = {len(items) + 1}\n"
     cs_content += "    }\n}"
     
-    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    cs_path = os.path.join(target_dir, f"{type_name}.cs")
     with open(cs_path, 'w', encoding='utf-8') as f:
         f.write(cs_content)
     
@@ -103,12 +528,14 @@ def generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroup_
     Returns:
         str: 生成したenum名（{category_name}_{group_name}ID）
     """
-    target_dir = os.path.join(enum_dir, f"{category_name}_{group_name}")
+    enum_base = f"{category_name}_{group_name}"
+    enum_name = _cs_enum_base_name(enum_base)
+    type_name = _cs_enum_type_name(enum_base)
+    target_dir = os.path.join(enum_dir, enum_name)
     os.makedirs(target_dir, exist_ok=True)
 
-    enum_name = f"{category_name}_{group_name}"
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {enum_name}ID\n    {{\n"
+    cs_content += f"    public enum {type_name}\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, sub_name in enumerate(subgroup_names, start=1):
         cs_content += f"        {sub_name} = {i},\n"
@@ -183,25 +610,67 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
         single_lines.append("    {")
 
     for group_name, group_value in groups_dict.items():
-        subgroups = group_value.get('subgroups', []) if isinstance(group_value, dict) else []
-        if not subgroups:
+        if not isinstance(group_value, dict):
             continue
-        enum_name = generate_subgroup_enum_csharp(enum_dir, category_name, group_name, subgroups)
-        expected_files.add(f"{enum_name}.cs")
-        generated_names.append(enum_name)
-        #さらにサブグループごとのIDを作成
-        #まずはグループ分け
+        group_value = _ensure_nests_root(group_value)
+        groups_dict[group_name] = group_value
+        items = group_value.get("items", [])
+        nests = group_value.get("nests", {})
+        top_children = list(nests.keys())
+        if not top_children and not any(_item_nest_path(it) for it in items):
+            continue
+        if top_children:
+            enum_name = generate_subgroup_enum_csharp(enum_dir, category_name, group_name, top_children)
+            expected_files.add(_cs_enum_file_name(enum_name))
+            generated_names.append(enum_name)
+        for path, node, child_names in _walk_nests(nests):
+            if not child_names:
+                continue
+            joined = f"{group_name}_{_nest_path_key(path)}"
+            child_enum = generate_subgroup_enum_csharp(enum_dir, category_name, joined, child_names)
+            expected_files.add(_cs_enum_file_name(child_enum))
+            generated_names.append(child_enum)
         subgroup_dict = defaultdict(list)
-        for item in group_value["items"]:
-            subgroup_dict[item["subgroup"]].append(item)
-        # Group単位のSubGroupディスパッチャ生成用（Sound_NovelIDのようなSubGroup一覧enumの
-        # 値・intのどちらを受け取っても、対応するLoadSingle_{detail_enum_name}へ振り分ける）
+        # 各 nest_path ちょうどその位置のアイテム
+        for item in items:
+            path = _item_nest_path(item)
+            if not path:
+                # グループ直下アイテム → 空キー
+                subgroup_dict[""].append(item)
+                continue
+            subgroup_dict[_nest_path_key(path)].append(item)
+            # 祖先パスにも「子孫含む」集約用エントリを後で作る
+        # 祖先パス: 直下アイテム + 子孫アイテムをまとめた enum 用
+        # 例: path=["A","B"] のアイテムは key "A", "A_B" の両方の「配下」に含める（親の Single から Load できるように）
+        ancestor_dict = defaultdict(list)
+        for item in items:
+            path = _item_nest_path(item)
+            # グループ直下
+            ancestor_dict[""].append(item)
+            for i in range(len(path)):
+                ancestor_dict[_nest_path_key(path[:i+1])].append(item)
         group_dispatch_entries = []
-        for key, value in subgroup_dict.items():
+        # 詳細 enum は「ちょうどそのパス」のアイテムで生成
+        seen_detail = set()
+        for key, value in sorted(subgroup_dict.items(), key=lambda x: x[0]):
+            if not value:
+                continue
             detail_enum_name = generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, key, value)
             generated_names.append(detail_enum_name)
             group_dispatch_entries.append((key, detail_enum_name))
+            seen_detail.add(key)
+        # 親パス用: 子孫を含むテーブル（Single の global 紐づけ用）
+        # key が既に exact で生成済みなら、Single 側テーブル生成時に ancestor を使う
+        # group_value にキャッシュ
+        group_value["_nest_items_exact"] = {k: list(v) for k, v in subgroup_dict.items()}
+        group_value["_nest_items_all"] = {k: list(v) for k, v in ancestor_dict.items()}
 
+        for key, value in sorted(subgroup_dict.items(), key=lambda x: x[0]):
+            if not value:
+                continue
+            detail_enum_name = next((dn for k2, dn in group_dispatch_entries if k2 == key), None)
+            if not detail_enum_name:
+                detail_enum_name = generate_subgroup_enum_details_csharp(enum_dir, category_name, group_name, key, value)
             if generate_single_file:
                 table_name = f"_{detail_enum_name}To{id_enum_name}"
                 single_lines.append(f"        public static readonly {id_enum_name}[] {table_name} = new {id_enum_name}[]")
@@ -213,7 +682,11 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     # Sound/Texture/GameObjectは "{group}_{subgroup}_{name}"、
                     # Materialは "{group}_{class_name}"（SubGroup無し）。
                     if subgroup_in_id:
-                        global_name = f"{group_name}_{key}_{global_key}"
+                        # key は nest_path を "_" 連結したもの。空ならグループ直下
+                        if key:
+                            global_name = f"{group_name}_{key}_{global_key}"
+                        else:
+                            global_name = f"{group_name}_{global_key}"
                     else:
                         global_name = f"{group_name}_{global_key}"
                     single_lines.append(f"            {id_enum_name}.{global_name}, // {detail_enum_name}.{item.get("name",item.get("class_name",""))}")
@@ -302,6 +775,12 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            => GetGameObject({group_enum_name}.{group_name}, {table_name}[(int)id]);")
                     single_lines.append("")
                 elif "SoundCore" == class_name:
+                    single_lines.append(f"       public void PlaySE({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
+                    single_lines.append(f"            => PlaySE({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance);")
+                    single_lines.append("")
+                    single_lines.append(f"       public void PlaySE_System({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
+                    single_lines.append(f"            => PlaySE_System({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance);")
+                    single_lines.append("")
                     single_lines.append(f"       public void PlayBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 0f)")
                     single_lines.append(f"            => PlayBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
                     single_lines.append("")
@@ -315,27 +794,39 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 elif "TextureCore" == class_name:
                     single_lines.append(f"       public Texture2D GetTexture({detail_enum_name}ID id)")
                     single_lines.append(f"            => GetTexture({group_enum_name}.{group_name}, {table_name}[(int)id]);")
-                    single_lines.append("") 
-                    
-                    single_lines.append(f"       public Sprite GetSprite({detail_enum_name}ID id)")
-                    single_lines.append(f"            => GetSprite({group_enum_name}.{group_name}, {table_name}[(int)id]);")
-                    single_lines.append("") 
-                    for item in value:
-                        sprite_table_name = f"_{detail_enum_name}_{item["name"]}To{id_enum_name}"
-                        sprites = item.get("sprites",[])
-                        sprite_name = item.get("name","")
-                        
-                        
-                        if len(sprites) == 0 or sprite_name == "":
+                    single_lines.append("")
+
+                    # Sprite として登録されたテクスチャがこのネスト位置に1つでも
+                    # あるときだけ GetSprite を生やす（isSpriteRender=false の
+                    # ものしか無いノードに生やしても実行時に必ず失敗するため）。
+                    if any(_texture_is_sprite(it) for it in value):
+                        single_lines.append(f"       public Sprite GetSprite({detail_enum_name}ID id)")
+                        single_lines.append(f"            => GetSprite({group_enum_name}.{group_name}, {table_name}[(int)id]);")
+                        single_lines.append("")
+
+                    # スプライトシート1枚ごとの「スプライト番号」enumを引数に取る GetSprite。
+                    #
+                    # 対応するグローバルID（TextureID）は、以前
+                    #   TextureID.{group}_{テクスチャ名}
+                    # と直接組み立てていたため、ネスト配下のテクスチャでは
+                    # 実際のID（{group}_{ネストパス}_{テクスチャ名}）と食い違い、
+                    # 存在しないenumメンバを参照してコンパイルできなかった。
+                    # ここでは詳細enum→グローバルIDの変換テーブル {table_name} の
+                    # 該当インデックスから引くことで、ネストの深さに関係なく
+                    # 必ず正しいIDになるようにする（テーブルは先頭が None、
+                    # 以降が value の並び順なので index は 1 始まり）。
+                    for item_index, item in enumerate(value, start=1):
+                        sprite_name = item.get("name", "")
+                        sprites = item.get("sprites", []) or []
+                        if not sprite_name or not sprites or not _texture_is_sprite(item):
                             continue
 
-
-
-                        generic_name = f"{detail_enum_name}_{sprite_name}ID";
+                        generic_name = _cs_enum_type_name(f"{detail_enum_name}_{sprite_name}")
                         single_lines.append(f"       public Sprite GetSprite({generic_name} spriteIndex, int fallbackIndex = -1)")
-                        single_lines.append(f"            => GetSprite<{generic_name}>({group_enum_name}.{group_name}, {category_name}ID.{group_name}_{sprite_name},spriteIndex,fallbackIndex);")
+                        single_lines.append(f"            => GetSprite<{generic_name}>({group_enum_name}.{group_name}, {table_name}[{item_index}], spriteIndex, fallbackIndex);")
                         single_lines.append("")
-                        
+
+
                 # ==========================================================
                 # SoundObjectPool / ParticleObjectPool 用ラッパー
                 # ==========================================================
@@ -528,16 +1019,15 @@ def register_enum_names(enum_dir, names):
 
 
 def _migrate_group_value(value):
-    """
-    旧形式（アイテムのリストのみ）を新形式（items/subgroupsを持つdict）へ移行する
-    """
+    """旧形式を items/subgroups/nests 形式へ移行"""
     if isinstance(value, list):
-        return {'items': value, 'subgroups': []}
+        return _ensure_nests_root({'items': value, 'subgroups': [], 'nests': {}})
     if isinstance(value, dict):
         value.setdefault('items', [])
         value.setdefault('subgroups', [])
-        return value
-    return {'items': [], 'subgroups': []}
+        value.setdefault('nests', {})
+        return _ensure_nests_root(value)
+    return _ensure_nests_root({'items': [], 'subgroups': [], 'nests': {}})
 
 
 def migrate_groups_data(data):
@@ -552,34 +1042,51 @@ def migrate_groups_data(data):
 
 
 def add_subgroup_to_group(data, group_name, subgroup_name):
-    """
-    指定グループにSubGroup名を登録する（登録順がそのままSubGroup enumのID順になる）
-    """
-    if group_name not in data['groups']:
-        raise Exception(f"グループ '{group_name}' が見つかりません。")
-    if not subgroup_name:
-        raise Exception("SubGroup名を入力してください。")
-    group = data['groups'][group_name]
-    if subgroup_name not in group['subgroups']:
-        group['subgroups'].append(subgroup_name)
-    return data
+    """トップレベルネスト追加（深い階層は add_nest）"""
+    return add_nest(data, group_name, [], subgroup_name)
 
 
 def delete_subgroup_from_group(data, group_name, subgroup_name):
+    """トップレベルネスト削除"""
+    return delete_nest(data, group_name, [subgroup_name])
+
+
+def _normalize_nest_path_input(subgroup_name):
     """
-    指定グループからSubGroupを削除する。
-    そのSubGroupに属していたアイテムはグループ直下（SubGroup無し）に戻す
-    （アイテム自体は削除しない）。
+    add_xxx / edit_xxx に渡ってくる subgroup_name を nest_path（リスト）に正規化する。
+    None / 空文字 / 空リスト -> []
+    文字列（旧仕様の単一SubGroup名） -> [name]
+    リスト・タプル（ネストパス） -> [str(x), ...]
     """
-    if group_name not in data['groups']:
-        return data
-    group = data['groups'][group_name]
-    if subgroup_name in group['subgroups']:
-        group['subgroups'].remove(subgroup_name)
-    for item in group['items']:
-        if item.get('subgroup') == subgroup_name:
-            item['subgroup'] = None
-    return data
+    if not subgroup_name:
+        return []
+    if isinstance(subgroup_name, (list, tuple)):
+        return [str(x) for x in subgroup_name if x]
+    return [str(subgroup_name)]
+
+
+def _resolve_and_validate_nest_path(data, group_name, subgroup_name):
+    """
+    add_xxx / edit_xxx から呼ばれる共通のSubGroupバリデーション。
+
+    以前は `subgroup_name not in data['groups'][group_name]['subgroups']` という
+    トップレベルの一覧に対する単純な存在チェックだったため、任意深度ネスト対応後に
+    subgroup_name がネストパス（リスト）で渡ってくるようになると、リストが
+    文字列の一覧に含まれることはあり得ず（1階層のみの指定でも `["A"] != "A"` で
+    不一致になる）、常にSubGroupが見つからない扱いになってしまっていた。
+
+    ここでは subgroup_name が文字列（旧仕様）・リスト（ネストパス）のどちらで
+    渡されても対応し、`nests` ツリーを実際に辿って存在確認する。
+
+    戻り値: 正規化された nest_path（リスト。未指定の場合は空リスト）
+    """
+    nest_path = _normalize_nest_path_input(subgroup_name)
+    if not nest_path:
+        return []
+    group_value = _ensure_nests_root(data['groups'][group_name])
+    if _get_nest_node(group_value, nest_path) is None:
+        raise Exception(f"SubGroup '{'/'.join(nest_path)}' が見つかりません。先にSubGroupを作成してください。")
+    return nest_path
 
 
 def _subgroup_index_map(subgroup_names):
@@ -1414,13 +1921,30 @@ def delete_sound_subgroup(group_name, subgroup_name):
     delete_subgroup_from_group(data, group_name, subgroup_name)
     save_sound_data(data)
 
+
+def add_sound_nest(group_name, parent_path, nest_name):
+    data = load_sound_data()
+    add_nest(data, group_name, parent_path or [], nest_name)
+    save_sound_data(data)
+
+def delete_sound_nest(group_name, path):
+    data = load_sound_data()
+    delete_nest(data, group_name, path or [])
+    save_sound_data(data)
+
+def rename_sound_nest(group_name, path, new_name):
+    data = load_sound_data()
+    rename_nest(data, group_name, path or [], new_name)
+    save_sound_data(data)
+
 def add_sound(group_name, name, desc, volume, sound_type, subgroup_name=None):
     """
     サウンドをグループ（必要であればSubGroup）に追加
     """
     data = load_sound_data()
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -1430,6 +1954,8 @@ def add_sound(group_name, name, desc, volume, sound_type, subgroup_name=None):
     addr_path = get_addressable_path(file_path)
     if not addr_path:
         raise Exception("アドレス指定可能なパスを取得できませんでした。")
+    if nest_path:
+        _ensure_nest_path(data['groups'][group_name], nest_path)
     data['groups'][group_name]['items'].append({
         'name': name, 
         'desc': desc, 
@@ -1437,7 +1963,8 @@ def add_sound(group_name, name, desc, volume, sound_type, subgroup_name=None):
         'absolute_path': os.path.abspath(file_path),
         'volume': volume, 
         'type': sound_type,
-        'subgroup': subgroup_name or None
+        'subgroup': nest_path[0] if nest_path else None,
+        'nest_path': nest_path,
     })
     save_sound_data(data)
 
@@ -1459,8 +1986,7 @@ def edit_sound(group_name, index, name=None, desc=None, volume=None, sound_type=
     items = data['groups'][group_name]['items']
     if index < 0 or index >= len(items):
         raise Exception("対象のデータが見つかりません。")
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
 
     entry = items[index]
     if name is not None:
@@ -1471,7 +1997,8 @@ def edit_sound(group_name, index, name=None, desc=None, volume=None, sound_type=
         entry['volume'] = volume
     if sound_type is not None:
         entry['type'] = sound_type
-    entry['subgroup'] = subgroup_name or None
+    entry['subgroup'] = nest_path[0] if nest_path else None
+    entry['nest_path'] = nest_path
     save_sound_data(data)
 
 def reload_sound_file(group_name, index):
@@ -1645,10 +2172,13 @@ def generate_sound_csharp():
     group_enum_name="SoundGroup", id_enum_name="SoundID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
+    generate_nest_group_csharp("Sound", data['groups'], SOUND_DATA, "GameCore.Sound", class_name="SoundCore", group_enum_name="SoundGroup", id_enum_name="SoundID")
 
     # SoundCore.cs
     if not os.path.exists(os.path.join(SOUND_DATA, "SoundCore.cs")):
         code_str = """
+
+
 
 using System;
 using System.Collections.Generic;
@@ -2130,7 +2660,7 @@ namespace GameCore.Sound
             if (source == null) return;
 
             source.clip = clip;
-            source.volume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.seVolume;
+            source.volume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.seVolume;
             source.loop = false;
             source.spatialBlend = is3D ? 1f : 0f;
             source.maxDistance = maxDistance;
@@ -2147,6 +2677,30 @@ namespace GameCore.Sound
             {
                 ResetSource(source);
             }
+        }
+
+        public void PlaySE_System(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
+            => PlaySE_SystemAsync(group, id, volume, is3D, position, maxDistance).Forget();
+
+        private async UniTask PlaySE_SystemAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance)
+        {
+            var key = (group, id);
+            if (!clipCache.TryGetValue(key, out var clip) ||
+                !volumeCache.TryGetValue(key, out var baseVolume) ||
+                !typeCache.TryGetValue(key, out var type) || type != SoundType.SE)
+                return;
+            var source = GetPooledSourceFast();
+            if (source == null) return;
+            source.clip = clip;
+            source.volume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.se_system_volume;
+            source.loop = false;
+            source.spatialBlend = is3D ? 1f : 0f;
+            source.maxDistance = maxDistance;
+            if (is3D) source.transform.position = position;
+            source.Play();
+            try { await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken); }
+            catch (OperationCanceledException) { }
+            finally { ResetSource(source); }
         }
 
         private AudioSource GetPooledSourceFast()
@@ -2210,7 +2764,7 @@ namespace GameCore.Sound
 
             currentVoiceSource = source;
             source.clip = clip;
-            source.volume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.voiceVolume;
+            source.volume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.voiceVolume;
             source.loop = false;
             source.spatialBlend = 0f;
 
@@ -2270,7 +2824,7 @@ namespace GameCore.Sound
             bgmSource.volume = 0f;
             bgmSource.Play();
 
-            float targetVolume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+            float targetVolume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.bgmVolume;
             if (fadeTime > 0f)
                 await FadeInAsync(targetVolume, fadeTime);
             else
@@ -2297,7 +2851,7 @@ namespace GameCore.Sound
             crossFadeTempSource.Play();
 
             float startVolume = bgmSource.volume;
-            float targetVolume = baseVolume * volume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+            float targetVolume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.bgmVolume;
 
             float timer = 0f;
             while (timer < fadeTime)
@@ -2367,18 +2921,18 @@ namespace GameCore.Sound
         public void SetSystemBGMVolume()
         {
             if (bgmSource != null && bgmSource.isPlaying)
-                bgmSource.volume = bgmSource.volume / SaveManagerCore.instance.SystemSettings.bgmVolume * SaveManagerCore.instance.SystemSettings.bgmVolume;
+                bgmSource.volume = bgmSource.volume / SaveManagerCore.Instance.SystemSettings.bgmVolume * SaveManagerCore.Instance.SystemSettings.bgmVolume;
         }
 
         public void SetSystemSEVolume()
         {
-            float vol = SaveManagerCore.instance.SystemSettings.seVolume;
+            float vol = SaveManagerCore.Instance.SystemSettings.seVolume;
             foreach (var s in sePool) s.volume = vol;
         }
 
         public void SetSystemVoiceVolume()
         {
-            float vol = SaveManagerCore.instance.SystemSettings.voiceVolume;
+            float vol = SaveManagerCore.Instance.SystemSettings.voiceVolume;
             foreach (var s in voicePool) s.volume = vol;
         }
 
@@ -2405,6 +2959,10 @@ namespace GameCore.Sound
         }
     }
 }
+
+
+
+
 
 
 
@@ -3027,6 +3585,7 @@ namespace GameCore.Sound
             
     if not os.path.exists(os.path.join(SOUND_DATA,"SoundObjectPool.cs")):
         code_str = """
+
 //===================================================================
 // SoundObjectPool.cs 
 //==================================================================
@@ -3119,7 +3678,7 @@ namespace GameCore.Sound
             float distance = 0f,
             Action<SoundHandle> onCompleted = null)
         {
-            volume = (volume * SoundCore.Instance.GetSoundVolume(group, id)) * SaveManagerCore.instance.SystemSettings.seVolume;
+            volume = (volume * SoundCore.Instance.GetSoundVolume(group, id)) * SaveManagerCore.Instance.SystemSettings.seVolume;
             var pool = await Instance.GetOrCreateSEPool(group, id);
             if (pool == null) return default;
 
@@ -3133,7 +3692,7 @@ namespace GameCore.Sound
         public static async UniTask PlayBGM(int channel, SoundGroup group, SoundID id, float fadeIn = 1f, float volume = 1f)
         {
             if (channel < 0 || channel >= Instance.bgmChannels.Length) return;
-            volume = (volume * SoundCore.Instance.GetSoundVolume(group, id)) * SaveManagerCore.instance.SystemSettings.bgmVolume;
+            volume = (volume * SoundCore.Instance.GetSoundVolume(group, id)) * SaveManagerCore.Instance.SystemSettings.bgmVolume;
             await Instance.bgmChannels[channel].Play(group, id, fadeIn, volume, Instance.combinedToken);
         }
 
@@ -3558,6 +4117,7 @@ namespace GameCore.Sound
         public bool isDestroyed = false;
     }
 }
+
 """
         with open(os.path.join(SOUND_DATA,"SoundObjectPool.cs"),"w",encoding="utf-8") as f:
             f.write(code_str)
@@ -3600,6 +4160,7 @@ def generate_sound_core_subgroups(data):
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
     lines.append("using GameCore.Enums;")
+    lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
     lines.append("namespace GameCore.Sound")
     lines.append("{")
@@ -3624,8 +4185,14 @@ def generate_sound_core_subgroups(data):
         lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroup_{group_name}_Internal((int)subGroupId, category, onCompleted);")
         lines.append("")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted);")
+        lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
         lines.append(f"            => UnloadSubGroup_{group_name}_Internal((int)subGroupId, onCompleted);")
+        lines.append("")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, onCompleted);")
         lines.append("")
 
         # int版：同じくInternalへ振り分け
@@ -3765,13 +4332,30 @@ def delete_texture_subgroup(group_name, subgroup_name):
     delete_subgroup_from_group(data, group_name, subgroup_name)
     save_texture_data(data)
 
+
+def add_texture_nest(group_name, parent_path, nest_name):
+    data = load_texture_data()
+    add_nest(data, group_name, parent_path or [], nest_name)
+    save_texture_data(data)
+
+def delete_texture_nest(group_name, path):
+    data = load_texture_data()
+    delete_nest(data, group_name, path or [])
+    save_texture_data(data)
+
+def rename_texture_nest(group_name, path, new_name):
+    data = load_texture_data()
+    rename_nest(data, group_name, path or [], new_name)
+    save_texture_data(data)
+
 def add_texture(group_name, name, desc, isSpriteRender, subgroup_name=None):
     """
     テクスチャをグループ（必要であればSubGroup）に追加
     """
     data = load_texture_data()
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -3796,8 +4380,11 @@ def add_texture(group_name, name, desc, isSpriteRender, subgroup_name=None):
         'isSpriteRender' : isSpriteRender,
         'absolute_path': os.path.abspath(file_path),
         'sprites': sprite_info,
-        'subgroup': subgroup_name or None
+        'subgroup': nest_path[0] if nest_path else None,
+        'nest_path': nest_path,
     })
+    if nest_path:
+        _ensure_nest_path(data['groups'][group_name], nest_path)
     save_texture_data(data)
 
 def delete_texture(group_name, index):
@@ -3818,8 +4405,7 @@ def edit_texture(group_name, index, name=None, desc=None, isSpriteRender=None, s
     items = data['groups'][group_name]['items']
     if index < 0 or index >= len(items):
         raise Exception("対象のデータが見つかりません。")
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
 
     entry = items[index]
     if name is not None:
@@ -3828,7 +4414,8 @@ def edit_texture(group_name, index, name=None, desc=None, isSpriteRender=None, s
         entry['desc'] = desc
     if isSpriteRender is not None:
         entry['isSpriteRender'] = isSpriteRender
-    entry['subgroup'] = subgroup_name or None
+    entry['subgroup'] = nest_path[0] if nest_path else None
+    entry['nest_path'] = nest_path
     save_texture_data(data)
 
 def reload_texture_file(group_name, index):
@@ -3871,23 +4458,31 @@ def reload_texture_file(group_name, index):
     save_texture_data(data)
     return entry
 
-def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
-    target_dir = os.path.join(ENUM_DIR, f"{group_name}_{subgroup_name}_{sprite_name}")
-    
-    #もし最初にTextureがなければ追加
-    if "Texture" not in target_dir:
-        target_dir = os.path.join(ENUM_DIR, "Texture", f"{group_name}_{subgroup_name}_{sprite_name}")
-    
+def generate_texture_sprite_enum(group_name, nest_key, sprite_name, sprites):
+    """スプライトシート1枚分の「スプライト番号」enumとJSONを生成する。
+
+    型名は Single.cs / NestGroup.cs が参照する名前と必ず一致させる必要がある。
+        Texture_{group}_{ネストパスを_連結}_{テクスチャ名}ID
+        （グループ直下なら Texture_{group}_{テクスチャ名}ID）
+
+    以前は第2引数に item["subgroup"]（第1階層のみ）を渡していたため、
+    2階層以上のネストに置いたテクスチャでは
+    Texture_Scenario_Character_gyhigID のような名前になってしまい、
+    Single.cs が参照する Texture_Scenario_Character_Alice_gyhigID が
+    どこにも生成されない状態になっていた。
+    """
+    enum_base = f"{_texture_detail_enum_base(group_name, nest_key)}_{sprite_name}"
+    type_name = _cs_enum_type_name(enum_base)      # 例: Texture_Scenario_Character_Alice_gyhigID
+    enum_name = _cs_enum_base_name(enum_base)      # 例: Texture_Scenario_Character_Alice_gyhig
+
+    # ディレクトリ名は従来どおり「Texture_ を除いた」名前で ENUM_DIR/Texture/ 配下に置く
+    dir_name = enum_name[len("Texture_"):] if enum_name.startswith("Texture_") else enum_name
+    target_dir = os.path.join(ENUM_DIR, "Texture", dir_name)
     os.makedirs(target_dir, exist_ok=True)
-    enum_name = f"{group_name}_{subgroup_name}_{sprite_name}"
-    
-    #もし最初にTextureがなければ追加
-    if "Texture" not in enum_name:
-        enum_name = f"Texture_{group_name}_{subgroup_name}_{sprite_name}"
-    
+
     #enum作成
     cs_content = "namespace GameCore.Enums\n{\n"
-    cs_content += f"    public enum {enum_name}ID\n    {{\n"
+    cs_content += f"    public enum {type_name}\n    {{\n"
     cs_content += "        None = 0, // デフォルト値\n"
     for i, id in enumerate(sprites, start=1):
         id = id.replace(" ","_")
@@ -3895,7 +4490,7 @@ def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     cs_content += f"        Max = {len(sprites) + 1}\n"
     cs_content += "    }\n}"
     
-    cs_path = os.path.join(target_dir, f"{enum_name}ID.cs")
+    cs_path = os.path.join(target_dir, f"{type_name}.cs")
     with open(cs_path, 'w', encoding='utf-8') as f:
         f.write(cs_content)
     
@@ -3903,7 +4498,7 @@ def generate_texture_sprite_enum(group_name,subgroup_name,sprite_name,sprites):
     
     #json作成
     json_dict: list[dict[str, object]] = []
-    js_path = os.path.join(target_dir, f"{group_name}_{subgroup_name}_{sprite_name}.json")
+    js_path = os.path.join(target_dir, f"{dir_name}.json")
     with open(js_path,'w',encoding='utf-8') as f:
         for i, item in enumerate(sprites, start=1):
             json_dict.append({
@@ -3935,7 +4530,7 @@ def generate_texture_csharp():
         texture_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
+                texture_id = _asset_global_name(group, texture)
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
@@ -3945,13 +4540,22 @@ def generate_texture_csharp():
         sprite_id_map = {'None': 0}
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
-                if len(texture.get('sprites', [])) <= 1:
-                    # EnumクラスやJsonを作成
-                    enum_name = generate_texture_sprite_enum(group,texture['subgroup'],texture['name'],texture.get('sprites', []))
-                    register_enum_names(ENUM_DIR,enum_name)
-                    for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
+                texture_id = _asset_global_name(group, texture)
+                nest_key = _item_nest_key(texture)
+                sprites = texture.get('sprites', []) or []
+
+                # スプライト番号enum（Texture_{group}_{ネストパス}_{名前}ID）は、
+                # Sprite扱いのテクスチャ「すべて」に対して生成する。
+                # 以前は sprites が1枚以下のときしか生成しておらず、本命である
+                # スプライトシート（複数枚）の方が、Single.cs / NestGroup.cs から
+                # 参照されるのに実体が存在しない状態になっていた。
+                if sprites and _texture_is_sprite(texture):
+                    enum_name = generate_texture_sprite_enum(group, nest_key, texture['name'], sprites)
+                    register_enum_names(ENUM_DIR, enum_name)
+
+                if len(sprites) <= 1:
+                    for sprite in sprites:
+                        sprite_id = f"{texture_id}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -3959,15 +4563,6 @@ def generate_texture_csharp():
                     sprite_id = texture_id
                     if sprite_id not in sprite_id_map:
                         sprite_id_map[sprite_id] = sprite_id_counter
-                        sprite_id_counter += 1
-        
-        # スプライトシート用の専用列挙型
-        for group, group_value in data['groups'].items():
-            for texture in group_value['items']:
-                if len(texture.get('sprites', [])) > 1:
-                    sprite_enum_name = f"{group}_{texture['subgroup']}_{texture['name']}"
-                    sprite_id_counter = 0
-                    for sprite in texture.get('sprites', []):
                         sprite_id_counter += 1
         
         f.write('}\n')
@@ -3979,6 +4574,7 @@ def generate_texture_csharp():
     group_enum_name="TextureGroup", id_enum_name="TextureID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
+    generate_nest_group_csharp("Texture", data['groups'], TEXTURE_DATA, "GameCore.Texture", class_name="TextureCore", group_enum_name="TextureGroup", id_enum_name="TextureID")
 
     # TextureCore.cs
     if not os.path.exists(os.path.join(TEXTURE_DATA, "TextureCore.cs")):
@@ -4694,7 +5290,7 @@ namespace GameCore.Texture
             texture_id_list = []
             for group, group_value in data['groups'].items():
                 for texture in group_value['items']:
-                    texture_id = f"{group}_{texture["subgroup"]}_{texture['name']}"
+                    texture_id = _asset_global_name(group, texture)
                     texture_id_list.append({
                         'description': texture['desc'],
                         'id': texture_id_map[texture_id],
@@ -4709,7 +5305,7 @@ namespace GameCore.Texture
     for group, group_value in data['groups'].items():
         for texture in group_value['items']:
             if len(texture.get('sprites', [])) > 1:
-                name = f"{group}_{texture['subgroup']}_{texture['name']}"
+                name = _asset_global_name(group, texture)
                 if not os.path.exists(os.path.join(ENUM_DIR, f"{name}")):
                     os.makedirs(os.path.join(ENUM_DIR, f"{name}"))
                 with open(os.path.join(ENUM_DIR, f"{name}", f"{name}.json"), 'w', encoding='utf-8') as f:
@@ -4759,6 +5355,7 @@ def generate_texture_core_subgroups(data):
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
     lines.append("using GameCore.Enums;")
+    lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
     lines.append("namespace GameCore.Texture")
     lines.append("{")
@@ -4773,8 +5370,14 @@ def generate_texture_core_subgroups(data):
         lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
         lines.append(f"            => UnloadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, onCompleted);")
         lines.append("")
 
     lines.append("    }")
@@ -4804,13 +5407,13 @@ def generate_texture_bin():
         sprite_id_counter = 1
         for group, group_value in data['groups'].items():
             for texture in group_value['items']:
-                texture_id = f"{group}_{texture['subgroup']}_{texture['name']}"
+                texture_id = _asset_global_name(group, texture)
                 if texture_id not in texture_id_map:
                     texture_id_map[texture_id] = texture_id_counter
                     texture_id_counter += 1
                 if len(texture.get('sprites', [])) <= 1:
                     for sprite in texture.get('sprites', []):
-                        sprite_id = f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}"
+                        sprite_id = f"{texture_id}_{sprite}"
                         if sprite_id not in sprite_id_map:
                             sprite_id_map[sprite_id] = sprite_id_counter
                             sprite_id_counter += 1
@@ -4827,7 +5430,7 @@ def generate_texture_bin():
             subgroup_map = _subgroup_index_map(group_value.get('subgroups', []))
             f.write(struct.pack('i', len(textures)))
             for texture in textures:
-                texture_id = texture_id_map.get(f"{group}_{texture["subgroup"]}_{texture['name']}", 0)
+                texture_id = texture_id_map.get(_asset_global_name(group, texture), 0)
                 f.write(struct.pack('i', texture_id))
                 id_name = texture['name'].encode('utf-8') + b'\0'
                 f.write(id_name)
@@ -4839,7 +5442,8 @@ def generate_texture_bin():
                 sprite_count = len(sprites)
                 f.write(struct.pack('i', sprite_count))
                 for sprite in sprites:
-                    sprite_id = sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}_{sprite}", sprite_id_map.get(f"{group}_{texture['subgroup']}_{texture['name']}", 0))
+                    _tex_global = _asset_global_name(group, texture)
+                    sprite_id = sprite_id_map.get(f"{_tex_global}_{sprite}", sprite_id_map.get(_tex_global, 0))
                     f.write(struct.pack('i', sprite_id))
                     sprite_name = sprite.encode('utf-8') + b'\0'
                     f.write(sprite_name)
@@ -4893,13 +5497,30 @@ def delete_gameobject_subgroup(group_name, subgroup_name):
     delete_subgroup_from_group(data, group_name, subgroup_name)
     save_gameobject_data(data)
 
+
+def add_gameobject_nest(group_name, parent_path, nest_name):
+    data = load_gameobject_data()
+    add_nest(data, group_name, parent_path or [], nest_name)
+    save_gameobject_data(data)
+
+def delete_gameobject_nest(group_name, path):
+    data = load_gameobject_data()
+    delete_nest(data, group_name, path or [])
+    save_gameobject_data(data)
+
+def rename_gameobject_nest(group_name, path, new_name):
+    data = load_gameobject_data()
+    rename_nest(data, group_name, path or [], new_name)
+    save_gameobject_data(data)
+
 def add_gameobject(group_name, name, desc, subgroup_name=None):
     """
     ゲームオブジェクトをグループ（必要であればSubGroup）に追加
     """
     data = load_gameobject_data()
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    if group_name not in data['groups']:
+        raise Exception(f"グループ '{group_name}' が見つかりません。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
     project_path = get_unity_project_path()
     if not project_path:
         raise Exception("Unityプロジェクトのパスを取得できませんでした。")
@@ -4914,8 +5535,11 @@ def add_gameobject(group_name, name, desc, subgroup_name=None):
         'desc': desc, 
         'path': addr_path,
         'absolute_path': os.path.abspath(file_path),
-        'subgroup': subgroup_name or None
+        'subgroup': nest_path[0] if nest_path else None,
+        'nest_path': nest_path,
     })
+    if nest_path:
+        _ensure_nest_path(data['groups'][group_name], nest_path)
     save_gameobject_data(data)
 
 def delete_gameobject(group_name, index):
@@ -4936,15 +5560,15 @@ def edit_gameobject(group_name, index, name=None, desc=None, subgroup_name=None)
     items = data['groups'][group_name]['items']
     if index < 0 or index >= len(items):
         raise Exception("対象のデータが見つかりません。")
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
 
     entry = items[index]
     if name is not None:
         entry['name'] = name
     if desc is not None:
         entry['desc'] = desc
-    entry['subgroup'] = subgroup_name or None
+    entry['subgroup'] = nest_path[0] if nest_path else None
+    entry['nest_path'] = nest_path
     save_gameobject_data(data)
 
 def reload_gameobject_file(group_name, index):
@@ -5012,6 +5636,7 @@ def generate_gameobject_csharp():
     group_enum_name="GameObjectGroup", id_enum_name="GameObjectID",subgroup_in_id=True
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
+    generate_nest_group_csharp("GameObject", data['groups'], GAMEOBJECT_DATA, "GameCore.GameObjectData", class_name="GameObjectCore", group_enum_name="GameObjectGroup", id_enum_name="GameObjectID")
 
     # GameObjectCore.cs
     if not os.path.exists(os.path.join(GAMEOBJECT_DATA, "GameObjectCore.cs")):
@@ -5988,8 +6613,14 @@ def generate_gameobject_core_subgroups(data):
         lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
         lines.append(f"            => UnloadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted);")
         lines.append("")
 
     lines.append("    }")
@@ -6150,6 +6781,22 @@ def delete_material_group(group_name):
     generate_material_enum_csharp()
     generate_material_bin()
 
+
+def add_material_nest(group_name, parent_path, nest_name):
+    data = load_material_data()
+    add_nest(data, group_name, parent_path or [], nest_name)
+    save_material_data(data)
+
+def delete_material_nest(group_name, path):
+    data = load_material_data()
+    delete_nest(data, group_name, path or [])
+    save_material_data(data)
+
+def rename_material_nest(group_name, path, new_name):
+    data = load_material_data()
+    rename_nest(data, group_name, path or [], new_name)
+    save_material_data(data)
+
 def add_material_subgroup(group_name, subgroup_name):
     """
     Materialグループの中にSubGroupを追加する
@@ -6187,8 +6834,7 @@ def generate_material_entry(group_name, class_name, desc, absolute_path, selecte
     data = load_material_data()
     if group_name not in data['groups']:
         raise Exception(f"グループ '{group_name}' が見つかりません。先にグループを作成してください。")
-    if subgroup_name and subgroup_name not in data['groups'][group_name]['subgroups']:
-        raise Exception(f"SubGroup '{subgroup_name}' が見つかりません。先にSubGroupを作成してください。")
+    nest_path = _resolve_and_validate_nest_path(data, group_name, subgroup_name)
 
     # 再通信して最新のプロパティ・Addressableパスを取得
     fetched = _request_material_properties_from_unity(absolute_path)
@@ -6208,8 +6854,11 @@ def generate_material_entry(group_name, class_name, desc, absolute_path, selecte
         'absolute_path': absolute_path,
         'addressable_path': addressable_path,
         'properties': properties,
-        'subgroup': subgroup_name or None
+        'subgroup': nest_path[0] if nest_path else None,
+        'nest_path': nest_path,
     })
+    if nest_path:
+        _ensure_nest_path(data['groups'][group_name], nest_path)
     save_material_data(data)
 
     # C#（クラス本体・Group/ID Enum・Core一式・バイナリ）を再生成
@@ -6412,6 +7061,7 @@ def generate_material_enum_csharp():
     global_key_field="class_name"
     )
     register_enum_names(ENUM_DIR, subgroup_enum_names)
+    generate_nest_group_csharp("Material", data['groups'], MATERIAL_DATA, "GameCore.MaterialData", class_name="MaterialCore", group_enum_name="MaterialGroup", id_enum_name="MaterialID")
 
     # MaterialCoreSubGroups.cs（毎回再生成）
     generate_material_core_subgroups(data)
@@ -6427,6 +7077,7 @@ def generate_material_core_subgroups(data):
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
     lines.append("using GameCore.Enums;")
+    lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
     lines.append("namespace GameCore.MaterialData")
     lines.append("{")
@@ -6441,8 +7092,14 @@ def generate_material_core_subgroups(data):
         lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
         lines.append(f"            => LoadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
         lines.append("")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append("")
         lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
         lines.append(f"            => UnloadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append("")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, onCompleted);")
         lines.append("")
 
     lines.append("    }")

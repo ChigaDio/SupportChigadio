@@ -576,6 +576,8 @@ namespace GameCore.SaveSystem
         public float seVolume = 1.0f;
         public float bgmVolume = 1.0f;
         public float voiceVolume = 1.0f;
+        /// <summary>システムSE用音量（UIクリック等）。通常の seVolume とは独立。</summary>
+        public float se_system_volume = 1.0f;
         
     }
 }

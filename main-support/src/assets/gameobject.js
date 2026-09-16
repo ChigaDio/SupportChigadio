@@ -49,6 +49,32 @@ function GameObject() {
     }
   };
 
+  
+  const addNest = async (groupName, parentPath, nestName) => {
+    try {
+      await axios.post('/api/gameobject/add_nest', { group_name: groupName, parent_path: parentPath || [], nest_name: nestName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to add nest:', error);
+      alert(error.response?.data?.error || 'ネストの追加に失敗しました。');
+    }
+  };
+  const deleteNest = async (groupName, path) => {
+    try {
+      await axios.post('/api/gameobject/delete_nest', { group_name: groupName, path: path || [] });
+      fetchGroups();
+    } catch (error) { console.error('Failed to delete nest:', error); }
+  };
+  const renameNest = async (groupName, path, newName) => {
+    try {
+      await axios.post('/api/gameobject/rename_nest', { group_name: groupName, path: path || [], new_name: newName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to rename nest:', error);
+      alert(error.response?.data?.error || 'リネームに失敗しました。');
+    }
+  };
+
   const addSubgroup = async (groupName, subgroupName) => {
     try {
       await axios.post('/api/gameobject/add_subgroup', { group_name: groupName, subgroup_name: subgroupName });
@@ -129,10 +155,13 @@ function GameObject() {
               </IconButton>
             </AccordionSummary>
             <AccordionDetails>
-              <SubgroupManager
-                subgroups={subgroups}
-                onAdd={(name) => addSubgroup(groupName, name)}
-                onDelete={(name) => deleteSubgroup(groupName, name)}
+              <NestTree
+                groupName={groupName}
+                nests={groupValue?.nests || {}}
+                path={[]}
+                onAdd={(parentPath, name) => addNest(groupName, parentPath, name)}
+                onDelete={(path) => deleteNest(groupName, path)}
+                onRename={(path, newName) => renameNest(groupName, path, newName)}
               />
 
               <Divider sx={{ my: 2 }} />
@@ -141,12 +170,13 @@ function GameObject() {
                 groupName={groupName}
                 items={items}
                 subgroups={subgroups}
+                nests={groupValue?.nests || {}}
                 onDelete={(index) => deleteGameObject(groupName, index)}
                 onEdit={(index, fields) => editGameObject(groupName, index, fields)}
                 onReload={(index) => reloadGameObject(groupName, index)}
               />
 
-              <GameObjectForm groupName={groupName} subgroups={subgroups} onAddGameObject={addGameObject} />
+              <GameObjectForm groupName={groupName} subgroups={subgroups} nests={groupValue?.nests || {}} onAddGameObject={addGameObject} />
             </AccordionDetails>
           </Accordion>
         );
@@ -159,6 +189,97 @@ function GameObject() {
 }
 
 // SubGroupの追加・削除を行う共通UI
+
+function NestTree({ groupName, nests, path, onAdd, onDelete, onRename }) {
+  const [newName, setNewName] = useState('');
+  const [renaming, setRenaming] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [expanded, setExpanded] = useState({});
+  const children = nests || {};
+  const childNames = Object.keys(children);
+  const depth = path.length;
+  const label = depth === 0 ? 'Nests（トップレベル）' : `Nest: ${path.join(' / ')}`;
+  const handleAdd = () => { if (!newName.trim()) return; onAdd(path, newName.trim()); setNewName(''); };
+  return (
+    <Box sx={{ ml: depth === 0 ? 0 : 2, borderLeft: depth ? '2px solid #e0e0e0' : 'none', pl: depth ? 1 : 0, mb: 1 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{label}</Typography>
+      {childNames.length === 0 && (
+        <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>ネストはまだありません。下で追加できます。</Typography>
+      )}
+      {childNames.map((name) => {
+        const childPath = [...path, name];
+        const isOpen = !!expanded[name];
+        return (
+          <Box key={name} sx={{ mb: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Button size="small" onClick={() => setExpanded((e) => ({ ...e, [name]: !e[name] }))}>
+                {isOpen ? '▼' : '▶'} {name}
+              </Button>
+              {renaming === name ? (
+                <>
+                  <TextField size="small" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} sx={{ width: 140 }} />
+                  <Button size="small" variant="contained" onClick={() => { onRename(childPath, renameValue.trim()); setRenaming(null); }}>保存</Button>
+                  <Button size="small" onClick={() => setRenaming(null)}>キャンセル</Button>
+                </>
+              ) : (
+                <>
+                  <IconButton size="small" onClick={() => { setRenaming(name); setRenameValue(name); }}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => onDelete(childPath)}><DeleteIcon fontSize="small" /></IconButton>
+                </>
+              )}
+            </Box>
+            {isOpen && (
+              <NestTree groupName={groupName} nests={(children[name] && children[name].nests) || {}} path={childPath}
+                onAdd={onAdd} onDelete={onDelete} onRename={onRename} />
+            )}
+          </Box>
+        );
+      })}
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+        <TextField label={depth === 0 ? 'New Nest Name' : 'Child Nest Name'} size="small" value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <Button variant="outlined" size="small" onClick={handleAdd}>Add Nest</Button>
+      </Box>
+    </Box>
+  );
+}
+function nestPathLabel(path) {
+  if (!path || path.length === 0) return '(グループ直下)';
+  return path.join(' / ');
+}
+
+function NestPathSelect({ nests, value, onChange, label = "Nest Path" }) {
+  // value: string[] path
+  const path = Array.isArray(value) ? value : (value ? [value] : []);
+  const options = collectNestPaths(nests || {}, []);
+  return (
+    <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+      <InputLabel>{label}</InputLabel>
+      <Select
+        label={label}
+        value={path.join('/') || ''}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === '' ? [] : v.split('/'));
+        }}
+      >
+        {options.map((opt) => (
+          <MenuItem key={opt.path.join('/') || '__root'} value={opt.path.join('/')}>
+            {opt.label}
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  );
+}
+
+function collectNestPaths(nests, prefix = []) {
+  const result = [{ path: prefix, label: nestPathLabel(prefix) }];
+  Object.keys(nests || {}).forEach((name) => {
+    result.push(...collectNestPaths((nests[name] && nests[name].nests) || {}, [...prefix, name]));
+  });
+  return result;
+}
+
 function SubgroupManager({ subgroups, onAdd, onDelete }) {
   const [newSubgroupName, setNewSubgroupName] = useState('');
 
@@ -192,7 +313,7 @@ function SubgroupManager({ subgroups, onAdd, onDelete }) {
 }
 
 // SubGroup（無し／各SubGroup）ごとにアイテムをまとめて表示する共通UI
-function GroupedItemList({ groupName, items, subgroups, onDelete, onEdit, onReload }) {
+function GroupedItemList({ groupName, items, subgroups, nests = {}, onDelete, onEdit, onReload }) {
   const buckets = [{ label: null, key: '__root__' }, ...subgroups.map((sg) => ({ label: sg, key: sg }))];
 
   return (
@@ -215,6 +336,7 @@ function GroupedItemList({ groupName, items, subgroups, onDelete, onEdit, onRelo
                   key={index}
                   item={item}
                   subgroups={subgroups}
+                  nests={nests}
                   onDelete={() => onDelete(index)}
                   onEdit={(fields) => onEdit(index, fields)}
                   onReload={() => onReload(index)}
@@ -228,11 +350,12 @@ function GroupedItemList({ groupName, items, subgroups, onDelete, onEdit, onRelo
   );
 }
 
-function GameObjectRow({ item, subgroups, onDelete, onEdit, onReload }) {
+function GameObjectRow({ item, subgroups, nests = {}, onDelete, onEdit, onReload }) {
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(item.name);
   const [desc, setDesc] = useState(item.desc);
   const [subgroupName, setSubgroupName] = useState(item.subgroup || '');
+  const [nestPath, setNestPath] = useState(Array.isArray(item.nest_path) ? item.nest_path : (item.subgroup ? [item.subgroup] : []));
   const [isSaving, setIsSaving] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
 
@@ -240,13 +363,14 @@ function GameObjectRow({ item, subgroups, onDelete, onEdit, onReload }) {
     setName(item.name);
     setDesc(item.desc);
     setSubgroupName(item.subgroup || '');
+    setNestPath(Array.isArray(item.nest_path) ? item.nest_path : (item.subgroup ? [item.subgroup] : []));
     setIsEditing(true);
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onEdit({ name, desc, subgroup_name: subgroupName || null });
+      await onEdit({ name, desc, subgroup_name: nestPath && nestPath.length ? nestPath : (subgroupName ? [subgroupName] : []) || null });
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to save gameobject:', error);
@@ -290,15 +414,13 @@ function GameObjectRow({ item, subgroups, onDelete, onEdit, onReload }) {
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', py: 1 }}>
         <TextField label="Name" size="small" value={name} onChange={(e) => setName(e.target.value)} />
         <TextField label="Description" size="small" value={desc} onChange={(e) => setDesc(e.target.value)} />
-        <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel>SubGroup</InputLabel>
-          <Select value={subgroupName} label="SubGroup" onChange={(e) => setSubgroupName(e.target.value)}>
-            <MenuItem value="">(なし)</MenuItem>
-            {subgroups.map((sg) => (
-              <MenuItem key={sg} value={sg}>{sg}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+                <NestPathSelect
+          nests={nests || {}}
+          value={nestPath}
+          onChange={(p) => { setNestPath(p); setSubgroupName(p.length ? p[p.length - 1] : ''); }}
+          label="Nest Path"
+        />
+
 
         <Button
           size="small"
@@ -330,17 +452,19 @@ function GameObjectRow({ item, subgroups, onDelete, onEdit, onReload }) {
   );
 }
 
-function GameObjectForm({ groupName, subgroups, onAddGameObject }) {
+function GameObjectForm({ groupName, subgroups, nests = {}, onAddGameObject }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [subgroupName, setSubgroupName] = useState('');
+  const [nestPath, setNestPath] = useState([]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onAddGameObject(groupName, { name, desc, subgroup_name: subgroupName || null });
+    onAddGameObject(groupName, { name, desc, subgroup_name: nestPath && nestPath.length ? nestPath : (subgroupName ? [subgroupName] : []) || null });
     setName('');
     setDesc('');
     setSubgroupName('');
+    setNestPath([]);
   };
 
   return (
@@ -358,19 +482,13 @@ function GameObjectForm({ groupName, subgroups, onAddGameObject }) {
         onChange={(e) => setDesc(e.target.value)}
         sx={{ mr: 2, mt: 1 }}
       />
-      <FormControl sx={{ minWidth: 160, mt: 1, mr: 2 }}>
-        <InputLabel>SubGroup (optional)</InputLabel>
-        <Select
-          value={subgroupName}
-          label="SubGroup (optional)"
-          onChange={(e) => setSubgroupName(e.target.value)}
-        >
-          <MenuItem value="">(なし)</MenuItem>
-          {subgroups.map((sg) => (
-            <MenuItem key={sg} value={sg}>{sg}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+              <NestPathSelect
+          nests={nests || {}}
+          value={nestPath}
+          onChange={(p) => { setNestPath(p); setSubgroupName(p.length ? p[p.length - 1] : ''); }}
+          label="Nest Path"
+        />
+
       <Button type="submit" variant="contained" sx={{ mt: 1, ml: 2 }}>
         Add GameObject (Select File)
       </Button>

@@ -1437,6 +1437,34 @@ def _write_custom_single_value(f, value, type_str, options, type_info):
         f.write(struct.pack(PACK_MAP[type_lower], safe_value))
         return
 
+    # voice_ref: SoundID(int)。値は "SoundID.Group_Sub_Name" / "Group_Sub_Name" / int
+    if type_str == 'voice_ref':
+        actual = 0
+        if isinstance(value, (int, float)):
+            actual = int(value)
+        elif isinstance(value, str) and value:
+            property_name = value.split('.')[-1]
+            enum_items = _load_json(_path(ENUM, 'Sound', 'Sound.json'), [])
+            actual = next(
+                (int(it.get('value', it.get('id', 0))) for it in enum_items if it.get('property') == property_name),
+                0,
+            )
+        f.write(struct.pack('i', int(actual)))
+        return
+
+    # text_list_index: ScenarioText 等の List インデックス（int）
+    if type_str == 'text_list_index':
+        actual = 0
+        if isinstance(value, (int, float)):
+            actual = int(value)
+        elif isinstance(value, str) and value.strip():
+            try:
+                actual = int(value.strip())
+            except ValueError:
+                actual = 0
+        f.write(struct.pack('i', int(actual)))
+        return
+
     if type_str in enum_list:
         property_name = value.split('.')[-1] if isinstance(value, str) else None
         if property_name:

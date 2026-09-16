@@ -14,6 +14,7 @@ import Chip from '@mui/material/Chip';
 import Papa from 'papaparse';
 import {
   parseType,
+  getFieldArrayInfo,
   getDefaultValueForType,
   SingleValueEditor,
   ArrayFieldEditor,
@@ -62,9 +63,14 @@ function ClassDataMatrixIdDetailGrid() {
   //    "row LIKE "%text%"" と書けば同等のことができる）。
   const [searchQuery, setSearchQuery] = useState('');
 
-  // ★ 配列型("int[]"等)・classData型（ネスト）にも対応した共通のデフォルト値生成
+  // ★ 配列型("int[]"等)・arraySize=-1(List)・classData型（ネスト）にも対応した共通のデフォルト値生成
   // (gridRows等より先に定義しておく必要があるため、ここに配置)
-  const getDefaultValue = (type) => {
+  const getDefaultValue = (type, field = null) => {
+    if (field) {
+      const info = getFieldArrayInfo(field);
+      if (info.isArray) return [];
+      return getDefaultValueForType(info.baseType || type, enumValues, classSchemas);
+    }
     const { isArray, baseType } = parseType(type);
     if (isArray) return [];
     return getDefaultValueForType(baseType, enumValues, classSchemas);
@@ -841,30 +847,37 @@ function ClassDataMatrixIdDetailGrid() {
           </DialogTitle>
           <DialogContent sx={{ pt: 2, minHeight: 320 }}>
 {data.fields.map(field => {
-  // ★ "int[]" のような配列型・classData型（ネスト）にも対応
-  const { isArray, baseType } = parseType(field.type);
-  const value = cellValues[field.name] ?? getDefaultValue(field.type);
+  // ★ "int[]" / arraySize=-1(List) / 固定配列 / classData に対応
+  const arrayInfo = getFieldArrayInfo(field);
+  const { isArray, isDynamic, arraySize, baseType } = {
+    ...arrayInfo,
+    baseType: arrayInfo.baseType || parseType(field.type).baseType,
+  };
+  // type 末尾 [] のとき getFieldArrayInfo は baseType を返さない場合があるのでフォールバック
+  const resolvedBase = baseType || parseType(field.type).baseType || field.type;
+  const value = cellValues[field.name] ?? getDefaultValue(field.type, field);
 
   return (
     <Box key={field.name} sx={{ mb: 2 }}>
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-        {field.name}{field.description ? `（${field.description}）` : ''} ({field.type})
+        {field.name}{field.description ? `（${field.description}）` : ''} ({field.type}
+        {isDynamic ? ' List' : arraySize > 0 ? `[${arraySize}]` : ''})
       </Typography>
       {isArray ? (
         <ArrayFieldEditor
           value={Array.isArray(value) ? value : []}
-          baseType={baseType}
+          baseType={resolvedBase}
           enumValues={enumValues}
           classSchemas={classSchemas}
           options={field.options}
-          isDynamic={true}
-          arraySize={-1}
+          isDynamic={isDynamic || arraySize === -1}
+          arraySize={isDynamic || arraySize === -1 ? -1 : arraySize}
           onChange={(val) => setCellValues({ ...cellValues, [field.name]: val })}
         />
       ) : (
         <SingleValueEditor
           value={value}
-          type={baseType}
+          type={resolvedBase}
           enumValues={enumValues}
           classSchemas={classSchemas}
           options={field.options}

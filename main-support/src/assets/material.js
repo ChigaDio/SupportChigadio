@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
@@ -68,6 +69,32 @@ function MaterialGroups() {
     }
   };
 
+  
+  const addNest = async (groupName, parentPath, nestName) => {
+    try {
+      await axios.post('/api/material/add_nest', { group_name: groupName, parent_path: parentPath || [], nest_name: nestName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to add nest:', error);
+      alert(error.response?.data?.error || 'ネストの追加に失敗しました。');
+    }
+  };
+  const deleteNest = async (groupName, path) => {
+    try {
+      await axios.post('/api/material/delete_nest', { group_name: groupName, path: path || [] });
+      fetchGroups();
+    } catch (error) { console.error('Failed to delete nest:', error); }
+  };
+  const renameNest = async (groupName, path, newName) => {
+    try {
+      await axios.post('/api/material/rename_nest', { group_name: groupName, path: path || [], new_name: newName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to rename nest:', error);
+      alert(error.response?.data?.error || 'リネームに失敗しました。');
+    }
+  };
+
   const addSubgroup = async (groupName, subgroupName) => {
     try {
       await axios.post('/api/material/add_subgroup', { group_name: groupName, subgroup_name: subgroupName });
@@ -86,14 +113,17 @@ function MaterialGroups() {
     }
   };
 
-  const handleGenerate = async (groupName, className, desc, absolutePath, selectedProperties, subgroupName) => {
+  const handleGenerate = async (groupName, className, desc, absolutePath, selectedProperties, subgroupOrNest) => {
+    const nest = Array.isArray(subgroupOrNest)
+      ? subgroupOrNest
+      : (subgroupOrNest ? [subgroupOrNest] : []);
     await axios.post('/api/material/generate', {
       group_name: groupName,
       class_name: className,
       desc,
       absolute_path: absolutePath,
       properties: selectedProperties,
-      subgroup_name: subgroupName || null
+      subgroup_name: nest.length ? nest : null
     });
     fetchGroups();
   };
@@ -149,10 +179,13 @@ function MaterialGroups() {
               </IconButton>
             </AccordionSummary>
             <AccordionDetails>
-              <SubgroupManager
-                subgroups={subgroups}
-                onAdd={(name) => addSubgroup(groupName, name)}
-                onDelete={(name) => deleteSubgroup(groupName, name)}
+              <NestTree
+                groupName={groupName}
+                nests={groupValue?.nests || {}}
+                path={[]}
+                onAdd={(parentPath, name) => addNest(groupName, parentPath, name)}
+                onDelete={(path) => deleteNest(groupName, path)}
+                onRename={(path, newName) => renameNest(groupName, path, newName)}
               />
 
               <Divider sx={{ my: 2 }} />
@@ -173,7 +206,7 @@ function MaterialGroups() {
                 onDelete={handleDeleteEntry}
               />
 
-              <MaterialForm groupName={groupName} subgroups={subgroups} onGenerate={handleGenerate} />
+              <MaterialForm groupName={groupName} subgroups={subgroups} nests={groupValue?.nests || {}} onGenerate={handleGenerate} />
             </AccordionDetails>
           </Accordion>
         );
@@ -183,6 +216,97 @@ function MaterialGroups() {
 }
 
 // SubGroupの追加・削除を行う共通UI
+
+function NestTree({ groupName, nests, path, onAdd, onDelete, onRename }) {
+  const [newName, setNewName] = useState('');
+  const [renaming, setRenaming] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [expanded, setExpanded] = useState({});
+  const children = nests || {};
+  const childNames = Object.keys(children);
+  const depth = path.length;
+  const label = depth === 0 ? 'Nests（トップレベル）' : `Nest: ${path.join(' / ')}`;
+  const handleAdd = () => { if (!newName.trim()) return; onAdd(path, newName.trim()); setNewName(''); };
+  return (
+    <Box sx={{ ml: depth === 0 ? 0 : 2, borderLeft: depth ? '2px solid #e0e0e0' : 'none', pl: depth ? 1 : 0, mb: 1 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{label}</Typography>
+      {childNames.length === 0 && (
+        <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>ネストはまだありません。下で追加できます。</Typography>
+      )}
+      {childNames.map((name) => {
+        const childPath = [...path, name];
+        const isOpen = !!expanded[name];
+        return (
+          <Box key={name} sx={{ mb: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Button size="small" onClick={() => setExpanded((e) => ({ ...e, [name]: !e[name] }))}>
+                {isOpen ? '▼' : '▶'} {name}
+              </Button>
+              {renaming === name ? (
+                <>
+                  <TextField size="small" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} sx={{ width: 140 }} />
+                  <Button size="small" variant="contained" onClick={() => { onRename(childPath, renameValue.trim()); setRenaming(null); }}>保存</Button>
+                  <Button size="small" onClick={() => setRenaming(null)}>キャンセル</Button>
+                </>
+              ) : (
+                <>
+                  <IconButton size="small" onClick={() => { setRenaming(name); setRenameValue(name); }}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => onDelete(childPath)}><DeleteIcon fontSize="small" /></IconButton>
+                </>
+              )}
+            </Box>
+            {isOpen && (
+              <NestTree groupName={groupName} nests={(children[name] && children[name].nests) || {}} path={childPath}
+                onAdd={onAdd} onDelete={onDelete} onRename={onRename} />
+            )}
+          </Box>
+        );
+      })}
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+        <TextField label={depth === 0 ? 'New Nest Name' : 'Child Nest Name'} size="small" value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <Button variant="outlined" size="small" onClick={handleAdd}>Add Nest</Button>
+      </Box>
+    </Box>
+  );
+}
+function nestPathLabel(path) {
+  if (!path || path.length === 0) return '(グループ直下)';
+  return path.join(' / ');
+}
+
+function NestPathSelect({ nests, value, onChange, label = "Nest Path" }) {
+  // value: string[] path
+  const path = Array.isArray(value) ? value : (value ? [value] : []);
+  const options = collectNestPaths(nests || {}, []);
+  return (
+    <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+      <InputLabel>{label}</InputLabel>
+      <Select
+        label={label}
+        value={path.join('/') || ''}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === '' ? [] : v.split('/'));
+        }}
+      >
+        {options.map((opt) => (
+          <MenuItem key={opt.path.join('/') || '__root'} value={opt.path.join('/')}>
+            {opt.label}
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  );
+}
+
+function collectNestPaths(nests, prefix = []) {
+  const result = [{ path: prefix, label: nestPathLabel(prefix) }];
+  Object.keys(nests || {}).forEach((name) => {
+    result.push(...collectNestPaths((nests[name] && nests[name].nests) || {}, [...prefix, name]));
+  });
+  return result;
+}
+
 function SubgroupManager({ subgroups, onAdd, onDelete }) {
   const [newSubgroupName, setNewSubgroupName] = useState('');
 
@@ -280,7 +404,7 @@ function GroupedMaterialEntries({ entries, subgroups, regeneratingKey, groupName
   );
 }
 
-function MaterialForm({ groupName, subgroups, onGenerate }) {
+function MaterialForm({ groupName, subgroups, nests = {}, onGenerate }) {
   const [className, setClassName] = useState('');
   const [desc, setDesc] = useState('');
   const [absolutePath, setAbsolutePath] = useState('');
@@ -288,6 +412,7 @@ function MaterialForm({ groupName, subgroups, onGenerate }) {
   const [properties, setProperties] = useState([]); // [{name, type}]
   const [checkedMap, setCheckedMap] = useState({});  // { propName: bool }
   const [subgroupName, setSubgroupName] = useState('');
+  const [nestPath, setNestPath] = useState([]);
 
   const [isSelecting, setIsSelecting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -324,6 +449,7 @@ function MaterialForm({ groupName, subgroups, onGenerate }) {
     setProperties([]);
     setCheckedMap({});
     setSubgroupName('');
+    setNestPath([]);
   };
 
   const selectedCount = properties.filter((p) => checkedMap[p.name]).length;
@@ -340,7 +466,7 @@ function MaterialForm({ groupName, subgroups, onGenerate }) {
     }
     setIsGenerating(true);
     try {
-      await onGenerate(groupName, className, desc, absolutePath, selectedProperties, subgroupName);
+      await onGenerate(groupName, className, desc, absolutePath, selectedProperties, nestPath.length ? nestPath : (subgroupName ? [subgroupName] : []));
       alert(`${className}.cs を生成しました。`);
       resetForm();
     } catch (error) {
@@ -368,19 +494,12 @@ function MaterialForm({ groupName, subgroups, onGenerate }) {
           onChange={(e) => setDesc(e.target.value)}
           sx={{ flex: 2 }}
         />
-        <FormControl sx={{ minWidth: 160 }}>
-          <InputLabel>SubGroup (optional)</InputLabel>
-          <Select
-            value={subgroupName}
-            label="SubGroup (optional)"
-            onChange={(e) => setSubgroupName(e.target.value)}
-          >
-            <MenuItem value="">(なし)</MenuItem>
-            {subgroups.map((sg) => (
-              <MenuItem key={sg} value={sg}>{sg}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <NestPathSelect
+          nests={nests || {}}
+          value={nestPath}
+          onChange={(p) => { setNestPath(p); setSubgroupName(p.length ? p[p.length - 1] : ''); }}
+          label="Nest Path"
+        />
       </Box>
 
       <Button

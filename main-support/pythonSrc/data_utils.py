@@ -140,7 +140,7 @@ def get_type_lists():
     unity_types = ['GameObject', 'Transform', 'Vector2', 'Vector3', 'Vector4', 'Quaternion', 'Color', 'Rect', 'Bounds', 'Matrix4x4', 'AnimationCurve', 'Sprite', 'Texture', 'Material', 'Mesh', 'Rigidbody', 'Collider', 'AudioClip', 'ScriptableObject']
     enum_list = json.load(open(os.path.join(DATA_DIR, ENUM, 'enum_list.json'))) if os.path.exists(os.path.join(DATA_DIR, ENUM, 'enum_list.json')) else []
     class_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA, 'class_list.json')) else []
-    class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'))) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
+    class_data_id_list = json.load(open(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json'), encoding='utf-8')) if os.path.exists(os.path.join(DATA_DIR, CLASS_DATA_ID, 'class_data_id_list.json')) else []
     # enum_listとclass_listからJSONファイルを読み込む
     enum_data = load_json_files(enum_list, ENUM)
     class_data_id = load_json_files(class_data_id_list, CLASS_DATA_ID)
@@ -728,6 +728,24 @@ def _dict_json_key_from_object(target, source_expr, type_str, enum_list, class_l
 
 def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list, custom_type_info=None):
     type_str = item['type'].replace("[]", "")
+
+    # voice_ref → GameCore.Enums.SoundID（バイナリは int）
+    if type_str == 'voice_ref':
+        var_name = item['name']
+        description = item.get('description', '')
+        desc_line = f"        /// <summary>{description}</summary>\n" if description else ""
+        field = f"{desc_line}        public GameCore.Enums.SoundID {var_name} = GameCore.Enums.SoundID.None;\n"
+        read = f"            {var_name} = (GameCore.Enums.SoundID)Enum.ToObject(typeof(GameCore.Enums.SoundID), reader.ReadInt32());\n"
+        return {'field': field, 'read': read, 'write': '', 'json_read': '', 'json_write': ''}
+
+    # text_list_index → int（ScenarioText Matrix の List インデックス）
+    if type_str == 'text_list_index':
+        var_name = item['name']
+        description = item.get('description', '')
+        desc_line = f"        /// <summary>{description}</summary>\n" if description else ""
+        field = f"{desc_line}        public int {var_name} = 0;\n"
+        read = f"            {var_name} = reader.ReadInt32();\n"
+        return {'field': field, 'read': read, 'write': '', 'json_read': '', 'json_write': ''}
 
     # ★ dictionary型: bit/color/bezier同様にここで早期returnする（他モジュールへの委譲なしで完結）
     if type_str == 'dictionary':

@@ -53,6 +53,14 @@ function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
   const [loadingVoice, setLoadingVoice] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // 保存値の正規化: "SoundID.xxx" / "xxx" どちらでも property 部分を取り出す
+  const normalizeValue = (v) => {
+    if (v == null || v === '') return '';
+    const s = String(v);
+    return s.includes('.') ? s.split('.').pop() : s;
+  };
+  const currentProp = normalizeValue(value);
+
   useEffect(() => {
     if (!eventId || !subId) {
       setErrorMsg('このRoleはシナリオイベントの遷移編集画面からのみ使用できます（物語設定のvoice_series_idが必要）。');
@@ -78,7 +86,9 @@ function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
           if (groupName !== series.group) return;
           (groupValue.items || []).forEach((item) => {
             if (item.type === 'VOICE' && item.subgroup === series.subGroup) {
-              items.push({ name: item.name, enumName: `${groupName}_${item.name}` });
+              // SoundID enum の命名規則: {group}_{subgroup}_{name}
+              const enumName = `${groupName}_${item.subgroup}_${item.name}`;
+              items.push({ name: item.name, enumName });
             }
           });
         });
@@ -101,7 +111,10 @@ function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
     return <Typography variant="caption" color="error">{errorMsg}</Typography>;
   }
 
-  const selected = options.find((o) => o.enumName === value) || null;
+  // 新旧両方の命名（subgroup 有り/無し）にマッチさせる
+  const selected = options.find((o) => o.enumName === currentProp)
+    || options.find((o) => currentProp.endsWith(`_${o.name}`) && o.enumName.split('_').pop() === o.name)
+    || null;
 
   return (
     <Box>
@@ -112,10 +125,153 @@ function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
         size="small"
         options={options}
         value={selected}
-        onChange={(e, v) => onChange(v ? v.enumName : '')}
+        onChange={(e, v) => onChange(v ? `SoundID.${v.enumName}` : '')}
         getOptionLabel={(o) => (o ? `SoundID.${o.enumName}` : '')}
-        isOptionEqualToValue={(a, b) => a.enumName === b.enumName}
-        renderInput={(params) => <TextField {...params} label="Voice" />}
+        isOptionEqualToValue={(a, b) => a?.enumName === b?.enumName}
+        renderInput={(params) => <TextField {...params} label="Voice (SoundID)" />}
+      />
+    </Box>
+  );
+}
+
+// ============================================================
+// text_list_index: ScenarioText Matrix の List<string> インデックス選択
+// options: { matrixName, fieldName, previewLanguage }
+// 値は int（インデックス）。プレビューは指定言語のテキストを表示。
+// ============================================================
+function TextListIndexFieldEditor({ value, onChange, options, eventId, subId }) {
+  const matrixName = options?.matrixName || 'ScenarioText';
+  const fieldName = options?.fieldName || 'texts';
+  const previewLanguage = options?.previewLanguage || 'Ja';
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [scenarioKey, setScenarioKey] = useState('');
+
+  const numericValue = (() => {
+    if (typeof value === 'number' && !Number.isNaN(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const n = parseInt(value, 10);
+      return Number.isNaN(n) ? -1 : n;
+    }
+    return -1;
+  })();
+
+  useEffect(() => {
+    if (!eventId || !subId) {
+      setErrorMsg('シナリオイベント文脈が必要です（eventId / subId）。');
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setErrorMsg('');
+    setScenarioKey('');
+
+    (async () => {
+      try {
+        // ── 列キーの解決 ───────────────────────────────────────────
+        // ScenarioText Matrix の列は class_data_id 側の ScenarioEvent テーブルであり、
+        // その行識別子(enum_property)は scenario.py の class_id_generate() が
+        //     "{イベント名}_{サブイベント名}"   （例: "Z99999_test"）
+        // という形で採番している。
+        // 一方このフォームに渡ってくる eventId / subId は scenario_event_list.json の
+        // 内部ID(リネームに強い安定ID)であって「名前」ではないため、
+        // 以前のように eventId をそのまま列キーとして照合しても絶対に一致せず、
+        // 常に候補0件（＝「このシナリオ×言語のテキストがありません」）になっていた。
+        // そこでまずイベント一覧から名前を引き直し、正しい列キーを組み立てる。
+        const listRes = await fetch('/api/scenario-event');
+        if (!listRes.ok) throw new Error(`シナリオイベント一覧の取得に失敗 (${listRes.status})`);
+        const eventList = await listRes.json();
+        const ev = (eventList || []).find((e) => String(e.id) === String(eventId));
+        const sub = (ev?.subEvents || []).find((s) => String(s.subId) === String(subId));
+        if (!ev || !sub) {
+          throw new Error('このシナリオ／サブイベントが見つかりませんでした（一覧を再読み込みしてください）。');
+        }
+        const wantKey = `${ev.name}_${sub.name}`;
+        if (!cancelled) setScenarioKey(wantKey);
+
+        const r = await fetch(`/api/class-data-matrix-id/${matrixName}`);
+        if (!r.ok) throw new Error(`Matrix ${matrixName} の取得に失敗 (${r.status})`);
+        const table = await r.json();
+        if (cancelled) return;
+
+        const data = table.data || {};
+        // rowKey は Language の enum_property（Ja 等）
+        const rowKeys = Object.keys(data);
+        const langKey = rowKeys.find((k) => k === previewLanguage || k.endsWith(`.${previewLanguage}`) || k === `LanguageID.${previewLanguage}`)
+          || rowKeys.find((k) => String(k).toLowerCase() === String(previewLanguage).toLowerCase());
+        if (!langKey) {
+          throw new Error(`Matrix ${matrixName} に言語 "${previewLanguage}" の行がありません（存在する行: ${rowKeys.join(', ') || 'なし'}）。`);
+        }
+
+        const rowDict = data[langKey] || {};
+        // colKey: "{イベント名}_{サブイベント名}"、あるいは "ScenarioEventID." 等の
+        // 修飾付きで保存されている場合にも対応する。
+        const colKeys = Object.keys(rowDict);
+        const colKey = colKeys.find((k) => k === wantKey || k === `ScenarioEventID.${wantKey}` || k.endsWith(`.${wantKey}`));
+        if (!colKey) {
+          throw new Error(`Matrix ${matrixName}（${previewLanguage}）に列 "${wantKey}" がありません。Matrix 側にこのシナリオの行を追加してください。`);
+        }
+
+        const cell = rowDict[colKey] || {};
+        let list = [];
+        if (cell && typeof cell === 'object') {
+          const fieldCell = cell[fieldName];
+          if (fieldCell && typeof fieldCell === 'object' && 'value' in fieldCell) {
+            list = Array.isArray(fieldCell.value) ? fieldCell.value : [];
+          } else if (Array.isArray(fieldCell)) {
+            list = fieldCell;
+          } else if (Array.isArray(cell)) {
+            list = cell;
+          } else if (fieldCell === undefined) {
+            throw new Error(`列 "${wantKey}" にフィールド "${fieldName}" がありません（このMatrixのフィールド: ${Object.keys(cell).join(', ') || 'なし'}）。`);
+          }
+        }
+        setItems(list.map((t, i) => ({
+          index: i,
+          label: `${i} : ${typeof t === 'string' ? t : String(t ?? '')}`,
+          text: typeof t === 'string' ? t : String(t ?? ''),
+        })));
+      } catch (e) {
+        if (!cancelled) setErrorMsg(e.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [eventId, subId, matrixName, fieldName, previewLanguage]);
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={16} />
+        <Typography variant="caption" color="text.secondary">テキスト一覧を読み込み中...</Typography>
+      </Box>
+    );
+  }
+
+  if (errorMsg) {
+    return <Typography variant="caption" color="error">{errorMsg}</Typography>;
+  }
+
+  const selected = items.find((o) => o.index === numericValue) || null;
+
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+        {matrixName}.{fieldName}（{previewLanguage}） / シナリオ {scenarioKey || eventId} — {items.length}件
+      </Typography>
+      <Autocomplete
+        size="small"
+        options={items}
+        value={selected}
+        onChange={(e, v) => onChange(v ? v.index : -1)}
+        getOptionLabel={(o) => (o ? o.label : '')}
+        isOptionEqualToValue={(a, b) => a?.index === b?.index}
+        renderInput={(params) => <TextField {...params} label="テキストインデックス" />}
+        noOptionsText="このシナリオ×言語のテキストがありません。Matrix に追加してください。"
       />
     </Box>
   );
@@ -779,6 +935,10 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
           if (type === 'color') return { r: 1, g: 1, b: 1, a: 1 };
           if (type === 'bezier') return { points: [{ time: 0, value: options?.min ?? 0, inTangent: 0, outTangent: 0 }, { time: 1, value: options?.max ?? 1, inTangent: 0, outTangent: 0 }] };
           if (type === 'dictionary') return { entries: [] };
+          // text_list_index は int だが、0 は「0番目のテキスト」という有効な値。
+          // 未選択は -1（TextListIndexFieldEditor もこの規約で描画している）。
+          if (type === 'text_list_index') return -1;
+          if (type === 'voice_ref') return '';
           if (type in customClassSchemas) {
             const obj = {};
             (customClassSchemas[type] || []).forEach(f => { obj[f.name] = getDefaultValue(f.type, f.arraySize, f.options); });
@@ -1031,6 +1191,18 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
       // bit / color / bezier (CustomClassDataの拡張型)
       if (field.type === 'voice_ref') {
         return <VoiceRefFieldEditor key={key} value={value} onChange={onValueChange} eventId={eventId} subId={subId} />;
+      }
+      if (field.type === 'text_list_index') {
+        return (
+          <TextListIndexFieldEditor
+            key={key}
+            value={value}
+            onChange={onValueChange}
+            options={field.options || {}}
+            eventId={eventId}
+            subId={subId}
+          />
+        );
       }
       if (field.type === 'bit') {
         return <BitValueEditor key={key} value={value} options={field.options} onChange={onValueChange} />;

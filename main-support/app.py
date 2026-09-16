@@ -2169,6 +2169,49 @@ def delete_texture_subgroup():
         logger.error(f"Texture SubGroup削除エラー: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/texture/add_nest', methods=['POST'])
+def texture_add_nest():
+    """任意深度ネストの追加。parent_path=[] ならトップレベル。"""
+    data = request.json or {}
+    try:
+        assets.add_texture_nest(
+            data['group_name'],
+            data.get('parent_path') or [],
+            data['nest_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture Nest追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/texture/delete_nest', methods=['POST'])
+def texture_delete_nest():
+    data = request.json or {}
+    try:
+        assets.delete_texture_nest(
+            data['group_name'],
+            data.get('path') or [],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture Nest削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/texture/rename_nest', methods=['POST'])
+def texture_rename_nest():
+    data = request.json or {}
+    try:
+        assets.rename_texture_nest(
+            data['group_name'],
+            data.get('path') or [],
+            data['new_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Texture Nestリネームエラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/texture/add_texture', methods=['POST'])
 def add_texture():
     data = request.json
@@ -2273,6 +2316,49 @@ def delete_gameobject_subgroup():
         return jsonify({'status': 'success'})
     except Exception as e:
         logger.error(f"GameObject SubGroup削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/gameobject/add_nest', methods=['POST'])
+def gameobject_add_nest():
+    """任意深度ネストの追加。parent_path=[] ならトップレベル。"""
+    data = request.json or {}
+    try:
+        assets.add_gameobject_nest(
+            data['group_name'],
+            data.get('parent_path') or [],
+            data['nest_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject Nest追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gameobject/delete_nest', methods=['POST'])
+def gameobject_delete_nest():
+    data = request.json or {}
+    try:
+        assets.delete_gameobject_nest(
+            data['group_name'],
+            data.get('path') or [],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject Nest削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/gameobject/rename_nest', methods=['POST'])
+def gameobject_rename_nest():
+    data = request.json or {}
+    try:
+        assets.rename_gameobject_nest(
+            data['group_name'],
+            data.get('path') or [],
+            data['new_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"GameObject Nestリネームエラー: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/gameobject/add_gameobject', methods=['POST'])
@@ -2382,6 +2468,49 @@ def delete_material_subgroup():
     except Exception as e:
         logger.error(f"Material SubGroup削除エラー: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/material/add_nest', methods=['POST'])
+def material_add_nest():
+    """任意深度ネストの追加。parent_path=[] ならトップレベル。"""
+    data = request.json or {}
+    try:
+        assets.add_material_nest(
+            data['group_name'],
+            data.get('parent_path') or [],
+            data['nest_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Material Nest追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/material/delete_nest', methods=['POST'])
+def material_delete_nest():
+    data = request.json or {}
+    try:
+        assets.delete_material_nest(
+            data['group_name'],
+            data.get('path') or [],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Material Nest削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/material/rename_nest', methods=['POST'])
+def material_rename_nest():
+    data = request.json or {}
+    try:
+        assets.rename_material_nest(
+            data['group_name'],
+            data.get('path') or [],
+            data['new_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Material Nestリネームエラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/material/select_file', methods=['POST'])
 def select_material_file():
@@ -2532,6 +2661,49 @@ def delete_sound_subgroup():
         return jsonify({'status': 'success'})
     except Exception as e:
         logger.error(f"Sound SubGroup削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sound/add_nest', methods=['POST'])
+def sound_add_nest():
+    """任意深度ネストの追加。parent_path=[] ならトップレベル。"""
+    data = request.json or {}
+    try:
+        assets.add_sound_nest(
+            data['group_name'],
+            data.get('parent_path') or [],
+            data['nest_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound Nest追加エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sound/delete_nest', methods=['POST'])
+def sound_delete_nest():
+    data = request.json or {}
+    try:
+        assets.delete_sound_nest(
+            data['group_name'],
+            data.get('path') or [],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound Nest削除エラー: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sound/rename_nest', methods=['POST'])
+def sound_rename_nest():
+    data = request.json or {}
+    try:
+        assets.rename_sound_nest(
+            data['group_name'],
+            data.get('path') or [],
+            data['new_name'],
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Sound Nestリネームエラー: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sound/add_sound', methods=['POST'])

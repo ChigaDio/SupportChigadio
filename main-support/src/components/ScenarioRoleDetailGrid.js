@@ -122,11 +122,22 @@ function isParentCandidateType(type, enumNames, classDataIdNames) {
   return false;
 }
 
+// options（型ごとの追加設定）を持つ型の一覧。
+// ここに載っている型だけ、行の「オプション」列と追加ダイアログに編集UIが出る。
+const OPTION_EDITABLE_TYPES = ['bit', 'bezier', 'dictionary', 'text_list_index'];
+
+// text_list_index: ScenarioText Matrix の List<string> の何番目かを指す特殊型。
+// 実体は int（-1 = 未選択）で、GUI(BaseRoleInputForm.js)側では
+// options で指定した Matrix / フィールド / プレビュー言語をもとに、
+// 実際のテキストを並べたプルダウンとして描画される。
+const DEFAULT_TEXT_LIST_INDEX_OPTIONS = { matrixName: 'ScenarioText', fieldName: 'texts', previewLanguage: 'Ja' };
+
 // bit の初期オプション
 function defaultOptionsForType(type) {
   if (type === 'bit') return { sizeMode: 'manual', sizeSourceName: null, size: 8, mode: 'multiple', allowSelectAll: true, flagNames: Array.from({ length: 8 }, (_, i) => `Flag${i}`) };
   if (type === 'bezier') return { valueType: 'float', min: 0, max: 1 };
   if (type === 'dictionary') return { keyType: 'int', valueType: 'int', valueArraySize: 0, valueOptions: {} };
+  if (type === 'text_list_index') return { ...DEFAULT_TEXT_LIST_INDEX_OPTIONS };
   return {};
 }
 
@@ -231,6 +242,36 @@ function BezierOptionsEditor({ options, onChange }) {
       </FormControl>
       <TextField label="グラフの最小値" type="number" size="small" value={options.min ?? 0} onChange={(e) => onChange({ ...options, min: Number(e.target.value) })} />
       <TextField label="グラフの最大値" type="number" size="small" value={options.max ?? 1} onChange={(e) => onChange({ ...options, max: Number(e.target.value) })} />
+    </Box>
+  );
+}
+
+// ============================================================
+// オプション編集: text_list_index
+// どの Matrix のどのフィールドの List を候補として出すか、
+// および候補のプレビューに使う言語（行キー）を指定する。
+// ============================================================
+function TextListIndexOptionsEditor({ options, onChange }) {
+  return (
+    <Box sx={{ display: 'flex', gap: 2, mt: 1, flexWrap: 'wrap' }}>
+      <TextField
+        label="Matrix名" size="small" sx={{ minWidth: 160 }}
+        value={options.matrixName ?? DEFAULT_TEXT_LIST_INDEX_OPTIONS.matrixName}
+        onChange={(e) => onChange({ ...options, matrixName: e.target.value })}
+        helperText="例: ScenarioText"
+      />
+      <TextField
+        label="フィールド名" size="small" sx={{ minWidth: 160 }}
+        value={options.fieldName ?? DEFAULT_TEXT_LIST_INDEX_OPTIONS.fieldName}
+        onChange={(e) => onChange({ ...options, fieldName: e.target.value })}
+        helperText="List<string> のフィールド。例: texts"
+      />
+      <TextField
+        label="プレビュー言語" size="small" sx={{ minWidth: 140 }}
+        value={options.previewLanguage ?? DEFAULT_TEXT_LIST_INDEX_OPTIONS.previewLanguage}
+        onChange={(e) => onChange({ ...options, previewLanguage: e.target.value })}
+        helperText="候補表示に使う行。例: Ja"
+      />
     </Box>
   );
 }
@@ -415,10 +456,13 @@ function ScenarioRoleDetailGrid() {
       const customClassTypes = customOptions.custom_class_list || [];
       const customClassIdTypes = customOptions.custom_class_id_list || [];
       const customValueTypes = Array.from(new Set([...(customOptions.custom_types || []), 'dictionary'])); // ['bit', 'color', 'bezier', 'dictionary']
+      // text_list_index はバックエンド(/api/custom-class-data-type-options)が
+      // 返す型ではなく、シナリオRole専用の特殊型なのでここで足す。
       setTypeOptions([
         ...basicTypes, ...unityTypes,
         ...enumTypes, ...classTypes, ...classIdTypes,
-        ...customClassTypes, ...customClassIdTypes, ...customValueTypes
+        ...customClassTypes, ...customClassIdTypes, ...customValueTypes,
+        'text_list_index'
       ]);
       setEnumNames(enumTypes);
       setClassDataIdNames(classIdTypes);
@@ -450,7 +494,7 @@ function ScenarioRoleDetailGrid() {
       name: newName,
       description: newDescription,
       arraySize: parseInt(newArraySize, 10) || 0,
-      options: ['bit', 'bezier', 'dictionary'].includes(newType) ? newOptions : undefined,
+      options: OPTION_EDITABLE_TYPES.includes(newType) ? newOptions : undefined,
       required: newRequired,
       ...(dependency ? { dependency } : {}),
     };
@@ -653,7 +697,7 @@ function ScenarioRoleDetailGrid() {
       headerName: 'オプション',
       width: 90,
       renderCell: (params) => (
-        ['bit', 'bezier', 'dictionary'].includes(params.row.type) ? (
+        OPTION_EDITABLE_TYPES.includes(params.row.type) ? (
           <Button
             size="small" startIcon={<EditIcon fontSize="small" />}
             onClick={() => setOptionsEditRow({ id: params.row.id, type: params.row.type, options: params.row.options || defaultOptionsForType(params.row.type) })}
@@ -793,7 +837,7 @@ function ScenarioRoleDetailGrid() {
             value={newType}
             onChange={(e, newValue) => {
               setNewType(newValue);
-              setNewOptions(['bit', 'bezier', 'dictionary'].includes(newValue) ? defaultOptionsForType(newValue) : {});
+              setNewOptions(OPTION_EDITABLE_TYPES.includes(newValue) ? defaultOptionsForType(newValue) : {});
             }}
           />
           <TextField label="名前" margin="dense" fullWidth value={newName} onChange={(e) => setNewName(e.target.value)} />
@@ -819,6 +863,9 @@ function ScenarioRoleDetailGrid() {
               valueTypeOptions={typeOptions.filter(t => t !== 'dictionary')}
               enumNames={enumNames} classDataIdNames={classDataIdNames} customClassDataIdNames={customClassDataIdNames}
             />
+          )}
+          {newType === 'text_list_index' && (
+            <TextListIndexOptionsEditor options={newOptions} onChange={setNewOptions} />
           )}
           <Divider sx={{ my: 2 }} />
           <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -880,7 +927,7 @@ function ScenarioRoleDetailGrid() {
         </DialogActions>
       </Dialog>
 
-      {/* 既存行(bit/bezier)のオプション編集 */}
+      {/* 既存行(bit/bezier/dictionary/text_list_index)のオプション編集 */}
       <Dialog open={!!optionsEditRow} onClose={() => setOptionsEditRow(null)} maxWidth="md" fullWidth>
         <DialogTitle>オプション編集</DialogTitle>
         <DialogContent>
@@ -904,6 +951,12 @@ function ScenarioRoleDetailGrid() {
               keyTypeOptions={keyTypeOptions}
               valueTypeOptions={typeOptions.filter(t => t !== 'dictionary')}
               enumNames={enumNames} classDataIdNames={classDataIdNames} customClassDataIdNames={customClassDataIdNames}
+            />
+          )}
+          {optionsEditRow && optionsEditRow.type === 'text_list_index' && (
+            <TextListIndexOptionsEditor
+              options={optionsEditRow.options}
+              onChange={(opts) => setOptionsEditRow({ ...optionsEditRow, options: opts })}
             />
           )}
         </DialogContent>

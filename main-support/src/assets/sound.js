@@ -52,6 +52,32 @@ function Sound() {
     }
   };
 
+  
+  const addNest = async (groupName, parentPath, nestName) => {
+    try {
+      await axios.post('/api/sound/add_nest', { group_name: groupName, parent_path: parentPath || [], nest_name: nestName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to add nest:', error);
+      alert(error.response?.data?.error || 'ネストの追加に失敗しました。');
+    }
+  };
+  const deleteNest = async (groupName, path) => {
+    try {
+      await axios.post('/api/sound/delete_nest', { group_name: groupName, path: path || [] });
+      fetchGroups();
+    } catch (error) { console.error('Failed to delete nest:', error); }
+  };
+  const renameNest = async (groupName, path, newName) => {
+    try {
+      await axios.post('/api/sound/rename_nest', { group_name: groupName, path: path || [], new_name: newName });
+      fetchGroups();
+    } catch (error) {
+      console.error('Failed to rename nest:', error);
+      alert(error.response?.data?.error || 'リネームに失敗しました。');
+    }
+  };
+
   const addSubgroup = async (groupName, subgroupName) => {
     try {
       await axios.post('/api/sound/add_subgroup', { group_name: groupName, subgroup_name: subgroupName });
@@ -100,10 +126,11 @@ function Sound() {
   };
 
   const bulkAddFromFolder = async (groupName, soundType, subgroupName, useFolderNameAsSubgroup) => {
+    const nest = Array.isArray(subgroupName) ? subgroupName : (subgroupName ? [subgroupName] : []);
     const response = await axios.post('/api/sound/bulk_add_from_folder', {
       group_name: groupName,
       type: soundType,
-      subgroup_name: subgroupName || null,
+      subgroup_name: nest.length ? nest : null,
       use_folder_name_as_subgroup: useFolderNameAsSubgroup,
     });
     fetchGroups();
@@ -156,10 +183,13 @@ function Sound() {
               </IconButton>
             </AccordionSummary>
             <AccordionDetails>
-              <SubgroupManager
-                subgroups={subgroups}
-                onAdd={(name) => addSubgroup(groupName, name)}
-                onDelete={(name) => deleteSubgroup(groupName, name)}
+              <NestTree
+                groupName={groupName}
+                nests={groupValue?.nests || {}}
+                path={[]}
+                onAdd={(parentPath, name) => addNest(groupName, parentPath, name)}
+                onDelete={(path) => deleteNest(groupName, path)}
+                onRename={(path, newName) => renameNest(groupName, path, newName)}
               />
 
               <Divider sx={{ my: 2 }} />
@@ -167,7 +197,7 @@ function Sound() {
               <GroupedSoundList
                 groupName={groupName}
                 sounds={sounds}
-                subgroups={subgroups}
+                subgroups={subgroups} nests={groupValue?.nests || {}}
                 playing={playing}
                 onDelete={(index) => deleteSound(groupName, index)}
                 onTogglePlay={togglePlay}
@@ -182,7 +212,7 @@ function Sound() {
                 }
               />
 
-              <SoundForm groupName={groupName} subgroups={subgroups} onAddSound={addSound} />
+              <SoundForm groupName={groupName} subgroups={subgroups} nests={groupValue?.nests || {}} onAddSound={addSound} />
             </AccordionDetails>
           </Accordion>
         );
@@ -195,6 +225,97 @@ function Sound() {
 }
 
 // SubGroupの追加・削除を行う共通UI
+
+function NestTree({ groupName, nests, path, onAdd, onDelete, onRename }) {
+  const [newName, setNewName] = useState('');
+  const [renaming, setRenaming] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [expanded, setExpanded] = useState({});
+  const children = nests || {};
+  const childNames = Object.keys(children);
+  const depth = path.length;
+  const label = depth === 0 ? 'Nests（トップレベル）' : `Nest: ${path.join(' / ')}`;
+  const handleAdd = () => { if (!newName.trim()) return; onAdd(path, newName.trim()); setNewName(''); };
+  return (
+    <Box sx={{ ml: depth === 0 ? 0 : 2, borderLeft: depth ? '2px solid #e0e0e0' : 'none', pl: depth ? 1 : 0, mb: 1 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{label}</Typography>
+      {childNames.length === 0 && (
+        <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>ネストはまだありません。下で追加できます。</Typography>
+      )}
+      {childNames.map((name) => {
+        const childPath = [...path, name];
+        const isOpen = !!expanded[name];
+        return (
+          <Box key={name} sx={{ mb: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Button size="small" onClick={() => setExpanded((e) => ({ ...e, [name]: !e[name] }))}>
+                {isOpen ? '▼' : '▶'} {name}
+              </Button>
+              {renaming === name ? (
+                <>
+                  <TextField size="small" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} sx={{ width: 140 }} />
+                  <Button size="small" variant="contained" onClick={() => { onRename(childPath, renameValue.trim()); setRenaming(null); }}>保存</Button>
+                  <Button size="small" onClick={() => setRenaming(null)}>キャンセル</Button>
+                </>
+              ) : (
+                <>
+                  <IconButton size="small" onClick={() => { setRenaming(name); setRenameValue(name); }}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => onDelete(childPath)}><DeleteIcon fontSize="small" /></IconButton>
+                </>
+              )}
+            </Box>
+            {isOpen && (
+              <NestTree groupName={groupName} nests={(children[name] && children[name].nests) || {}} path={childPath}
+                onAdd={onAdd} onDelete={onDelete} onRename={onRename} />
+            )}
+          </Box>
+        );
+      })}
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+        <TextField label={depth === 0 ? 'New Nest Name' : 'Child Nest Name'} size="small" value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <Button variant="outlined" size="small" onClick={handleAdd}>Add Nest</Button>
+      </Box>
+    </Box>
+  );
+}
+function nestPathLabel(path) {
+  if (!path || path.length === 0) return '(グループ直下)';
+  return path.join(' / ');
+}
+
+function NestPathSelect({ nests, value, onChange, label = "Nest Path" }) {
+  // value: string[] path
+  const path = Array.isArray(value) ? value : (value ? [value] : []);
+  const options = collectNestPaths(nests || {}, []);
+  return (
+    <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+      <InputLabel>{label}</InputLabel>
+      <Select
+        label={label}
+        value={path.join('/') || ''}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === '' ? [] : v.split('/'));
+        }}
+      >
+        {options.map((opt) => (
+          <MenuItem key={opt.path.join('/') || '__root'} value={opt.path.join('/')}>
+            {opt.label}
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  );
+}
+
+function collectNestPaths(nests, prefix = []) {
+  const result = [{ path: prefix, label: nestPathLabel(prefix) }];
+  Object.keys(nests || {}).forEach((name) => {
+    result.push(...collectNestPaths((nests[name] && nests[name].nests) || {}, [...prefix, name]));
+  });
+  return result;
+}
+
 function SubgroupManager({ subgroups, onAdd, onDelete }) {
   const [newSubgroupName, setNewSubgroupName] = useState('');
 
@@ -227,7 +348,7 @@ function SubgroupManager({ subgroups, onAdd, onDelete }) {
   );
 }
 
-function GroupedSoundList({ groupName, sounds, subgroups, playing, onDelete, onTogglePlay, onEdit, onReload }) {
+function GroupedSoundList({ groupName, sounds, subgroups, nests = {}, playing, onDelete, onTogglePlay, onEdit, onReload }) {
   const buckets = [{ label: null, key: '__root__' }, ...subgroups.map((sg) => ({ label: sg, key: sg }))];
 
   return (
@@ -252,6 +373,7 @@ function GroupedSoundList({ groupName, sounds, subgroups, playing, onDelete, onT
                   sound={sound}
                   index={index}
                   subgroups={subgroups}
+                  nests={nests}
                   playing={playing}
                   onDelete={() => onDelete(index)}
                   onTogglePlay={onTogglePlay}
@@ -267,7 +389,7 @@ function GroupedSoundList({ groupName, sounds, subgroups, playing, onDelete, onT
   );
 }
 
-function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTogglePlay, onEdit, onReload }) {
+function SoundRow({ groupName, sound, index, subgroups, nests = {}, playing, onDelete, onTogglePlay, onEdit, onReload }) {
   const audioRef = React.useRef();
   const key = `${groupName}-${index}`;
 
@@ -277,6 +399,7 @@ function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTog
   const [volume, setVolume] = useState(sound.volume);
   const [type, setType] = useState(sound.type);
   const [subgroupName, setSubgroupName] = useState(sound.subgroup || '');
+  const [nestPath, setNestPath] = useState(Array.isArray(sound.nest_path) ? sound.nest_path : (sound.subgroup ? [sound.subgroup] : []));
   const [isSaving, setIsSaving] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
 
@@ -286,13 +409,14 @@ function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTog
     setVolume(sound.volume);
     setType(sound.type);
     setSubgroupName(sound.subgroup || '');
+    setNestPath(Array.isArray(sound.nest_path) ? sound.nest_path : (sound.subgroup ? [sound.subgroup] : []));
     setIsEditing(true);
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onEdit({ name, desc, volume: parseFloat(volume), type, subgroup_name: subgroupName || null });
+      await onEdit({ name, desc, volume: parseFloat(volume), type, subgroup_name: nestPath && nestPath.length ? nestPath : (subgroupName ? [subgroupName] : []) || null });
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to save sound:', error);
@@ -357,15 +481,13 @@ function SoundRow({ groupName, sound, index, subgroups, playing, onDelete, onTog
           <MenuItem value="BGM">BGM</MenuItem>
           <MenuItem value="VOICE">VOICE</MenuItem>
         </Select>
-        <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel>SubGroup</InputLabel>
-          <Select value={subgroupName} label="SubGroup" onChange={(e) => setSubgroupName(e.target.value)}>
-            <MenuItem value="">(なし)</MenuItem>
-            {subgroups.map((sg) => (
-              <MenuItem key={sg} value={sg}>{sg}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+                <NestPathSelect
+          nests={nests || {}}
+          value={nestPath}
+          onChange={(p) => { setNestPath(p); setSubgroupName(p.length ? p[p.length - 1] : ''); }}
+          label="Nest Path"
+        />
+
 
         <Button
           size="small"
@@ -480,21 +602,23 @@ function BulkFolderImportButton({ groupName, onBulkAdd }) {
   );
 }
 
-function SoundForm({ groupName, subgroups, onAddSound }) {
+function SoundForm({ groupName, subgroups, nests = {}, onAddSound }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [volume, setVolume] = useState(1.0);
   const [type, setType] = useState('SE');
   const [subgroupName, setSubgroupName] = useState('');
+  const [nestPath, setNestPath] = useState([]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onAddSound(groupName, { name, desc, volume: parseFloat(volume), type, subgroup_name: subgroupName || null });
+    onAddSound(groupName, { name, desc, volume: parseFloat(volume), type, subgroup_name: nestPath && nestPath.length ? nestPath : (subgroupName ? [subgroupName] : []) || null });
     setName('');
     setDesc('');
     setVolume(1.0);
     setType('SE');
     setSubgroupName('');
+    setNestPath([]);
   };
 
   return (
@@ -527,19 +651,13 @@ function SoundForm({ groupName, subgroups, onAddSound }) {
         <MenuItem value="BGM">BGM</MenuItem>
         <MenuItem value="VOICE">VOICE</MenuItem>
       </Select>
-      <FormControl sx={{ minWidth: 160, mt: 1, mr: 2 }}>
-        <InputLabel>SubGroup (optional)</InputLabel>
-        <Select
-          value={subgroupName}
-          label="SubGroup (optional)"
-          onChange={(e) => setSubgroupName(e.target.value)}
-        >
-          <MenuItem value="">(なし)</MenuItem>
-          {subgroups.map((sg) => (
-            <MenuItem key={sg} value={sg}>{sg}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+              <NestPathSelect
+          nests={nests || {}}
+          value={nestPath}
+          onChange={(p) => { setNestPath(p); setSubgroupName(p.length ? p[p.length - 1] : ''); }}
+          label="Nest Path"
+        />
+
       <Button type="submit" variant="contained" sx={{ mt: 1, ml: 2 }}>
         Add Sound (Select File)
       </Button>
