@@ -25,10 +25,10 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional, Tuple
-from deep_translator import GoogleTranslator
 
 # PyInstaller で exe 化すると certifi の証明書バンドルの場所が変わり、
 # 翻訳機能の HTTPS 通信が SSL エラーで失敗することがある
@@ -115,7 +115,7 @@ def _resolve_data_dir() -> str:
         print(f"[config] data_dir_override.txt を使用: {override}")
         return override
 
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..","..", "data"))
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..", "data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
@@ -405,23 +405,36 @@ def suggest_row_name(lang_code: str) -> str:
     return _ROW_NAME_SUGGESTION.get(lang_code, lang_code.replace("-", ""))
 
 
+def _is_rate_limit_error(e: Exception) -> bool:
+    """deep_translator の TooManyRequests（Google側 429）かどうかを、
+    例外クラスが取れない場合でもメッセージから判定する。"""
+    if "TooManyRequests" in type(e).__name__:
+        return True
+    msg = str(e).lower()
+    return "too many requests" in msg or "429" in msg
+
+
 _TRANSLATOR_CHECKED = False
 _TRANSLATOR_OK = False
 _TRANSLATOR_IMPORT_ERROR: Optional[str] = None
 
 
 def ensure_translator_available(force: bool = False) -> bool:
-    """翻訳エンジンが実際に使えるかを1回だけ（force指定時は再度）実際に通信して確認する。
-    deep_translator が無い／証明書が無い／ネット未接続、のいずれでも False になり、
-    理由は _TRANSLATOR_IMPORT_ERROR に残す。"""
+    """deep_translator が import できるかどうかだけを確認する。
+
+    以前は実際に1件翻訳してテストしていたが、無料の Google 翻訳エンドポイントは
+    5リクエスト/秒までしか許容しないため、ダイアログを開くたびにテスト通信を
+    行うとそれだけでレート制限を消費・悪化させてしまっていた。
+    そのためここでは import 可否のみを見る。ネットワーク不通やレート制限は
+    実際の翻訳実行時（_start_translation_job）で検出し、レート制限は自動リトライする。
+    """
     global _TRANSLATOR_CHECKED, _TRANSLATOR_OK, _TRANSLATOR_IMPORT_ERROR
     if _TRANSLATOR_CHECKED and not force:
         return _TRANSLATOR_OK
     _TRANSLATOR_CHECKED = True
     try:
-        from deep_translator import GoogleTranslator  # type: ignore
+        from deep_translator import GoogleTranslator  # noqa: F401
 
-        GoogleTranslator(source="ja", target="en").translate("テスト")
         _TRANSLATOR_OK = True
         _TRANSLATOR_IMPORT_ERROR = None
     except Exception as e:
