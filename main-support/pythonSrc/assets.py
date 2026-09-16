@@ -351,12 +351,12 @@ def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: 
             lines.append(f"{ind}public static void CrossFadeBGM({det} id, float volume = 1f, float fadeTime = 1f)")
             lines.append(f"{ind}    => {class_name}.Instance.CrossFadeBGM(id, volume, fadeTime);")
             lines.append("")
-            lines.append(f"{ind}public static void StopSE({det} id)")
-            lines.append(f"{ind}    => {class_name}.Instance.StopSE(id);")
-            lines.append("")
-            lines.append(f"{ind}public static void StopSE_System({det} id)")
-            lines.append(f"{ind}    => {class_name}.Instance.StopSE_System(id);")
-            lines.append("")
+            #lines.append(f"{ind}public static void StopSE({det} id)")
+            #lines.append(f"{ind}    => {class_name}.Instance.StopSE(id);")
+            #lines.append("")
+            #lines.append(f"{ind}public static void StopSE_System({det} id)")
+            #lines.append(f"{ind}    => {class_name}.Instance.StopSE_System(id);")
+            #lines.append("")
         elif category_name == "Material":
             lines.append(f"{ind}public static Material GetMaterial({det} id)")
             lines.append(f"{ind}    => {class_name}.Instance.GetMaterial(id);")
@@ -875,16 +875,16 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     )
                     pool_lines.append("")
                     # StopSE
-                    pool_lines.append(
-                        f"        public void StopSE({detail_enum_name}ID id)"
-                    )
-                    pool_lines.append(
-                        f"            => StopSE("
-                        f"SoundGroup.{group_name}, "
-                        f"{class_name}.{table_name}[(int)id]);"
-                    )
-                    pool_lines.append("    }")
-                    pool_lines.append("")
+                    #pool_lines.append(
+                    #    f"        public void StopSE({detail_enum_name}ID id)"
+                    #)
+                    #pool_lines.append(
+                    #    f"            => StopSE("
+                    #    f"SoundGroup.{group_name}, "
+                    #    f"{class_name}.{table_name}[(int)id]);"
+                    #)
+                    #pool_lines.append("    }")
+                    #pool_lines.append("")
                 # ParticlePool用（GameObjectカテゴリの中でもParticleグループだけ）
                 elif class_name == "GameObjectCore" and group_name == "Particle":
                     pool_lines.append("    public sealed partial class ParticleObjectPool")
