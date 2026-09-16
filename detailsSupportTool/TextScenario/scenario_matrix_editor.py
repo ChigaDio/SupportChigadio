@@ -48,13 +48,59 @@ C = {
 # 設定フォルダ（このファイルの2つ上の data フォルダ配下に専用フォルダを作る）
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _resolve_script_dir() -> str:
+    """
+    通常の .py 実行なら __file__ の場所。
+    PyInstaller で exe 化した場合、__file__ は一時展開フォルダ
+    (AppData\\Local\\Temp\\_MEIxxxxx) を指してしまうため、その場合は
+    sys.executable（実際に置いた .exe の場所）を使う。
+    """
+    if getattr(sys, "frozen", False):
+        # PyInstaller (onefile/onedir 共通): exe の実際の場所
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+SCRIPT_DIR = _resolve_script_dir()
 CONFIG_FOLDER_NAME = "editor_config"
+DATA_DIR_OVERRIDE_FILENAME = "data_dir_override.txt"
+
+
+def _read_data_dir_override() -> Optional[str]:
+    """
+    scenario_matrix_editor.py（または .exe）と同じフォルダに
+    data_dir_override.txt があれば、その1行目に書かれたパスを
+    data フォルダとして最優先で使う。起動方法（.py / exe / 展開先の
+    変化）に一切依存させたくない場合の明示的な逃げ道。
+    """
+    override_path = os.path.join(SCRIPT_DIR, DATA_DIR_OVERRIDE_FILENAME)
+    try:
+        with open(override_path, "r", encoding="utf-8") as f:
+            line = f.readline().strip().strip('"')
+        if line:
+            return os.path.normpath(line)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[config] {DATA_DIR_OVERRIDE_FILENAME} の読込に失敗: {e}", file=sys.stderr)
+    return None
 
 
 def _resolve_data_dir() -> str:
-    """<script>/../../data を最優先。無ければ上位を遡って data を探す。"""
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..","..", "data"))
+    """
+    優先順位:
+      1. data_dir_override.txt に書かれたパス
+      2. <script/exe>/../../data （既存なら使う）
+      3. <script/exe> から上へ5階層まで data を探す
+      4. どれも無ければ 2. の位置に新規作成
+    """
+    override = _read_data_dir_override()
+    if override:
+        print(f"[config] data_dir_override.txt を使用: {override}")
+        return override
+
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..", "data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
@@ -85,6 +131,9 @@ CONFIG_DIR = _resolve_config_dir()
 SETTINGS_PATH = os.path.join(CONFIG_DIR, "editor_settings.json")
 TAGS_PATH = os.path.join(CONFIG_DIR, "text_animator_tags.json")
 COMMENTS_PATH = os.path.join(CONFIG_DIR, "row_comments.json")
+
+print(f"[config] frozen={getattr(sys, 'frozen', False)}  SCRIPT_DIR={SCRIPT_DIR}")
+print(f"[config] CONFIG_DIR={CONFIG_DIR}")
 
 
 def _read_json(path: str, default):
