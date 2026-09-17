@@ -115,7 +115,7 @@ def _resolve_data_dir() -> str:
         print(f"[config] data_dir_override.txt を使用: {override}")
         return override
 
-    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "..", "data"))
+    primary = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..","..", "data"))
     if os.path.isdir(primary):
         return primary
     cur = SCRIPT_DIR
@@ -149,6 +149,27 @@ COMMENTS_PATH = os.path.join(CONFIG_DIR, "row_comments.json")
 
 print(f"[config] frozen={getattr(sys, 'frozen', False)}  SCRIPT_DIR={SCRIPT_DIR}")
 print(f"[config] CONFIG_DIR={CONFIG_DIR}")
+
+
+def to_relative_path(path: str) -> str:
+    """設定ファイルへの保存用: 可能なら SCRIPT_DIR（実行環境の基準位置）からの
+    相対パスに変換する。ドライブが違う等で相対化できない場合のみ絶対パスのまま返す。
+    これにより D:\\...\\TextScenario 一式をどこへ移しても設定が有効なままになる。"""
+    if not path:
+        return path
+    try:
+        return os.path.relpath(os.path.abspath(path), SCRIPT_DIR)
+    except ValueError:
+        return os.path.abspath(path)
+
+
+def from_stored_path(stored: str) -> str:
+    """設定ファイルに保存されていたパス（相対 or 旧形式の絶対）を絶対パスに戻す。"""
+    if not stored:
+        return stored
+    if os.path.isabs(stored):
+        return stored
+    return os.path.normpath(os.path.join(SCRIPT_DIR, stored))
 
 
 def _read_json(path: str, default):
@@ -937,11 +958,12 @@ class ScenarioMatrixEditor(tk.Tk):
         self.configure(bg=C["bg"])
 
         self.settings = load_settings()
-        self.tags_path = self.settings.get("tags_path") or TAGS_PATH
+        tags_path_stored = self.settings.get("tags_path") or ""
+        self.tags_path = from_stored_path(tags_path_stored) if tags_path_stored else TAGS_PATH
         if not os.path.isfile(self.tags_path):
             self.tags_path = TAGS_PATH
         ensure_tag_file(self.tags_path)
-        self.settings["tags_path"] = self.tags_path
+        self.settings["tags_path"] = to_relative_path(self.tags_path)
 
         self.comments_store = CommentStore()
 
@@ -964,9 +986,11 @@ class ScenarioMatrixEditor(tk.Tk):
 
         startup = initial_path if (initial_path and os.path.isfile(initial_path)) else None
         if not startup:
-            last = self.settings.get("last_matrix_path") or ""
-            if last and os.path.isfile(last):
-                startup = last
+            last_stored = self.settings.get("last_matrix_path") or ""
+            if last_stored:
+                candidate = from_stored_path(last_stored)
+                if os.path.isfile(candidate):
+                    startup = candidate
         if startup:
             self._open_path(
                 startup,
@@ -1293,15 +1317,18 @@ class ScenarioMatrixEditor(tk.Tk):
 
     # -- 設定の保持 ---------------------------------------------------------
     def _remember(self) -> None:
+        # 設定ファイルへの保存は、この実行環境（SCRIPT_DIR）からの相対パスにする。
+        # プロジェクト一式（exe含む）をまるごと別の場所へ移しても設定が有効なままになる。
         if self.path:
-            self.settings["last_matrix_path"] = self.path
-            recents: List[str] = [p for p in (self.settings.get("recent_paths") or []) if p != self.path]
-            recents.insert(0, self.path)
+            rel = to_relative_path(self.path)
+            self.settings["last_matrix_path"] = rel
+            recents: List[str] = [p for p in (self.settings.get("recent_paths") or []) if p != rel]
+            recents.insert(0, rel)
             self.settings["recent_paths"] = recents[:12]
         self.settings["last_row"] = self.row_var.get()
         self.settings["last_col"] = self.col_var.get()
         self.settings["last_field"] = self.field_var.get() or "texts"
-        self.settings["tags_path"] = self.tags_path
+        self.settings["tags_path"] = to_relative_path(self.tags_path)
         try:
             self.settings["geometry"] = self.winfo_geometry()
         except tk.TclError:
@@ -1310,14 +1337,16 @@ class ScenarioMatrixEditor(tk.Tk):
         self._refresh_recent()
 
     def _refresh_recent(self) -> None:
-        recents = [p for p in (self.settings.get("recent_paths") or []) if os.path.isfile(p)]
-        self.settings["recent_paths"] = recents
-        self.recent_combo["values"] = recents
-        if self.path and self.path in recents:
+        stored = self.settings.get("recent_paths") or []
+        valid_stored = [p for p in stored if os.path.isfile(from_stored_path(p))]
+        self.settings["recent_paths"] = valid_stored
+        abs_list = [from_stored_path(p) for p in valid_stored]
+        self.recent_combo["values"] = abs_list
+        if self.path and self.path in abs_list:
             self.recent_var.set(self.path)
 
     def _on_recent_selected(self, _e=None) -> None:
-        p = self.recent_var.get()
+        p = self.recent_var.get()  # コンボには絶対パスを表示している
         if p and os.path.isfile(p) and p != self.path:
             self._open_path(p)
 
@@ -1727,7 +1756,7 @@ class ScenarioMatrixEditor(tk.Tk):
             messagebox.showerror("読込エラー", str(e))
             return
 
-        # 空白のみの行 / 空行は取り込まない
+        # 空白のみの行 / 空行は取り込まない。先頭が空白（全角スペース含む）の場合は詰める。
         lines: List[str] = []
         skipped = 0
         for ln in raw.splitlines():
@@ -1735,6 +1764,8 @@ class ScenarioMatrixEditor(tk.Tk):
             if not s.strip():
                 skipped += 1
                 continue
+            if s[:1] in (" ", "\t", "\u3000"):
+                s = s.lstrip(" \t\u3000")
             lines.append(s)
         if not lines:
             messagebox.showinfo("情報", "取り込める行がありませんでした（すべて空行）")
@@ -1866,16 +1897,41 @@ class ScenarioMatrixEditor(tk.Tk):
                 return
             results: List[str] = []
             fail_count = 0
+            # Google の無料エンドポイントは 5 req/秒までしか許容しないため、
+            # 1件ごとに間隔を空けて余裕を持たせる（既定 0.4 秒 ≒ 最大 2.5 req/秒）。
+            min_interval = 0.4
+            max_retries = 4
+            last_call = 0.0
             for i, text in enumerate(src_list):
                 if cancel_event.is_set():
                     q.put(("cancelled", i, results, fail_count))
                     return
-                try:
-                    out = translate_text(text, translator)
-                except Exception as e:
-                    out = text
-                    fail_count += 1
-                    print(f"[translate] #{i} failed: {e}", file=sys.stderr)
+
+                out = text
+                attempt = 0
+                while True:
+                    if cancel_event.is_set():
+                        q.put(("cancelled", i, results, fail_count))
+                        return
+                    wait = min_interval - (time.monotonic() - last_call)
+                    if wait > 0:
+                        time.sleep(wait)
+                    last_call = time.monotonic()
+                    try:
+                        out = translate_text(text, translator)
+                        break
+                    except Exception as e:
+                        if _is_rate_limit_error(e) and attempt < max_retries:
+                            attempt += 1
+                            backoff = min(2.0 * attempt, 8.0)
+                            q.put(("progress", i, total, f"レート制限のため {backoff:.0f} 秒待機中…（再試行 {attempt}/{max_retries}）"))
+                            time.sleep(backoff)
+                            continue
+                        out = text
+                        fail_count += 1
+                        print(f"[translate] #{i} failed: {e}", file=sys.stderr)
+                        break
+
                 results.append(out)
                 preview = text if len(text) <= 28 else text[:25] + "…"
                 q.put(("progress", i + 1, total, f"翻訳中… {preview}"))
