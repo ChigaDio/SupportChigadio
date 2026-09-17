@@ -969,23 +969,30 @@ function completeArrayOfObjectLiteral(line, valueTokens, cursorCh, subFields, re
   return completeObjectLiteral(line, cursorEntry.tokens, cursorCh, subFields, cursorEntry.end, classDataSchemas);
 }
 
-// enum / class_data_id 等、"TypeName.Property" の完全修飾形式で保存するフィールドの
-// 値予測変換・boolの true/false 候補などをまとめて処理する。
+// ============================================================
+// scenarioTransactionDsl.js の completeScalarValue 置換用パッチ
+//
+// 不具合:
+//   id=TestID.AA まで打ったとき、typedPrefix は "TestID.AA"（IDENT全体）になるが
+//   候補マッチは bare 名("AAAA")に対してだけ startsWith("testid.aa") していたため
+//   一致せず、予測変換が出てこなかった。
+//
+// 修正:
+//   - プレフィックスに "." が含まれる場合は「最後のドット以降」を bare マッチに使う
+//   - 同時に完全修飾形(full)の startsWith も許可（TestID.AA → TestID.AAAA）
+//   - 修飾子だけ打った直後(TestID.) は全候補を出す
+//   - 表示 label は引き続き bare、insertText は完全修飾のまま
+// ============================================================
+
 function completeScalarValue(line, valueTokens, cursorCh, field) {
   const lastTok = valueTokens[valueTokens.length - 1];
   const typedPrefix = lastTok && cursorCh > lastTok.from ? line.slice(lastTok.from, cursorCh) : '';
   if (field.options?.length) {
     // field.options は既に "TypeName.Property" の完全修飾形式で渡ってくる
-    // (generate_role_form_schema参照)。1つのフィールドが持つ候補は全部同じ
-    // "TypeName." を共有しているため、マッチ判定に完全修飾文字列(TypeName込み)を
-    // 使ってしまうと、例えば "I" 一文字だけで "FadeTypeID" 側の "I" にまで
-    // ヒットしてしまい、絞り込みにならず全候補が出てしまう。
-    // そのため判定は必ずドットより後ろの名前(bare)だけに対して行う。
+    // (generate_role_form_schema参照)。
     //
-    // 表示上も "TypeName." の部分(型のqualifier)は見せず、ドットより後ろの
-    // 名前だけを候補として出す。実際に選んで確定したときには、これまで通り
-    // 完全修飾形式("TypeName.Property")を挿入する
-    // ("label" は表示専用、"insertText" が実際に挿入される値)。
+    // 表示上は "TypeName." を見せず、ドットより後ろの名前だけを候補として出す。
+    // 確定時は完全修飾形式を挿入する。
     const bareOf = (o) => (o.includes('.') ? o.slice(o.indexOf('.') + 1) : o);
     const toItem = (o) => ({ label: bareOf(o), insertText: o, type: 'value' });
 
@@ -993,13 +1000,38 @@ function completeScalarValue(line, valueTokens, cursorCh, field) {
     if (!prefixLower) {
       return field.options.map(toItem);
     }
+
+    // プレフィックスから「マッチに使う部分」を決める
+    // - "TestID.AA" → afterDot = "aa", fullPrefix = "testid.aa"
+    // - "AA"        → afterDot = "aa", fullPrefix = "aa"（ドット無し）
+    // - "TestID."   → afterDot = ""  → 全候補
+    const lastDot = prefixLower.lastIndexOf('.');
+    const hasQualifier = lastDot >= 0;
+    const afterDot = hasQualifier ? prefixLower.slice(lastDot + 1) : prefixLower;
+    const fullPrefix = prefixLower;
+
+    // 修飾子だけ（末尾が "."）のときは絞り込み無しで全候補
+    if (hasQualifier && afterDot === '') {
+      return field.options.map(toItem);
+    }
+
     const startsWithMatches = [];
     const containsMatches = [];
     field.options.forEach((o) => {
       const bareLower = bareOf(o).toLowerCase();
-      if (bareLower.startsWith(prefixLower)) {
+      const fullLower = o.toLowerCase();
+
+      // 1) bare が afterDot で始まる（従来 + ドット後入力対応）
+      // 2) 完全修飾が fullPrefix で始まる（TestID.AA → TestID.AAAA）
+      const starts =
+        bareLower.startsWith(afterDot) ||
+        (hasQualifier && fullLower.startsWith(fullPrefix));
+      if (starts) {
         startsWithMatches.push(o);
-      } else if (bareLower.includes(prefixLower)) {
+        return;
+      }
+      // 部分一致は bare 側のみ（修飾子を含む文字列での contains はノイズが多い）
+      if (bareLower.includes(afterDot)) {
         containsMatches.push(o);
       }
     });

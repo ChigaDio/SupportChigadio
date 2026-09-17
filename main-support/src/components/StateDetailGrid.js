@@ -71,14 +71,24 @@ const CustomNode = ({ data, id }) => {
         width: 288,
         minHeight: 96,
         position: 'relative',
-        background: 'linear-gradient(160deg, #1f2937 0%, #111827 100%)',
-        borderRadius: 14,
-        boxShadow: '0 6px 18px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)',
-        overflow: 'hidden',
         cursor: 'pointer',
       }}
       onClick={handleOpenLifecycle}
     >
+      {/* Handle(入出力ポート)は外側のこのdivの直接の子として枠外(left/right が負の値)に
+          配置する。見た目用の角丸・グラデーション・overflow:hidden は内側のこのラッパーだけに
+          適用し、ポートがクリップされて消えないようにする。 */}
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          background: 'linear-gradient(160deg, #1f2937 0%, #111827 100%)',
+          borderRadius: 14,
+          boxShadow: '0 6px 18px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)',
+          overflow: 'hidden',
+        }}
+      >
       <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 2, zIndex: 2 }}>
         <Tooltip title="ライフサイクル設定 (同期/非同期)">
           <IconButton size="small" onClick={handleOpenLifecycle} style={{ color: '#93c5fd' }}>
@@ -180,16 +190,17 @@ const CustomNode = ({ data, id }) => {
           ))}
         </div>
       )}
+      </div>
 
       <Handle
         type="target"
         position={Position.Left}
-        style={{ background: '#ffffff', border: '2px solid #1E40AF', width: 12, height: 12, borderRadius: '50%', left: '-0.75rem', top: '25%', position: 'absolute' }}
+        style={{ background: '#ffffff', border: '2px solid #1E40AF', width: 12, height: 12, borderRadius: '50%', left: '-0.75rem', top: '25%' }}
       />
       <Handle
         type="source"
         position={Position.Right}
-        style={{ background: '#ffffff', border: '2px solid #1E40AF', width: 12, height: 12, borderRadius: '50%', right: '-0.75rem', top: '75%', position: 'absolute' }}
+        style={{ background: '#ffffff', border: '2px solid #1E40AF', width: 12, height: 12, borderRadius: '50%', right: '-0.75rem', top: '75%' }}
       />
     </div>
   );
@@ -228,6 +239,13 @@ function StateDetailGrid() {
   const [lifecycleOriginal, setLifecycleOriginal] = useState(DEFAULT_LIFECYCLE);
   const [selectedParentId, setSelectedParentId] = useState(null);
   const [newSubLabel, setNewSubLabel] = useState('');
+
+  // イベントリスナー（下のuseEffectはdeps:[]でマウント時に一度だけ登録される）から
+  // 常に最新のstateを同期的に読めるようにrefで保持しておく。
+  const flowElementsRef = useRef(flowElements);
+  const transitionsRef = useRef(transitions);
+  useEffect(() => { flowElementsRef.current = flowElements; }, [flowElements]);
+  useEffect(() => { transitionsRef.current = transitions; }, [transitions]);
 
   useEffect(() => {
     const handleDeleteNode = (e) => {
@@ -307,27 +325,24 @@ function StateDetailGrid() {
 
     const handleOpenLifecycle = (e) => {
       const nodeId = e.detail;
+      // setState のコールバック内で別の setState を呼ぶと反映が1テンポ遅れ、
+      // ダイアログを開くのに複数回クリックが必要になっていたため、
+      // 最新値はrefから同期的に読み、setStateは並べて呼ぶだけにする。
+      const node = flowElementsRef.current.nodes.find((n) => n.id === nodeId);
+      const normalized = normalizeLifecycle(node?.data?.lifecycle);
       setLifecycleTarget({ kind: 'node', id: nodeId });
-      setFlowElements((els) => {
-        const node = els.nodes.find((n) => n.id === nodeId);
-        const normalized = normalizeLifecycle(node?.data?.lifecycle);
-        setLifecycleDraft(normalized);
-        setLifecycleOriginal(normalized);
-        return els;
-      });
+      setLifecycleDraft(normalized);
+      setLifecycleOriginal(normalized);
       setOpenLifecycleDialog(true);
     };
 
     const handleOpenLifecycleTransition = (e) => {
       const label = e.detail;
+      const t = transitionsRef.current.find((item) => item.fromState === label);
+      const normalized = normalizeLifecycle(t?.lifecycle);
       setLifecycleTarget({ kind: 'transition', label });
-      setTransitions((prev) => {
-        const t = prev.find((item) => item.fromState === label);
-        const normalized = normalizeLifecycle(t?.lifecycle);
-        setLifecycleDraft(normalized);
-        setLifecycleOriginal(normalized);
-        return prev;
-      });
+      setLifecycleDraft(normalized);
+      setLifecycleOriginal(normalized);
       setOpenLifecycleDialog(true);
     };
 

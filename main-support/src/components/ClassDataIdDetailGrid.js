@@ -22,6 +22,7 @@ import SpreadsheetImportExportDialog from './SpreadsheetImportExportDialog';
 import SqlSearchBar from './SqlSearchBar';
 import { compileQuery } from './sqlLikeSearch';
 
+
 // ============================================================
 // ユーティリティ
 // ============================================================
@@ -734,33 +735,60 @@ export function renderMiniPreviewTable(value, type, classSchemas, options) {
   return <Typography variant="caption">{formatPreviewValue(value, type, classSchemas, options)}</Typography>;
 }
 
-// ============================================================
-// ArrayFieldEditor: 配列型の入力コンポーネント
-// ============================================================
 /**
- * 配列 / List 共通エディタ。
+ * ClassDataIdDetailGrid.js の ArrayFieldEditor 置換用（仮想スクロール対応）
  *
- * - List (isDynamic=true, arraySize=-1): 末尾追加・途中挿入・削除・DnD並べ替え・上下移動・入れ替え
- * - 固定配列 (arraySize>0): 長さは固定。DnD並べ替え・上下移動・入れ替えのみ可
- * - prefill 有効時: メンバー数連動のため構造変更・並べ替えは不可（値の編集のみ）
+ * 問題:
+ *   displayArr.map で全件を Draggable + SingleValueEditor として同時マウントするため、
+ *   150件規模だと1打鍵ごとに全DOMが再評価され入力が詰まる。
  *
- * Matrix / ClassDataID の両方から利用される。
+ * 方針:
+ *   - 件数が VIRTUAL_THRESHOLD 未満 → 従来どおり全件描画（DnDも有効）
+ *   - 以上 → 固定行高の仮想リスト（見える範囲 + overscan のみ描画）
+ *     ※ 仮想モードでは react-beautiful-dnd は使わず、↑↓ / 入れ替えダイアログで並べ替え
+ *   - 文字列・数値の onChange は親へ即時通知（StringTextField / NumericTextField が
+ *     ローカルstateでエコーするため、親の反映遅れで文字が消える問題は起きない）
+ *
+ * 依存追加なし（react-window 不要）。
+ *
+ * 適用: ClassDataIdDetailGrid.js の export function ArrayFieldEditor { ... } を
+ *       この関数で置き換える。
  */
-export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, options, onChange, onSizeChange, readOnly, isDynamic, arraySize }) {
+
+// 同一ファイル内の getDefaultValueForType / SingleValueEditor をそのまま使う
+
+// --- 同一ファイル内に置く場合は、下の SingleValueEditor / getDefaultValueForType は
+//     既に定義済みなので import せずそのまま参照する。
+
+const VIRTUAL_THRESHOLD = 40;   // これ以上で仮想化
+const ROW_HEIGHT_PX = 56;       // 1行あたりの概算高さ（string多行は平均的な1行想定）
+const OVERSCAN = 6;             // 上下に余分に描画する行数
+const VIEWPORT_MAX_PX = 420;    // 仮想リストの最大表示高さ
+
+export function ArrayFieldEditor({
+  value,
+  baseType,
+  enumValues,
+  classSchemas,
+  options,
+  onChange,
+  onSizeChange,
+  readOnly,
+  isDynamic,
+  arraySize,
+}) {
   const arr = Array.isArray(value) ? value : [];
-  // react-beautiful-dnd は id に特殊文字があると不安定なため、useId の ':' を除去する
   const droppableId = `arr-${(useId() || 'x').replace(/:/g, '')}`;
 
   const prefillSourceName = options?.prefillSourceName || null;
   const prefillMembers = prefillSourceName
-    ? (enumValues[prefillSourceName] || []).map(v => v['property'] || v['enum_property'] || v)
+    ? (enumValues[prefillSourceName] || []).map((v) => v.property || v.enum_property || v)
     : null;
   const isPrefilled = !!prefillMembers;
 
-  // prefill または 固定配列 → 長さ変更不可。prefill は並べ替えも不可。
   const isLengthFixed = isPrefilled || (!isDynamic && arraySize > 0);
-  const canReorder = !readOnly && !isPrefilled; // List / 固定配列とも並べ替え可（prefill以外）
-  const canAddRemove = !readOnly && isDynamic && !isPrefilled; // List のみ追加・削除・途中挿入可
+  const canReorder = !readOnly && !isPrefilled;
+  const canAddRemove = !readOnly && isDynamic && !isPrefilled;
 
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapA, setSwapA] = useState(0);
@@ -779,23 +807,29 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPrefilled, prefillSourceName, prefillMembers ? prefillMembers.length : 0]);
 
-  const effectiveSize = isPrefilled ? prefillMembers.length : (isLengthFixed && !isDynamic ? arraySize : arr.length);
+  const effectiveSize = isPrefilled
+    ? prefillMembers.length
+    : (isLengthFixed && !isDynamic ? arraySize : arr.length);
+
   const displayArr = isLengthFixed && !isDynamic
     ? Array.from({ length: effectiveSize }, (_, i) => arr[i] ?? getDefaultValueForType(baseType, enumValues, classSchemas))
     : (isPrefilled
       ? Array.from({ length: effectiveSize }, (_, i) => arr[i] ?? getDefaultValueForType(baseType, enumValues, classSchemas))
       : arr);
 
+  const useVirtual = displayArr.length >= VIRTUAL_THRESHOLD;
+
   const emit = (next) => {
     onChange(next);
     if (onSizeChange) onSizeChange();
   };
 
-  const handleChange = (index, val) => {
+  const handleChange = useCallback((index, val) => {
+    // 最新の displayArr をクロージャに頼らず、関数型更新相当で親に渡す
     const next = [...displayArr];
     next[index] = val;
     onChange(next);
-  };
+  }, [displayArr, onChange]);
 
   const handleAdd = () => {
     if (!canAddRemove) return;
@@ -841,8 +875,106 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
   const typeLabel = isPrefilled
     ? `${prefillSourceName} のメンバーから自動生成 [${effectiveSize}件]（追加・削除・並べ替え不可）`
     : isDynamic
-      ? `動的配列 (List) [${displayArr.length}件]`
+      ? `動的配列 (List) [${displayArr.length}件]${useVirtual ? ' · 仮想スクロール' : ''}`
       : `固定配列 [${arraySize}]（並べ替え・入れ替え可）`;
+
+  // ---- 仮想リスト状態 ----
+  const [scrollTop, setScrollTop] = useState(0);
+  const viewportRef = useRef(null);
+
+  const onScroll = useCallback((e) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const { start, end, offsetY, totalHeight } = useMemo(() => {
+    if (!useVirtual) {
+      return { start: 0, end: displayArr.length, offsetY: 0, totalHeight: 0 };
+    }
+    const vh = VIEWPORT_MAX_PX;
+    const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN);
+    const visibleCount = Math.ceil(vh / ROW_HEIGHT_PX) + OVERSCAN * 2;
+    const endIdx = Math.min(displayArr.length, startIdx + visibleCount);
+    return {
+      start: startIdx,
+      end: endIdx,
+      offsetY: startIdx * ROW_HEIGHT_PX,
+      totalHeight: displayArr.length * ROW_HEIGHT_PX,
+    };
+  }, [useVirtual, scrollTop, displayArr.length]);
+
+  const renderRow = (item, index, dragHandleProps) => (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        mb: useVirtual ? 0 : 0.5,
+        gap: 0.5,
+        p: 0.5,
+        height: useVirtual ? ROW_HEIGHT_PX : 'auto',
+        boxSizing: 'border-box',
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: 'divider',
+        bgcolor: 'background.paper',
+      }}
+    >
+      {canReorder && (
+        <Box
+          {...(dragHandleProps || {})}
+          sx={{ color: 'text.disabled', cursor: canReorder ? 'grab' : 'default', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+        >
+          <DragHandleIcon fontSize="small" />
+        </Box>
+      )}
+      <Typography variant="caption" sx={{ minWidth: isPrefilled ? 90 : 36, color: 'text.secondary', flexShrink: 0 }}>
+        {isPrefilled ? prefillMembers[index] : `[${index}]`}
+      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <SingleValueEditor
+          value={item}
+          type={baseType}
+          enumValues={enumValues}
+          classSchemas={classSchemas}
+          options={options}
+          onChange={(val) => handleChange(index, val)}
+          onSizeChange={onSizeChange}
+          readOnly={readOnly}
+        />
+      </Box>
+      {canReorder && (
+        <>
+          <Tooltip title="1つ上へ">
+            <span>
+              <IconButton size="small" disabled={index === 0} onClick={() => handleMove(index, index - 1)}>
+                <ArrowUpwardIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="1つ下へ">
+            <span>
+              <IconButton size="small" disabled={index >= displayArr.length - 1} onClick={() => handleMove(index, index + 1)}>
+                <ArrowDownwardIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      )}
+      {canAddRemove && (
+        <>
+          <Tooltip title="この位置の直前に挿入">
+            <IconButton size="small" color="primary" onClick={() => handleInsertAt(index)}>
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="削除">
+            <IconButton size="small" color="error" onClick={() => handleRemove(index)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
+      )}
+    </Box>
+  );
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -876,97 +1008,66 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
         )}
       </Box>
 
-      <DragDropContext onDragEnd={onDragEnd}>
-        <Droppable droppableId={droppableId} isDropDisabled={!canReorder}>
-          {(provided) => (
-            <Box ref={provided.innerRef} {...provided.droppableProps}>
-              {displayArr.map((item, index) => (
-                <Draggable
-                  key={isPrefilled ? String(prefillMembers[index]) : `item-${index}`}
-                  draggableId={isPrefilled ? `prefill-${prefillMembers[index]}` : `${droppableId}-${index}`}
-                  index={index}
-                  isDragDisabled={!canReorder}
-                >
-                  {(dragProvided, snapshot) => (
-                    <Box
-                      ref={dragProvided.innerRef}
-                      {...dragProvided.draggableProps}
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        mb: 0.5,
-                        gap: 0.5,
-                        p: 0.5,
-                        borderRadius: 1,
-                        border: '1px solid',
-                        borderColor: snapshot.isDragging ? 'primary.main' : 'divider',
-                        bgcolor: snapshot.isDragging ? 'action.hover' : 'background.paper',
-                      }}
-                    >
-                      {canReorder && (
-                        <Box
-                          {...dragProvided.dragHandleProps}
-                          sx={{ color: 'text.disabled', cursor: 'grab', display: 'flex', alignItems: 'center', flexShrink: 0 }}
-                        >
-                          <DragHandleIcon fontSize="small" />
-                        </Box>
-                      )}
-                      <Typography variant="caption" sx={{ minWidth: isPrefilled ? 90 : 28, color: 'text.secondary', flexShrink: 0 }}>
-                        {isPrefilled ? prefillMembers[index] : `[${index}]`}
-                      </Typography>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <SingleValueEditor
-                          value={item}
-                          type={baseType}
-                          enumValues={enumValues}
-                          classSchemas={classSchemas}
-                          options={options}
-                          onChange={(val) => handleChange(index, val)}
-                          onSizeChange={onSizeChange}
-                          readOnly={readOnly}
-                        />
-                      </Box>
-                      {canReorder && (
-                        <>
-                          <Tooltip title="1つ上へ">
-                            <span>
-                              <IconButton size="small" disabled={index === 0} onClick={() => handleMove(index, index - 1)}>
-                                <ArrowUpwardIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title="1つ下へ">
-                            <span>
-                              <IconButton size="small" disabled={index >= displayArr.length - 1} onClick={() => handleMove(index, index + 1)}>
-                                <ArrowDownwardIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </>
-                      )}
-                      {canAddRemove && (
-                        <>
-                          <Tooltip title="この位置の直前に挿入">
-                            <IconButton size="small" color="primary" onClick={() => handleInsertAt(index)}>
-                              <AddIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="削除">
-                            <IconButton size="small" color="error" onClick={() => handleRemove(index)}>
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </>
-                      )}
-                    </Box>
-                  )}
-                </Draggable>
-              ))}
-              {provided.placeholder}
+      {useVirtual ? (
+        // ---- 仮想スクロール（大量要素） ----
+        <Box
+          ref={viewportRef}
+          onScroll={onScroll}
+          sx={{
+            maxHeight: VIEWPORT_MAX_PX,
+            overflowY: 'auto',
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 1,
+            position: 'relative',
+          }}
+        >
+          <Box sx={{ height: totalHeight, position: 'relative' }}>
+            <Box sx={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
+              {displayArr.slice(start, end).map((item, i) => {
+                const index = start + i;
+                return (
+                  <Box key={isPrefilled ? String(prefillMembers[index]) : `v-${index}`}>
+                    {renderRow(item, index, null)}
+                  </Box>
+                );
+              })}
             </Box>
-          )}
-        </Droppable>
-      </DragDropContext>
+          </Box>
+        </Box>
+      ) : (
+        // ---- 従来の全件 + DnD ----
+        <DragDropContext onDragEnd={onDragEnd}>
+          <Droppable droppableId={droppableId} isDropDisabled={!canReorder}>
+            {(provided) => (
+              <Box ref={provided.innerRef} {...provided.droppableProps}>
+                {displayArr.map((item, index) => (
+                  <Draggable
+                    key={isPrefilled ? String(prefillMembers[index]) : `item-${index}`}
+                    draggableId={isPrefilled ? `prefill-${prefillMembers[index]}` : `${droppableId}-${index}`}
+                    index={index}
+                    isDragDisabled={!canReorder}
+                  >
+                    {(dragProvided, snapshot) => (
+                      <Box
+                        ref={dragProvided.innerRef}
+                        {...dragProvided.draggableProps}
+                        sx={{
+                          borderColor: snapshot.isDragging ? 'primary.main' : undefined,
+                          bgcolor: snapshot.isDragging ? 'action.hover' : undefined,
+                        }}
+                      >
+                        {renderRow(item, index, dragProvided.dragHandleProps)}
+                      </Box>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+              </Box>
+            )}
+          </Droppable>
+        </DragDropContext>
+      )}
 
       {canAddRemove && (
         <Button size="small" startIcon={<AddIcon />} onClick={handleAdd} sx={{ mt: 0.5 }}>
@@ -979,7 +1080,7 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
         <DialogTitle>要素の入れ替え</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            入れ替える2つのインデックスを指定してください（0 〜 {Math.max(0, displayArr.length - 1)}）
+            入れ替える2つのインデックスを指定（0 〜 {Math.max(0, displayArr.length - 1)}）
           </Typography>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
             <TextField
@@ -1003,24 +1104,17 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSwapOpen(false)}>キャンセル</Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              handleSwap(swapA, swapB);
-              setSwapOpen(false);
-            }}
-          >
+          <Button variant="contained" onClick={() => { handleSwap(swapA, swapB); setSwapOpen(false); }}>
             入れ替え
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* 位置指定挿入ダイアログ */}
       <Dialog open={insertOpen} onClose={() => setInsertOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>位置指定で挿入</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            挿入するインデックスを指定（0 = 先頭、{displayArr.length} = 末尾）
+            挿入インデックス（0 = 先頭、{displayArr.length} = 末尾）
           </Typography>
           <TextField
             label="挿入位置"
@@ -1034,13 +1128,7 @@ export function ArrayFieldEditor({ value, baseType, enumValues, classSchemas, op
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setInsertOpen(false)}>キャンセル</Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              handleInsertAt(insertAt);
-              setInsertOpen(false);
-            }}
-          >
+          <Button variant="contained" onClick={() => { handleInsertAt(insertAt); setInsertOpen(false); }}>
             挿入
           </Button>
         </DialogActions>
