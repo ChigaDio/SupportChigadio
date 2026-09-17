@@ -8,12 +8,14 @@ ScenarioMatrix 高速編集ツール（モダンUI）
   python scenario_matrix_editor.py /path/to/ScenarioText.json
 
 主な機能:
-  - JSON パスを自動保持（再起動しても前回のファイル/行/列/フィールドを復元）
+  - JSON パス／タグ定義パスを相対パスで自動保持（再起動しても前回のファイル/行/列/フィールドを復元）
   - 設定・タグ定義は  <このファイルの2つ上>/data/editor_config/  に自動生成
   - テキスト取込時は空行を捨てる
   - 選択行の左の「＋」から「上に追加 / 下に追加」
   - ドラッグ＆ドロップは「行間に挿入」（挿入位置をラインで表示）
   - 行ごとの演出メモ（コメント）を保存（サイドカー JSON）
+  - 本文入力中のタグ補完（Ctrl+Space）と / による自動閉じタグ
+    （既存の日本語・英語本文の途中でも <s などで候補が出る）
 """
 
 from __future__ import annotations
@@ -964,6 +966,8 @@ class ScenarioMatrixEditor(tk.Tk):
             self.tags_path = TAGS_PATH
         ensure_tag_file(self.tags_path)
         self.settings["tags_path"] = to_relative_path(self.tags_path)
+        self.tag_config = _read_json(self.tags_path, DEFAULT_TAG_CONFIG)
+        self._completion_popup: Optional[tk.Toplevel] = None
 
         self.comments_store = CommentStore()
 
@@ -1070,7 +1074,7 @@ class ScenarioMatrixEditor(tk.Tk):
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=16, pady=(14, 6))
         ttk.Label(header, text="Scenario Matrix Editor", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, text="  高速 · 配列編集 · 行コメント · テキストI/O · 翻訳", style="Muted.TLabel").pack(side=tk.LEFT)
+        ttk.Label(header, text="  高速 · 配列編集 · 行コメント · テキストI/O · 翻訳 · タグ補完", style="Muted.TLabel").pack(side=tk.LEFT)
         ttk.Label(header, text=f"設定: {CONFIG_DIR}", style="Muted.TLabel").pack(side=tk.RIGHT)
 
         # パスバー
@@ -1242,10 +1246,17 @@ class ScenarioMatrixEditor(tk.Tk):
         self.editor.configure(yscrollcommand=esb.set)
         self.editor.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         esb.pack(side=tk.RIGHT, fill=tk.Y)
+        # タグ補完・自動閉じ（既存本文の途中でも動作）
+        self.editor.bind("<Control-space>", self._on_tag_complete)
+        self.editor.bind("<Control-Key-space>", self._on_tag_complete)
+        self.editor.bind("<KeyPress-slash>", self._on_slash_auto_close)
+        self.editor.bind("<KeyPress>", self._on_editor_keypress, add="+")
+        self.editor.bind("<FocusOut>", lambda e: self._close_completion_popup(), add="+")
+        self.editor.bind("<Escape>", lambda e: self._close_completion_popup() or None, add="+")
 
         tk.Label(
             right,
-            text="  この行のコメント（演出メモ・JSON には書き出さずサイドカー保存）",
+            text="  この行のコメント（演出メモ）  ※本文で Ctrl+Space = タグ補完 / で自動閉じ",
             bg=C["surface"],
             fg=C["comment"],
             font=("Segoe UI", 9),
@@ -2005,10 +2016,352 @@ class ScenarioMatrixEditor(tk.Tk):
 
     def _on_tags_path_changed(self, new_path: str) -> None:
         self.tags_path = os.path.abspath(new_path)
+        self.tag_config = _read_json(self.tags_path, DEFAULT_TAG_CONFIG)
         self._remember()
 
     def _set_status(self, msg: str) -> None:
         self.status.config(text=msg)
+
+    # -- タグ補完・自動閉じ -------------------------------------------------
+    def _get_all_behavior_tags(self) -> List[dict]:
+        tags = self.tag_config.get("behavior_tags") or []
+        return [t for t in tags if isinstance(t, dict) and t.get("id")]
+
+    def _get_all_appearance_tags(self) -> List[dict]:
+        tags = self.tag_config.get("appearance_tags") or []
+        return [t for t in tags if isinstance(t, dict) and t.get("id")]
+
+    def _find_open_tag_before_cursor(self) -> Optional[Tuple[str, str, int]]:
+        """カーソル直前の未閉じ開始タグを探す。
+        戻り値: (style, tag_id, open_start_char_offset)  style は 'angle' or 'brace'
+        """
+        try:
+            idx = self.editor.index("insert")
+            text = self.editor.get("1.0", idx)
+        except tk.TclError:
+            return None
+        stack: List[Tuple[str, str, int]] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "<":
+                m = re.match(r"</([a-zA-Z0-9_#]+)[^>]*>", text[i:])
+                if m:
+                    tid = m.group(1)
+                    for j in range(len(stack) - 1, -1, -1):
+                        if stack[j][0] == "angle" and stack[j][1] == tid:
+                            stack.pop(j)
+                            break
+                    i += m.end()
+                    continue
+                m = re.match(r"<([a-zA-Z0-9_#]+)([^>]*)>", text[i:])
+                if m:
+                    tid = m.group(1)
+                    if not tid.startswith("/"):
+                        stack.append(("angle", tid, i))
+                    i += m.end()
+                    continue
+            elif ch == "{":
+                m = re.match(r"\{/([a-zA-Z0-9_#]+)[^}]*\}", text[i:])
+                if m:
+                    tid = m.group(1)
+                    for j in range(len(stack) - 1, -1, -1):
+                        if stack[j][0] == "brace" and stack[j][1] == tid:
+                            stack.pop(j)
+                            break
+                    i += m.end()
+                    continue
+                m = re.match(r"\{([a-zA-Z0-9_#]+)([^}]*)\}", text[i:])
+                if m:
+                    tid = m.group(1)
+                    if not tid.startswith("/") and not tid.startswith("#"):
+                        stack.append(("brace", tid, i))
+                    i += m.end()
+                    continue
+            i += 1
+        if stack:
+            return stack[-1]
+        return None
+
+    def _on_slash_auto_close(self, event) -> Optional[str]:
+        """`/` 入力時: 未閉じ開始タグがあれば対応する閉じタグを挿入する。
+        例: <shake>AAA| で / → </shake>
+        タグ内部（未完了の <...> 中）では通常の / のまま。
+        """
+        try:
+            idx = self.editor.index("insert")
+            before = self.editor.get("1.0", idx)
+            last_lt = before.rfind("<")
+            last_gt = before.rfind(">")
+            last_lb = before.rfind("{")
+            last_rb = before.rfind("}")
+            inside_angle = last_lt > last_gt
+            inside_brace = last_lb > last_rb
+            if inside_angle or inside_brace:
+                return None
+
+            found = self._find_open_tag_before_cursor()
+            if not found:
+                return None
+            style, tid, _ = found
+            close = f"</{tid}>" if style == "angle" else f"{{/{tid}}}"
+            self.editor.insert("insert", close)
+            return "break"
+        except Exception:
+            return None
+
+    def _cursor_context(self) -> Tuple[str, str, str, Optional[str]]:
+        """カーソル位置の文脈を返す。
+        戻り値: (mode, partial, tag_id, name_start_index)
+          mode: 'param' | 'tag_angle' | 'tag_brace' | 'free'
+          partial: 入力途中の文字列（タグ名 or パラメータ名）
+          tag_id: param 時のタグ id
+          name_start_index: tag_angle/tag_brace 時、タグ名の開始位置（Text index）。
+            既存本文の途中で <sあいさつ… となっていても、タグ名部分だけを置換できるようにする。
+        """
+        try:
+            idx = self.editor.index("insert")
+            before = self.editor.get("1.0", idx)
+        except tk.TclError:
+            return ("free", "", "", None)
+
+        last_lt = before.rfind("<")
+        last_gt = before.rfind(">")
+        last_lb = before.rfind("{")
+        last_rb = before.rfind("}")
+
+        # --- 未閉じ < ... の内部 ---
+        if last_lt > last_gt:
+            # before 内での文字オフセット → Text index に変換
+            frag = before[last_lt + 1 :]
+            m = re.match(r"^([a-zA-Z0-9_#]*)", frag)
+            name_part = m.group(1) if m else ""
+            after_name = frag[len(name_part) :]
+            # タグ名の開始位置（< の次）
+            name_start = self.editor.index(f"1.0 + {last_lt + 1}c")
+
+            if after_name == "":
+                # 純粋にタグ名の途中: <sha|
+                return ("tag_angle", name_part, "", name_start)
+            if after_name[0].isspace() or after_name[0] == "=":
+                # パラメータ領域: <shake |  or <shake a=|
+                pm = re.search(r"([a-zA-Z0-9_]*)$", before)
+                partial = pm.group(1) if pm else ""
+                return ("param", partial, name_part, None)
+            # <sあいさつ… のようにタグ名の直後に本文が続いている
+            # → タグ名補完として扱い、name_part だけを置換対象にする
+            return ("tag_angle", name_part, "", name_start)
+
+        # --- 未閉じ { ... の内部 ---
+        if last_lb > last_rb:
+            frag = before[last_lb + 1 :]
+            m = re.match(r"^/?#?([a-zA-Z0-9_]*)", frag)
+            name_part = m.group(1) if m else ""
+            prefix_len = len(frag) - len(frag.lstrip("/#")) if frag else 0
+            # 実際の id 開始位置
+            name_start = self.editor.index(f"1.0 + {last_lb + 1 + prefix_len}c")
+            after_name = frag[prefix_len + len(name_part) :] if m else frag
+
+            if after_name == "" or after_name[0].isspace():
+                if after_name == "":
+                    return ("tag_brace", name_part, "", name_start)
+                pm = re.search(r"([a-zA-Z0-9_]*)$", before)
+                partial = pm.group(1) if pm else ""
+                return ("param", partial, name_part, None)
+            else:
+                return ("tag_brace", name_part, "", name_start)
+
+        # --- タグ外 ---
+        # 直前が英数字なら partial に（英語本文の単語末尾）。日本語なら空。
+        m = re.search(r"([a-zA-Z0-9_#]+)$", before)
+        partial = m.group(1) if m else ""
+        return ("free", partial, "", None)
+
+    def _candidates_for_context(self, mode: str, partial: str, tag_id: str) -> List[Tuple[str, str]]:
+        """(表示ラベル, 挿入文字列) のリスト。"""
+        partial_l = partial.lower()
+        out: List[Tuple[str, str]] = []
+        help_map = self.tag_config.get("modifier_help") or {}
+
+        if mode == "param":
+            mods: List[str] = []
+            for t in self._get_all_behavior_tags() + self._get_all_appearance_tags():
+                if t.get("id") == tag_id:
+                    mods = list(t.get("modifiers") or [])
+                    break
+            for m in mods:
+                if partial_l and not m.lower().startswith(partial_l):
+                    continue
+                label = f"{m}  —  {help_map.get(m, '')}" if help_map.get(m) else m
+                out.append((label, f"{m}="))
+            return out
+
+        if mode in ("tag_angle", "free"):
+            for t in self._get_all_behavior_tags():
+                tid = str(t.get("id", ""))
+                lab = str(t.get("label", tid))
+                if partial_l and not (tid.lower().startswith(partial_l) or lab.lower().startswith(partial_l)):
+                    continue
+                out.append((f"<{tid}>  {lab}", f"<{tid}>"))
+
+        if mode in ("tag_brace", "free"):
+            for t in self._get_all_appearance_tags():
+                tid = str(t.get("id", ""))
+                lab = str(t.get("label", tid))
+                if partial_l and not (tid.lower().startswith(partial_l) or lab.lower().startswith(partial_l)):
+                    continue
+                op = t.get("open") or f"{{{tid}}}"
+                out.append((f"{op}  {lab}", op))
+
+        return out
+
+    def _close_completion_popup(self) -> None:
+        if self._completion_popup is not None:
+            try:
+                self._completion_popup.destroy()
+            except tk.TclError:
+                pass
+            self._completion_popup = None
+
+    def _on_editor_keypress(self, event) -> None:
+        if self._completion_popup is None:
+            return
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Control_L", "Control_R", "space"):
+            return
+        if len(event.char) == 1 and event.char.isprintable():
+            self._close_completion_popup()
+
+    def _on_tag_complete(self, event) -> str:
+        """Ctrl+Space: 文脈に応じたタグ／パラメータ候補をポップアップ表示。
+        既存の日本語・英語本文の途中で <s と打っている場合も、タグ名部分だけを正しく置換する。
+        """
+        self._close_completion_popup()
+        mode, partial, tag_id, name_start = self._cursor_context()
+        candidates = self._candidates_for_context(mode, partial, tag_id)
+        if not candidates:
+            self._set_status("補完候補なし（タグ定義を確認・Ctrl+Space）")
+            return "break"
+
+        try:
+            bbox = self.editor.bbox("insert")
+            if bbox:
+                x, y, _, h = bbox
+                abs_x = self.editor.winfo_rootx() + x
+                abs_y = self.editor.winfo_rooty() + y + h + 2
+            else:
+                abs_x = self.editor.winfo_rootx() + 20
+                abs_y = self.editor.winfo_rooty() + 40
+        except tk.TclError:
+            abs_x, abs_y = 100, 100
+
+        popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        popup.configure(bg=C["border"])
+        try:
+            popup.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self._completion_popup = popup
+
+        lb = tk.Listbox(
+            popup,
+            bg=C["surface2"],
+            fg=C["text"],
+            selectbackground=C["accent"],
+            selectforeground="#ffffff",
+            activestyle="none",
+            font=("Consolas", 11),
+            relief=tk.FLAT,
+            highlightthickness=0,
+            borderwidth=0,
+            exportselection=False,
+            height=min(12, max(1, len(candidates))),
+            width=42,
+        )
+        lb.pack(padx=1, pady=1)
+        for label, _ in candidates:
+            lb.insert(tk.END, f"  {label}")
+        lb.selection_set(0)
+        lb.activate(0)
+
+        def do_insert(sel_idx: int) -> None:
+            if not (0 <= sel_idx < len(candidates)):
+                return
+            _, insert_str = candidates[sel_idx]
+            self._close_completion_popup()
+            try:
+                if mode == "tag_angle" and name_start is not None:
+                    # <partial…本文 のとき: タグ名部分だけ消して id> を入れる
+                    # 例: <sあいさつ| → <shake>あいさつ
+                    # name_start から name_start+len(partial) までがタグ名
+                    name_end = self.editor.index(f"{name_start} + {len(partial)}c")
+                    self.editor.delete(name_start, name_end)
+                    to_insert = insert_str[1:] if insert_str.startswith("<") else insert_str  # shake>
+                    self.editor.insert(name_start, to_insert)
+                    # カーソルを > の直後へ（本文の前）
+                    self.editor.mark_set("insert", f"{name_start} + {len(to_insert)}c")
+                elif mode == "tag_brace" and name_start is not None:
+                    name_end = self.editor.index(f"{name_start} + {len(partial)}c")
+                    self.editor.delete(name_start, name_end)
+                    to_insert = insert_str[1:] if insert_str.startswith("{") else insert_str
+                    self.editor.insert(name_start, to_insert)
+                    self.editor.mark_set("insert", f"{name_start} + {len(to_insert)}c")
+                elif mode == "param":
+                    if partial:
+                        start = self.editor.index(f"insert - {len(partial)}c")
+                        self.editor.delete(start, "insert")
+                    self.editor.insert("insert", insert_str)
+                else:
+                    # free: 直前の英数字 partial があれば消してフル挿入
+                    if partial:
+                        start = self.editor.index(f"insert - {len(partial)}c")
+                        self.editor.delete(start, "insert")
+                    self.editor.insert("insert", insert_str)
+            except tk.TclError:
+                self.editor.insert("insert", insert_str)
+            self.editor.focus_set()
+
+        def on_key(e):
+            if e.keysym == "Escape":
+                self._close_completion_popup()
+                self.editor.focus_set()
+                return "break"
+            if e.keysym == "Return":
+                sel = lb.curselection()
+                if sel:
+                    do_insert(int(sel[0]))
+                return "break"
+            if e.keysym == "Up":
+                cur = lb.curselection()
+                i = max(0, (int(cur[0]) if cur else 0) - 1)
+                lb.selection_clear(0, tk.END)
+                lb.selection_set(i)
+                lb.activate(i)
+                lb.see(i)
+                return "break"
+            if e.keysym == "Down":
+                cur = lb.curselection()
+                i = min(len(candidates) - 1, (int(cur[0]) if cur else 0) + 1)
+                lb.selection_clear(0, tk.END)
+                lb.selection_set(i)
+                lb.activate(i)
+                lb.see(i)
+                return "break"
+            return None
+
+        def on_dbl(_e):
+            sel = lb.curselection()
+            if sel:
+                do_insert(int(sel[0]))
+
+        lb.bind("<KeyPress>", on_key)
+        lb.bind("<Double-Button-1>", on_dbl)
+        lb.bind("<Return>", on_key)
+        popup.bind("<Escape>", lambda e: (self._close_completion_popup(), self.editor.focus_set()))
+        popup.geometry(f"+{abs_x}+{abs_y}")
+        lb.focus_set()
+        return "break"
 
 
 # ---------------------------------------------------------------------------
