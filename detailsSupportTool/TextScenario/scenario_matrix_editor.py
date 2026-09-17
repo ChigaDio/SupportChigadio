@@ -490,16 +490,21 @@ def get_cell_list(matrix: dict, row_key: str, col_key: str, field_name: str = "t
     return []
 
 
-def set_cell_list(matrix: dict, row_key: str, col_key: str, items: List[str], field_name: str = "texts") -> None:
+def set_cell_list(
+    matrix: dict,
+    row_key: str,
+    col_key: str,
+    items: List[str],
+    field_name: str = "texts"
+) -> None:
     data = matrix.setdefault("data", {})
     row = data.setdefault(row_key, {})
     cell = row.setdefault(col_key, {})
-    existing = cell.get(field_name)
-    if isinstance(existing, dict) and "value" in existing:
-        existing["value"] = list(items)
-        existing.setdefault("type", "string")
-    else:
-        cell[field_name] = {"value": list(items), "type": "string"}
+
+    # texts は配列そのものとして保存する
+    # 旧形式 {"value": [...], "type": "string"} が残っていても
+    # 保存時に新しい正しい形式へ変換する。
+    cell[field_name] = list(items)
 
 
 def list_row_keys(matrix: dict) -> List[str]:
