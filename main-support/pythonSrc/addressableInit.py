@@ -80,7 +80,7 @@ namespace AddressableSystem
         /// <summary>
         /// 単体ロード。onSuccess に読み込まれた T を渡す（ラムダの引数は T 型）。
         /// </summary>
-        public async UniTask LoadAsync( Action<T> onSuccess = null, Action<Exception> onError = null)
+        public async UniTask LoadAsync( Action<T> onSuccess = null, Action<Exception> onError = null, System.Threading.CancellationToken cancellationToken = default)
         {
             if (isLoaded || isSetup || string.IsNullOrEmpty(path))
             {
@@ -95,7 +95,7 @@ namespace AddressableSystem
                 {
                     while (data.IsLoadedAndSetup == false)
                     {
-                        await UniTask.Yield(PlayerLoopTiming.Update);
+                        await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
                     }
                     onSuccess?.Invoke(data.GetAddressableObjectResult());
                     isLoaded = true;
@@ -109,9 +109,9 @@ namespace AddressableSystem
             try
             {
                 handle = Addressables.LoadAssetAsync<T>(path);
-                typedAddressableObject = await handle.ToUniTask();
+                typedAddressableObject = await handle.ToUniTask(cancellationToken: cancellationToken);
                 addressableObject = typedAddressableObject;
-                await UniTask.Yield(PlayerLoopTiming.Update);
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
 
                 if (handle.Status == AsyncOperationStatus.Succeeded)
                 {
@@ -127,6 +127,12 @@ namespace AddressableSystem
                     onError?.Invoke(handle.OperationException);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                isLoaded = false;
+                if (handle.IsValid()) Addressables.Release(handle);
+                throw;
+            }
             catch (Exception ex)
             {
                 Debug.LogError($"Exception loading asset at {path}: {ex.Message}");
@@ -138,7 +144,7 @@ namespace AddressableSystem
         /// <summary>
         /// 配列ロード。onSuccess に IList<T> を渡す（ラムダの引数は IList<T>）。
         /// </summary>
-        public async UniTask LoadArrayAsync( Action<IList<T>> onSuccess = null, Action<Exception> onError = null)
+        public async UniTask LoadArrayAsync( Action<IList<T>> onSuccess = null, Action<Exception> onError = null, System.Threading.CancellationToken cancellationToken = default)
         {
             if (isLoaded || isSetup || string.IsNullOrEmpty(path))
             {
@@ -153,7 +159,7 @@ namespace AddressableSystem
                 {
                     while (data.IsLoadedAndSetup == false)
                     {
-                        await UniTask.Yield(PlayerLoopTiming.Update);
+                        await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
                     }
                     onSuccess?.Invoke(data.GetAddressableObjectArrayResult());
                     isLoaded = isSetup = true;
@@ -165,8 +171,8 @@ namespace AddressableSystem
             try
             {
                 arrayHandle = Addressables.LoadAssetAsync<IList<T>>(path);
-                var result = await arrayHandle.ToUniTask();
-                await UniTask.Yield(PlayerLoopTiming.Update);
+                var result = await arrayHandle.ToUniTask(cancellationToken: cancellationToken);
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
 
                 if (arrayHandle.Status == AsyncOperationStatus.Succeeded)
                 {
@@ -193,6 +199,12 @@ namespace AddressableSystem
                     isLoaded = false;
                     onError?.Invoke(arrayHandle.OperationException);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                isLoaded = false;
+                if (arrayHandle.IsValid()) Addressables.Release(arrayHandle);
+                throw;
             }
             catch (Exception ex)
             {
@@ -713,7 +725,15 @@ namespace AddressableSystem
         [SerializeField] private AddressableDataContainer dataContainer = new AddressableDataContainer();
         private readonly Dictionary<int, Dictionary<GroupCategory, List<BaseAddressableData>>> sceneDataMap =
             new Dictionary<int, Dictionary<GroupCategory, List<BaseAddressableData>>>();
-        private CancellationTokenSource cts = new CancellationTokenSource();
+
+        // ---- キャンセルトークン（destroy + 手動キャンセルを合体） ----
+        private CancellationToken destroyToken;
+        private CancellationTokenSource manualCancelSource = new CancellationTokenSource();
+        private CancellationTokenSource autoReleaseCts = new CancellationTokenSource();
+        private CancellationToken combinedToken;
+
+        /// <summary>Destroy + 手動キャンセルを合体したトークン。ロード待機などに使う。</summary>
+        public CancellationToken CombinedToken => combinedToken;
 
         public static AddressableDataCore Instance
         {
@@ -732,6 +752,29 @@ namespace AddressableSystem
 
         public IAddressableDataContainer DataContainer => dataContainer;
 
+        /// <summary>
+        /// Core の CombinedToken と外部トークンを合体した CTS を返す。
+        /// using で破棄すること。external が default なら Core 側のみでキャンセルされる。
+        /// </summary>
+        public CancellationTokenSource CreateLinkedCts(CancellationToken external = default)
+        {
+            return CancellationTokenSource.CreateLinkedTokenSource(combinedToken, external);
+        }
+
+        /// <summary>進行中のロード等をまとめてキャンセルする（CombinedToken がキャンセルされる）。</summary>
+        public void CancelAllOperations()
+        {
+            manualCancelSource.Cancel();
+            manualCancelSource.Dispose();
+            manualCancelSource = new CancellationTokenSource();
+            RebuildCombinedToken();
+        }
+
+        private void RebuildCombinedToken()
+        {
+            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
+        }
+
         public static AddressableObject<T> CreateAddressable<T>(string path) where T : UnityEngine.Object
         {
             return new AddressableObject<T>(path);
@@ -740,7 +783,8 @@ namespace AddressableSystem
         public static AddressableObject<T> CreateAddressableLoad<T>(string path,Action<T> action) where T : UnityEngine.Object
         {
             var result = new AddressableObject<T>(path);
-            result.LoadAsync(action).Forget();
+            // Core の CombinedToken をデフォルトで渡す（Destroy / CancelAll で止まる）
+            result.LoadAsync(action, AddressableDataCore.Instance.CombinedToken).Forget();
             return result;
         }
 
@@ -763,18 +807,25 @@ namespace AddressableSystem
                 dataContainer = new AddressableDataContainer();
             }
 
+            destroyToken = this.GetCancellationTokenOnDestroy();
+            manualCancelSource = new CancellationTokenSource();
+            RebuildCombinedToken();
+
             SceneManager.sceneUnloaded += OnSceneUnloaded;
         }
 
         protected virtual void Start()
         {
-            AutoReleaseRoutine(cts.Token).Forget();
+            autoReleaseCts = new CancellationTokenSource();
+            AutoReleaseRoutine(autoReleaseCts.Token).Forget();
         }
 
         protected virtual void OnDestroy()
         {
-            cts.Cancel();
-            cts.Dispose();
+            autoReleaseCts?.Cancel();
+            autoReleaseCts?.Dispose();
+            manualCancelSource?.Cancel();
+            manualCancelSource?.Dispose();
             SceneManager.sceneUnloaded -= OnSceneUnloaded;
             Resources.UnloadUnusedAssets();
             if (instance == this) instance = null;
@@ -816,13 +867,14 @@ namespace AddressableSystem
         }
 
         /// <summary>
-        /// Cancels the auto-release routine.
+        /// Cancels the auto-release routine and restarts it.
         /// </summary>
         public void CancelAutoRelease()
         {
-            cts.Cancel();
-            cts.Dispose();
-            cts = new CancellationTokenSource();
+            autoReleaseCts.Cancel();
+            autoReleaseCts.Dispose();
+            autoReleaseCts = new CancellationTokenSource();
+            AutoReleaseRoutine(autoReleaseCts.Token).Forget();
         }
 
         /// <summary>
@@ -974,7 +1026,7 @@ namespace AddressableSystem
         }
 
 
-        public async UniTask<T> LoadAsync(Action<T> action = null)
+        public async UniTask<T> LoadAsync(Action<T> action = null, System.Threading.CancellationToken cancellationToken = default)
         {
             if (isLoading || isSetup || string.IsNullOrEmpty(addressablePath))
             {
@@ -985,8 +1037,8 @@ namespace AddressableSystem
             try
             {
                 var handle = Addressables.LoadAssetAsync<T>(addressablePath);
-                loadedObject = await handle.ToUniTask();
-                await UniTask.Yield(PlayerLoopTiming.Update);
+                loadedObject = await handle.ToUniTask(cancellationToken: cancellationToken);
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
                 if (handle.Status == AsyncOperationStatus.Succeeded)
                 {
                     isSetup = true;
@@ -996,6 +1048,10 @@ namespace AddressableSystem
 
                 Debug.LogError($"Failed to load asset at {addressablePath}: {handle.OperationException}");
                 return null;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

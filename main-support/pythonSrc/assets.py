@@ -258,6 +258,7 @@ def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: 
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
     lines.append("using System.Collections.Generic;")
+    lines.append("using System.Threading;")
     lines.append("using GameCore.Enums;")
     lines.append("using Cysharp.Threading.Tasks;")
     lines.append("using UnityEngine;")
@@ -300,17 +301,17 @@ def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: 
         ind = "    " * indent
         det = detail_enum_type(group_name, path)
         # Load / Unload (callback)
-        lines.append(f"{ind}public static void Load({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"{ind}    => {class_name}.Instance.LoadSingle(id, groupCategory, onCompleted);")
+        lines.append(f"{ind}public static void Load({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => {class_name}.Instance.LoadSingle(id, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static async UniTask LoadAsync({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"{ind}    => await {class_name}.Instance.LoadSingleAsync(id, groupCategory, onCompleted);")
+        lines.append(f"{ind}public static async UniTask LoadAsync({det} id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => await {class_name}.Instance.LoadSingleAsync(id, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static void Unload({det} id, Action onCompleted = null)")
-        lines.append(f"{ind}    => {class_name}.Instance.UnloadSingle(id, onCompleted);")
+        lines.append(f"{ind}public static void Unload({det} id, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => {class_name}.Instance.UnloadSingle(id, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static async UniTask UnloadAsync({det} id, Action onCompleted = null)")
-        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSingleAsync(id, onCompleted);")
+        lines.append(f"{ind}public static async UniTask UnloadAsync({det} id, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSingleAsync(id, onCompleted, cancellationToken);")
         lines.append("")
 
         if category_name == "Texture":
@@ -339,17 +340,17 @@ def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: 
                 lines.append(f"{ind}    => {class_name}.Instance.GetSprite(spriteIndex, fallbackIndex);")
                 lines.append("")
         elif category_name == "Sound":
-            lines.append(f"{ind}public static void PlaySE({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
-            lines.append(f"{ind}    => {class_name}.Instance.PlaySE(id, volume, is3D, position, maxDistance);")
+            lines.append(f"{ind}public static void PlaySE({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlaySE(id, volume, is3D, position, maxDistance, cancellationToken);")
             lines.append("")
-            lines.append(f"{ind}public static void PlaySE_System({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
-            lines.append(f"{ind}    => {class_name}.Instance.PlaySE_System(id, volume, is3D, position, maxDistance);")
+            lines.append(f"{ind}public static void PlaySE_System({det} id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlaySE_System(id, volume, is3D, position, maxDistance, cancellationToken);")
             lines.append("")
-            lines.append(f"{ind}public static void PlayBGM({det} id, float volume = 1f, float fadeTime = 0f)")
-            lines.append(f"{ind}    => {class_name}.Instance.PlayBGM(id, volume, fadeTime);")
+            lines.append(f"{ind}public static void PlayBGM({det} id, float volume = 1f, float fadeTime = 0f, CancellationToken cancellationToken = default)")
+            lines.append(f"{ind}    => {class_name}.Instance.PlayBGM(id, volume, fadeTime, cancellationToken);")
             lines.append("")
-            lines.append(f"{ind}public static void CrossFadeBGM({det} id, float volume = 1f, float fadeTime = 1f)")
-            lines.append(f"{ind}    => {class_name}.Instance.CrossFadeBGM(id, volume, fadeTime);")
+            lines.append(f"{ind}public static void CrossFadeBGM({det} id, float volume = 1f, float fadeTime = 1f, CancellationToken cancellationToken = default)")
+            lines.append(f"{ind}    => {class_name}.Instance.CrossFadeBGM(id, volume, fadeTime, cancellationToken);")
             lines.append("")
             #lines.append(f"{ind}public static void StopSE({det} id)")
             #lines.append(f"{ind}    => {class_name}.Instance.StopSE(id);")
@@ -372,17 +373,17 @@ def generate_nest_group_csharp(category_name: str, groups_dict: dict, data_dir: 
         ind = "    " * indent
         # 子ネスト一覧 enum（トップ: Texture_ScenarioID）
         cen = child_list_enum_type(group_name, path)
-        lines.append(f"{ind}public static void LoadSubGroup({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"{ind}    => {class_name}.Instance.LoadSubGroup(subGroupId, groupCategory, onCompleted);")
+        lines.append(f"{ind}public static void LoadSubGroup({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => {class_name}.Instance.LoadSubGroup(subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static async UniTask LoadSubGroupAsync({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"{ind}    => await {class_name}.Instance.LoadSubGroupAsync(subGroupId, groupCategory, onCompleted);")
+        lines.append(f"{ind}public static async UniTask LoadSubGroupAsync({cen} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => await {class_name}.Instance.LoadSubGroupAsync(subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static void UnloadSubGroup({cen} subGroupId, Action onCompleted = null)")
-        lines.append(f"{ind}    => {class_name}.Instance.UnloadSubGroup(subGroupId, onCompleted);")
+        lines.append(f"{ind}public static void UnloadSubGroup({cen} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => {class_name}.Instance.UnloadSubGroup(subGroupId, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"{ind}public static async UniTask UnloadSubGroupAsync({cen} subGroupId, Action onCompleted = null)")
-        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSubGroupAsync(subGroupId, onCompleted);")
+        lines.append(f"{ind}public static async UniTask UnloadSubGroupAsync({cen} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"{ind}    => await {class_name}.Instance.UnloadSubGroupAsync(subGroupId, onCompleted, cancellationToken);")
         lines.append("")
 
     def emit_node(class_name_node, path, children, group_name, group_value, indent):
@@ -600,6 +601,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
     if generate_single_file:
         single_lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
         single_lines.append("using System;")
+        single_lines.append("using System.Threading;")
         single_lines.append("using GameCore.Enums;")
         single_lines.append("using Cysharp.Threading.Tasks;")
         single_lines.append("using UnityEngine;")
@@ -696,7 +698,7 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 # ここに振り分けて実行する。ここに境界チェックを1箇所だけ
                 # 持たせることで、enum版も含めて安全にする
                 # （enumは通常範囲内のはずだが、明示キャストされた場合の保険）。
-                single_lines.append(f"        private void LoadSingle_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted)")
+                single_lines.append(f"        private void LoadSingle_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted, CancellationToken cancellationToken)")
                 single_lines.append("        {")
                 single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
                 single_lines.append("            {")
@@ -704,10 +706,10 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("                onCompleted?.Invoke();")
                 single_lines.append("                return;")
                 single_lines.append("            }")
-                single_lines.append(f"            LoadSingle({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted);")
+                single_lines.append(f"            LoadSingle({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("        }")
                 single_lines.append("")
-                single_lines.append(f"        private async UniTask LoadSingleAsync_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted)")
+                single_lines.append(f"        private async UniTask LoadSingleAsync_{detail_enum_name}_Internal(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted, CancellationToken cancellationToken)")
                 single_lines.append("        {")
                 single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
                 single_lines.append("            {")
@@ -715,10 +717,10 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("                onCompleted?.Invoke();")
                 single_lines.append("                return;")
                 single_lines.append("            }")
-                single_lines.append(f"            await LoadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted);")
+                single_lines.append(f"            await LoadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("        }")
                 single_lines.append("")
-                single_lines.append(f"        private void UnloadSingle_{detail_enum_name}_Internal(int index, Action onCompleted)")
+                single_lines.append(f"        private void UnloadSingle_{detail_enum_name}_Internal(int index, Action onCompleted, CancellationToken cancellationToken)")
                 single_lines.append("        {")
                 single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
                 single_lines.append("            {")
@@ -726,10 +728,10 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("                onCompleted?.Invoke();")
                 single_lines.append("                return;")
                 single_lines.append("            }")
-                single_lines.append(f"            UnloadSingle({group_enum_name}.{group_name}, {table_name}[index], onCompleted);")
+                single_lines.append(f"            UnloadSingle({group_enum_name}.{group_name}, {table_name}[index], onCompleted, cancellationToken);")
                 single_lines.append("        }")
                 single_lines.append("")
-                single_lines.append(f"        private async UniTask UnloadSingleAsync_{detail_enum_name}_Internal(int index, Action onCompleted)")
+                single_lines.append(f"        private async UniTask UnloadSingleAsync_{detail_enum_name}_Internal(int index, Action onCompleted, CancellationToken cancellationToken)")
                 single_lines.append("        {")
                 single_lines.append(f"            if (index < 0 || index >= {table_name}.Length)")
                 single_lines.append("            {")
@@ -737,36 +739,36 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("                onCompleted?.Invoke();")
                 single_lines.append("                return;")
                 single_lines.append("            }")
-                single_lines.append(f"            await UnloadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], onCompleted);")
+                single_lines.append(f"            await UnloadSingleAsync({group_enum_name}.{group_name}, {table_name}[index], onCompleted, cancellationToken);")
                 single_lines.append("        }")
                 single_lines.append("")
 
                 # ---- enum版：ちゃんとSubGroup詳細enumを使う。中身はInternalへ振り分け ----
-                single_lines.append(f"        public void LoadSingle({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted);")
+                single_lines.append(f"        public void LoadSingle({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"        public async UniTask LoadSingleAsync({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted);")
+                single_lines.append(f"        public async UniTask LoadSingleAsync({detail_enum_name}ID id, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal((int)id, groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"        public void UnloadSingle({detail_enum_name}ID id, Action onCompleted = null)")
-                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal((int)id, onCompleted);")
+                single_lines.append(f"        public void UnloadSingle({detail_enum_name}ID id, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal((int)id, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"       public async UniTask UnloadSingleAsync({detail_enum_name}ID id, Action onCompleted = null)")
-                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal((int)id, onCompleted);")
+                single_lines.append(f"       public async UniTask UnloadSingleAsync({detail_enum_name}ID id, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal((int)id, onCompleted, cancellationToken);")
                 single_lines.append("")
 
                 # ---- int版：同じくInternalへ振り分け ----
-                single_lines.append(f"        public void LoadSingle_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal(index, groupCategory, onCompleted);")
+                single_lines.append(f"        public void LoadSingle_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => LoadSingle_{detail_enum_name}_Internal(index, groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"        public async UniTask LoadSingleAsync_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal(index, groupCategory, onCompleted);")
+                single_lines.append(f"        public async UniTask LoadSingleAsync_{detail_enum_name}(int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => await LoadSingleAsync_{detail_enum_name}_Internal(index, groupCategory, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"        public void UnloadSingle_{detail_enum_name}(int index, Action onCompleted = null)")
-                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal(index, onCompleted);")
+                single_lines.append(f"        public void UnloadSingle_{detail_enum_name}(int index, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => UnloadSingle_{detail_enum_name}_Internal(index, onCompleted, cancellationToken);")
                 single_lines.append("")
-                single_lines.append(f"        public async UniTask UnloadSingleAsync_{detail_enum_name}(int index, Action onCompleted = null)")
-                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal(index, onCompleted);")
+                single_lines.append(f"        public async UniTask UnloadSingleAsync_{detail_enum_name}(int index, Action onCompleted = null, CancellationToken cancellationToken = default)")
+                single_lines.append(f"            => await UnloadSingleAsync_{detail_enum_name}_Internal(index, onCompleted, cancellationToken);")
                 single_lines.append("")
 
                 #各自のGetの修正
@@ -775,17 +777,17 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                     single_lines.append(f"            => GetGameObject({group_enum_name}.{group_name}, {table_name}[(int)id]);")
                     single_lines.append("")
                 elif "SoundCore" == class_name:
-                    single_lines.append(f"       public void PlaySE({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
-                    single_lines.append(f"            => PlaySE({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance);")
+                    single_lines.append(f"       public void PlaySE({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)")
+                    single_lines.append(f"            => PlaySE({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance, cancellationToken);")
                     single_lines.append("")
-                    single_lines.append(f"       public void PlaySE_System({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)")
-                    single_lines.append(f"            => PlaySE_System({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance);")
+                    single_lines.append(f"       public void PlaySE_System({detail_enum_name}ID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)")
+                    single_lines.append(f"            => PlaySE_System({group_enum_name}.{group_name}, {table_name}[(int)id], volume, is3D, position, maxDistance, cancellationToken);")
                     single_lines.append("")
-                    single_lines.append(f"       public void PlayBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 0f)")
-                    single_lines.append(f"            => PlayBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
+                    single_lines.append(f"       public void PlayBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 0f, CancellationToken cancellationToken = default)")
+                    single_lines.append(f"            => PlayBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime,cancellationToken);")
                     single_lines.append("")
-                    single_lines.append(f"       public void CrossFadeBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 1f)")
-                    single_lines.append(f"            => CrossFadeBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime);")
+                    single_lines.append(f"       public void CrossFadeBGM({detail_enum_name}ID id, float volume = 1f, float fadeTime = 1f, CancellationToken cancellationToken = default)")
+                    single_lines.append(f"            => CrossFadeBGM({group_enum_name}.{group_name},{table_name}[(int)id],volume,fadeTime,cancellationToken);")
                     single_lines.append("")   
                 elif "MaterialCore" == class_name:
                     single_lines.append(f"       public Material GetMaterial({detail_enum_name}ID id)")
@@ -949,24 +951,24 @@ def sync_subgroup_enum_files(enum_dir, category_name, groups_dict,
                 single_lines.append("")
 
             # enum版（{enum_name}ID subGroupId を受け取る）
-            _emit_dispatch("LoadSingle", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
-                            "index, groupCategory, onCompleted", "subGroupId", is_async=False)
-            _emit_dispatch("LoadSingleAsync", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
-                            "index, groupCategory, onCompleted", "subGroupId", is_async=True)
-            _emit_dispatch("UnloadSingle", f"{enum_name}ID subGroupId, int index, Action onCompleted = null",
-                            "index, onCompleted", "subGroupId", is_async=False)
-            _emit_dispatch("UnloadSingleAsync", f"{enum_name}ID subGroupId, int index, Action onCompleted = null",
-                            "index, onCompleted", "subGroupId", is_async=True)
+            _emit_dispatch("LoadSingle", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, groupCategory, onCompleted, cancellationToken", "subGroupId", is_async=False)
+            _emit_dispatch("LoadSingleAsync", f"{enum_name}ID subGroupId, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, groupCategory, onCompleted, cancellationToken", "subGroupId", is_async=True)
+            _emit_dispatch("UnloadSingle", f"{enum_name}ID subGroupId, int index, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, onCompleted, cancellationToken", "subGroupId", is_async=False)
+            _emit_dispatch("UnloadSingleAsync", f"{enum_name}ID subGroupId, int index, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, onCompleted, cancellationToken", "subGroupId", is_async=True)
 
             # int版（subGroupIndexをintで受け取る）。メソッド名はGroup毎にユニークにする
-            _emit_dispatch(f"LoadSingle_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
-                            "index, groupCategory, onCompleted", "subGroupIndex", is_async=False)
-            _emit_dispatch(f"LoadSingleAsync_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null",
-                            "index, groupCategory, onCompleted", "subGroupIndex", is_async=True)
-            _emit_dispatch(f"UnloadSingle_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null",
-                            "index, onCompleted", "subGroupIndex", is_async=False)
-            _emit_dispatch(f"UnloadSingleAsync_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null",
-                            "index, onCompleted", "subGroupIndex", is_async=True)
+            _emit_dispatch(f"LoadSingle_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, groupCategory, onCompleted, cancellationToken", "subGroupIndex", is_async=False)
+            _emit_dispatch(f"LoadSingleAsync_{enum_name}", "int subGroupIndex, int index, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, groupCategory, onCompleted, cancellationToken", "subGroupIndex", is_async=True)
+            _emit_dispatch(f"UnloadSingle_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, onCompleted, cancellationToken", "subGroupIndex", is_async=False)
+            _emit_dispatch(f"UnloadSingleAsync_{enum_name}", "int subGroupIndex, int index, Action onCompleted = null, CancellationToken cancellationToken = default",
+                            "index, onCompleted, cancellationToken", "subGroupIndex", is_async=True)
         for fname in os.listdir(target_dir):
             if fname.endswith("ID.cs") and fname not in expected_files:
                 try:
@@ -2234,6 +2236,22 @@ namespace GameCore.Sound
         private CancellationTokenSource manualCancelSource = new();
         private CancellationToken combinedToken;
 
+        /// <summary>Destroy + 手動キャンセル合体。外部未指定時の既定。</summary>
+        public CancellationToken CombinedToken => combinedToken;
+
+        /// <summary>combinedToken と外部を合体した CTS。using で破棄。default なら Core 側のみ。</summary>
+        public CancellationTokenSource CreateLinkedCts(CancellationToken external = default)
+            => CancellationTokenSource.CreateLinkedTokenSource(combinedToken, external);
+
+        /// <summary>進行中のロード等をまとめてキャンセル。</summary>
+        public void CancelAllOperations()
+        {
+            manualCancelSource.Cancel();
+            manualCancelSource.Dispose();
+            manualCancelSource = new CancellationTokenSource();
+            combinedToken = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, manualCancelSource.Token).Token;
+        }
+
         public bool IsLoadDatabase { get; private set; }
 
         public override void AwakeSingleton()
@@ -2355,13 +2373,16 @@ namespace GameCore.Sound
         // =============================================================
         // グループロード／アンロード
         // =============================================================
-        public void LoadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null)
-            => LoadGroupAsync(group, category, onCompleted).Forget();
+        public void LoadGroup(SoundGroup group, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
+            => LoadGroupAsync(group, category, onCompleted, cancellationToken).Forget();
 
-        public async UniTask LoadGroupAsync(SoundGroup group, GroupCategory category, Action onCompleted)
+        public async UniTask LoadGroupAsync(SoundGroup group, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             while (!IsLoadDatabase)
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
 
             // VOICEのように件数が多く遅延ロード対象のグループだけ、
             // ここで初めてバイナリからそのGroup分のメタデータを読み込む。
@@ -2397,7 +2418,7 @@ namespace GameCore.Sound
                 {
                     Debug.LogError($"[SoundCore] Load failed {sound.SoundID}: {ex.Message}");
                     loadingKeys.Remove(key);
-                }).AttachExternalCancellation(combinedToken));
+                }, ct).AttachExternalCancellation(ct));
             }
 
             await UniTask.WhenAll(tasks);
@@ -2477,7 +2498,7 @@ namespace GameCore.Sound
                 {
                     Debug.LogError($"[SoundCore] Load failed {sound.SoundID}: {ex.Message}");
                     loadingKeys.Remove(key);
-                }).AttachExternalCancellation(combinedToken));
+                }, ct).AttachExternalCancellation(ct));
             }
 
             await UniTask.WhenAll(tasks);
@@ -2488,13 +2509,16 @@ namespace GameCore.Sound
         // 個別ID単位のロード／アンロード
         // グループロードと同じ soundAddressables / clipCache 等をそのまま使う。
         // =============================================================
-        internal void LoadSingle(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
-            => LoadSingleAsync(group, id, category, onCompleted).Forget();
+        internal void LoadSingle(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
+            => LoadSingleAsync(group, id, category, onCompleted, cancellationToken).Forget();
 
-        internal async UniTask LoadSingleAsync(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null)
+        internal async UniTask LoadSingleAsync(SoundGroup group, SoundID id, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             while (!IsLoadDatabase)
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
 
             var key = (group, id);
             if (clipCache.ContainsKey(key) || loadingKeys.Contains(key))
@@ -2514,29 +2538,37 @@ namespace GameCore.Sound
 
             loadingKeys.Add(key);
             var addressable = new AddressableData<AudioClip>(category, AssetCategory.Audio, sound.AddressablePath);
-            await addressable.LoadAsync(clip =>
+            try
             {
-                if (addressable.IsLoadedAndSetup)
+                await addressable.LoadAsync(clip =>
                 {
-                    clipCache[key] = clip;
-                    volumeCache[key] = sound.BaseVolume;
-                    typeCache[key] = sound.Type;
-                    soundAddressables[key] = addressable;
-                }
-                loadingKeys.Remove(key);
-            }, ex =>
+                    if (addressable.IsLoadedAndSetup)
+                    {
+                        clipCache[key] = clip;
+                        volumeCache[key] = sound.BaseVolume;
+                        typeCache[key] = sound.Type;
+                        soundAddressables[key] = addressable;
+                    }
+                    loadingKeys.Remove(key);
+                }, ex =>
+                {
+                    Debug.LogError($"[SoundCore] Load failed (single) {id}: {ex.Message}");
+                    loadingKeys.Remove(key);
+                }, ct).AttachExternalCancellation(ct);
+            }
+            catch (OperationCanceledException)
             {
-                Debug.LogError($"[SoundCore] Load failed (single) {id}: {ex.Message}");
                 loadingKeys.Remove(key);
-            }).AttachExternalCancellation(combinedToken);
+                throw;
+            }
 
             onCompleted?.Invoke();
         }
 
-        public void UnloadSingle(SoundGroup group, SoundID id, Action onCompleted = null)
-            => UnloadSingleAsync(group, id, onCompleted).Forget();
+        public void UnloadSingle(SoundGroup group, SoundID id, Action onCompleted = null, CancellationToken cancellationToken = default)
+            => UnloadSingleAsync(group, id, onCompleted, cancellationToken).Forget();
 
-        public async UniTask UnloadSingleAsync(SoundGroup group, SoundID id, Action onCompleted = null)
+        public async UniTask UnloadSingleAsync(SoundGroup group, SoundID id, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
             var key = (group, id);
             if (soundAddressables.TryGetValue(key, out var addressable))
@@ -2564,13 +2596,16 @@ namespace GameCore.Sound
         // グループロードと同じ soundAddressables / clipCache 等をそのまま使い、
         // 専用の管理は持たない。
         // =============================================================
-        internal void LoadSubGroupInternal(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
-            => LoadSubGroupInternalAsync(group, subGroupId, category, onCompleted).Forget();
+        internal void LoadSubGroupInternal(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
+            => LoadSubGroupInternalAsync(group, subGroupId, category, onCompleted, cancellationToken).Forget();
 
-        internal async UniTask LoadSubGroupInternalAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+        internal async UniTask LoadSubGroupInternalAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             while (!IsLoadDatabase)
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
 
             if (database.IsLazyGroup(group))
                 await database.EnsureSubGroupChunkLoadedAsync(group, subGroupId);
@@ -2601,17 +2636,17 @@ namespace GameCore.Sound
                 {
                     Debug.LogError($"[SoundCore] Load failed (subgroup) {sound.SoundID}: {ex.Message}");
                     loadingKeys.Remove(key);
-                }).AttachExternalCancellation(combinedToken));
+                }, ct).AttachExternalCancellation(ct));
             }
 
             await UniTask.WhenAll(tasks);
             onCompleted?.Invoke();
         }
 
-        internal void UnloadSubGroupInternal(SoundGroup group, int subGroupId, Action onCompleted = null)
-            => UnloadSubGroupInternalAsync(group, subGroupId, onCompleted).Forget();
+        internal void UnloadSubGroupInternal(SoundGroup group, int subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)
+            => UnloadSubGroupInternalAsync(group, subGroupId, onCompleted, cancellationToken).Forget();
 
-        internal async UniTask UnloadSubGroupInternalAsync(SoundGroup group, int subGroupId, Action onCompleted = null)
+        internal async UniTask UnloadSubGroupInternalAsync(SoundGroup group, int subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
             if (database != null)
             {
@@ -2644,11 +2679,14 @@ namespace GameCore.Sound
         // =============================================================
         // SE再生（最速・安全）
         // =============================================================
-        public void PlaySE(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
-            => PlaySEAsync(group, id, volume, is3D, position, maxDistance).Forget();
+        public void PlaySE(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)
+            => PlaySEAsync(group, id, volume, is3D, position, maxDistance, cancellationToken).Forget();
 
-        private async UniTask PlaySEAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance)
+        private async UniTask PlaySEAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             var key = (group, id);
 
             if (!clipCache.TryGetValue(key, out var clip) ||
@@ -2670,7 +2708,7 @@ namespace GameCore.Sound
 
             try
             {
-                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken);
+                await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: ct);
             }
             catch (OperationCanceledException) { }
             finally
@@ -2679,11 +2717,14 @@ namespace GameCore.Sound
             }
         }
 
-        public void PlaySE_System(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f)
-            => PlaySE_SystemAsync(group, id, volume, is3D, position, maxDistance).Forget();
+        public void PlaySE_System(SoundGroup group, SoundID id, float volume = 1f, bool is3D = false, Vector3 position = default, float maxDistance = 500f, CancellationToken cancellationToken = default)
+            => PlaySE_SystemAsync(group, id, volume, is3D, position, maxDistance, cancellationToken).Forget();
 
-        private async UniTask PlaySE_SystemAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance)
+        private async UniTask PlaySE_SystemAsync(SoundGroup group, SoundID id, float volume, bool is3D, Vector3 position, float maxDistance, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             var key = (group, id);
             if (!clipCache.TryGetValue(key, out var clip) ||
                 !volumeCache.TryGetValue(key, out var baseVolume) ||
@@ -2698,7 +2739,7 @@ namespace GameCore.Sound
             source.maxDistance = maxDistance;
             if (is3D) source.transform.position = position;
             source.Play();
-            try { await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: combinedToken); }
+            try { await UniTask.WaitUntil(() => !source.isPlaying, cancellationToken: ct); }
             catch (OperationCanceledException) { }
             finally { ResetSource(source); }
         }
@@ -2806,11 +2847,14 @@ namespace GameCore.Sound
         // =============================================================
         // BGM再生・フェード・クロスフェード
         // =============================================================
-        public void PlayBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 0f)
-            => PlayBGMAsync(group, id, volume, fadeTime).Forget();
+        public void PlayBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 0f, CancellationToken cancellationToken = default)
+            => PlayBGMAsync(group, id, volume, fadeTime, cancellationToken).Forget();
 
-        private async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime)
+        private async UniTask PlayBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             var key = (group, id);
             if (!clipCache.TryGetValue(key, out var clip) ||
                 !volumeCache.TryGetValue(key, out var baseVolume) ||
@@ -2818,7 +2862,7 @@ namespace GameCore.Sound
                 return;
 
             if (bgmSource.isPlaying && fadeTime > 0f)
-                await FadeOutAsync(fadeTime);
+                await FadeOutAsync(fadeTime, null, ct);
 
             bgmSource.clip = clip;
             bgmSource.volume = 0f;
@@ -2826,16 +2870,19 @@ namespace GameCore.Sound
 
             float targetVolume = baseVolume * volume * SaveManagerCore.Instance.SystemSettings.bgmVolume;
             if (fadeTime > 0f)
-                await FadeInAsync(targetVolume, fadeTime);
+                await FadeInAsync(targetVolume, fadeTime, null, ct);
             else
                 bgmSource.volume = targetVolume;
         }
 
-        public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 1f)
-            => CrossFadeBGMAsync(group, id, volume, fadeTime).Forget();
+        public void CrossFadeBGM(SoundGroup group, SoundID id, float volume = 1f, float fadeTime = 1f, CancellationToken cancellationToken = default)
+            => CrossFadeBGMAsync(group, id, volume, fadeTime, cancellationToken).Forget();
 
-        private async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime)
+        private async UniTask CrossFadeBGMAsync(SoundGroup group, SoundID id, float volume, float fadeTime, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
+
             var key = (group, id);
             if (!clipCache.TryGetValue(key, out var clip) ||
                 !volumeCache.TryGetValue(key, out var baseVolume) ||
@@ -2860,7 +2907,7 @@ namespace GameCore.Sound
                 float t = Mathf.Clamp01(timer / fadeTime);
                 bgmSource.volume = Mathf.Lerp(startVolume, 0f, t);
                 crossFadeTempSource.volume = Mathf.Lerp(0f, targetVolume, t);
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
             }
 
             bgmSource.Stop();
@@ -2871,8 +2918,9 @@ namespace GameCore.Sound
             isCrossFading = false;
         }
 
-        private async UniTask FadeOutAsync(float fadeTime, Action onCompleted = null)
+        private async UniTask FadeOutAsync(float fadeTime, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
+            var ct = cancellationToken.CanBeCanceled ? cancellationToken : combinedToken;
             if (!bgmSource.isPlaying) { onCompleted?.Invoke(); return; }
 
             float startVolume = bgmSource.volume;
@@ -2883,7 +2931,7 @@ namespace GameCore.Sound
                 timer += Time.deltaTime;
                 bgmSource.volume = Mathf.Lerp(startVolume, 0f, timer / fadeTime);
                 if (timer >= fadeTime) break;
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
             }
 
             bgmSource.volume = 0f;
@@ -2892,15 +2940,16 @@ namespace GameCore.Sound
             onCompleted?.Invoke();
         }
 
-        private async UniTask FadeInAsync(float targetVolume, float fadeTime, Action onCompleted = null)
+        private async UniTask FadeInAsync(float targetVolume, float fadeTime, Action onCompleted = null, CancellationToken cancellationToken = default)
         {
+            var ct = cancellationToken.CanBeCanceled ? cancellationToken : combinedToken;
             float timer = 0f;
             while (timer < fadeTime)
             {
                 timer += Time.deltaTime;
                 bgmSource.volume = Mathf.Lerp(0f, targetVolume, timer / fadeTime);
                 if (timer >= fadeTime) break;
-                await UniTask.Yield(combinedToken);
+                await UniTask.Yield(ct);
             }
             bgmSource.volume = targetVolume;
             onCompleted?.Invoke();
@@ -4159,6 +4208,7 @@ def generate_sound_core_subgroups(data):
     lines = []
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
+    lines.append("using System.Threading;")
     lines.append("using GameCore.Enums;")
     lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
@@ -4173,34 +4223,31 @@ def generate_sound_core_subgroups(data):
             continue
         enum_name = f"Sound_{group_name}ID"
 
-        # 共有の実行部分（Internal）。enum版・int版どちらもここに振り分けて実行する。
-        lines.append(f"        private void LoadSubGroup_{group_name}_Internal(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted)")
-        lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, category, onCompleted);")
+        lines.append(f"        private void LoadSubGroup_{group_name}_Internal(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted, CancellationToken cancellationToken)")
+        lines.append(f"            => LoadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, category, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        private void UnloadSubGroup_{group_name}_Internal(int subGroupIndex, Action onCompleted)")
-        lines.append(f"            => UnloadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, onCompleted);")
-        lines.append("")
-
-        # enum版：ちゃんとSubGroup ID enumを使う。中身はInternalへ振り分け
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroup_{group_name}_Internal((int)subGroupId, category, onCompleted);")
-        lines.append("")
-        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null)")
-        lines.append(f"            => await LoadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted);")
-        lines.append("")
-        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroup_{group_name}_Internal((int)subGroupId, onCompleted);")
-        lines.append("")
-        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => await UnloadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        private void UnloadSubGroup_{group_name}_Internal(int subGroupIndex, Action onCompleted, CancellationToken cancellationToken)")
+        lines.append(f"            => UnloadSubGroupInternal(SoundGroup.{group_name}, subGroupIndex, onCompleted, cancellationToken);")
         lines.append("")
 
-        # int版：同じくInternalへ振り分け
-        lines.append(f"        public void LoadSubGroup_{group_name}(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroup_{group_name}_Internal(subGroupIndex, category, onCompleted);")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => LoadSubGroup_{group_name}_Internal((int)subGroupId, category, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public void UnloadSubGroup_{group_name}(int subGroupIndex, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroup_{group_name}_Internal(subGroupIndex, onCompleted);")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, category, onCompleted, cancellationToken);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => UnloadSubGroup_{group_name}_Internal((int)subGroupId, onCompleted, cancellationToken);")
+        lines.append("")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(SoundGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
+        lines.append("")
+
+        lines.append(f"        public void LoadSubGroup_{group_name}(int subGroupIndex, AddressableSystem.GroupCategory category, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => LoadSubGroup_{group_name}_Internal(subGroupIndex, category, onCompleted, cancellationToken);")
+        lines.append("")
+        lines.append(f"        public void UnloadSubGroup_{group_name}(int subGroupIndex, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => UnloadSubGroup_{group_name}_Internal(subGroupIndex, onCompleted, cancellationToken);")
         lines.append("")
 
     lines.append("    }")
@@ -4705,13 +4752,16 @@ namespace GameCore.Texture
         // 個別ID単位のロード／アンロード
         // 既存の loadedAssets（グループロードと同じキャッシュ）をそのまま使う。
         // =============================================================
-        internal void LoadSingle(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
-            => LoadSingleAsync(group, id, groupCategory, action).Forget();
+        internal void LoadSingle(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSingleAsync(group, id, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSingleAsync(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(TextureGroup group, TextureID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, cancellationToken);
+            var ct = linkedCts.Token;
+
             while (database == null)
-                await UniTask.Yield(cancellationToken: destroyToken);
+                await UniTask.Yield(cancellationToken: ct);
 
             if (loadedAssets.TryGetValue(group, out var existing) && existing.ContainsKey(id))
             {
@@ -4736,15 +4786,15 @@ namespace GameCore.Texture
             }, ex =>
             {
                 Debug.LogError($"Failed to load single texture {id} at {texture.AddressablePath}: {ex.Message}");
-            });
+            }, ct);
 
             action?.Invoke();
         }
 
-        public void UnloadSingle(TextureGroup group, TextureID id, Action action = null)
-            => UnloadSingleAsync(group, id, action).Forget();
+        public void UnloadSingle(TextureGroup group, TextureID id, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSingleAsync(group, id, action, cancellationToken).Forget();
 
-        public async UniTask UnloadSingleAsync(TextureGroup group, TextureID id, Action action = null)
+        public async UniTask UnloadSingleAsync(TextureGroup group, TextureID id, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedAssets.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
             {
@@ -4762,10 +4812,10 @@ namespace GameCore.Texture
         // どのテクスチャがどのSubGroupに属するかは TextureData.SubGroupId から都度判定する。
         // 既存の loadedAssets キャッシュをそのまま使い、専用の管理は持たない。
         // =============================================================
-        internal void LoadSubGroupInternal(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
-            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+        internal void LoadSubGroupInternal(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSubGroupInternalAsync(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSubGroupInternalAsync(TextureGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
             while (database == null)
                 await UniTask.Yield(cancellationToken: destroyToken);
@@ -4797,10 +4847,10 @@ namespace GameCore.Texture
             action?.Invoke();
         }
 
-        internal void UnloadSubGroupInternal(TextureGroup group, int subGroupId, Action action = null)
-            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+        internal void UnloadSubGroupInternal(TextureGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action, cancellationToken).Forget();
 
-        internal async UniTask UnloadSubGroupInternalAsync(TextureGroup group, int subGroupId, Action action = null)
+        internal async UniTask UnloadSubGroupInternalAsync(TextureGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedAssets.TryGetValue(group, out var dict) && database != null)
             {
@@ -4945,22 +4995,22 @@ namespace GameCore.Texture
 
         public bool IsLoadedAndSetup => isSprite ? spriteData.IsLoadedAndSetup : textureData.IsLoadedAndSetup;
 
-        public async UniTask LoadAsync(string path, int spriteCount, Action<object> onSuccess, Action<Exception> onError)
+        public async UniTask LoadAsync(string path, int spriteCount, Action<object> onSuccess, Action<Exception> onError, System.Threading.CancellationToken cancellationToken = default)
         {
             if (isSprite)
             {
                 if (spriteCount > 1)
                 {
-                    await spriteData.LoadArrayAsync(onSuccess, onError);
+                    await spriteData.LoadArrayAsync(onSuccess, onError, cancellationToken);
                 }
                 else
                 {
-                    await spriteData.LoadAsync(onSuccess, onError);
+                    await spriteData.LoadAsync(onSuccess, onError, cancellationToken);
                 }
             }
             else
             {
-                await textureData.LoadAsync(onSuccess, onError);
+                await textureData.LoadAsync(onSuccess, onError, cancellationToken);
             }
         }
 
@@ -5354,6 +5404,7 @@ def generate_texture_core_subgroups(data):
     lines = []
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
+    lines.append("using System.Threading;")
     lines.append("using GameCore.Enums;")
     lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
@@ -5367,17 +5418,17 @@ def generate_texture_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Texture_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => LoadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => await LoadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => UnloadSubGroupInternal(TextureGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => await UnloadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(TextureGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
 
     lines.append("    }")
@@ -5770,14 +5821,17 @@ namespace GameCore.Gameobject
         // 既存の loadedGameObjects（グループロードと同じキャッシュ）をそのまま使う。
         // 個別専用の管理は持たない。
         // =============================================================
-        internal void LoadSingle(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
-            => LoadSingleAsync(group, id, groupCategory, action).Forget();
+        internal void LoadSingle(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSingleAsync(group, id, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSingleAsync(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(GameObjectGroup group, GameObjectID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, cancellationToken);
+            var ct = linkedCts.Token;
+
             while (database == null)
             {
-                await UniTask.Yield(cancellationToken: destroyToken);
+                await UniTask.Yield(cancellationToken: ct);
             }
             if (loadedGameObjects.TryGetValue(group, out var existing) && existing.ContainsKey(id))
             {
@@ -5802,15 +5856,15 @@ namespace GameCore.Gameobject
             }, ex =>
             {
                 Debug.LogError($"Failed to load single gameobject {id} at {target.AddressablePath}: {ex.Message}");
-            }).AttachExternalCancellation(destroyToken);
+            }, ct).AttachExternalCancellation(ct);
 
             action?.Invoke();
         }
 
-        public void UnloadSingle(GameObjectGroup group, GameObjectID id, Action action = null)
-            => UnloadSingleAsync(group, id, action).Forget();
+        public void UnloadSingle(GameObjectGroup group, GameObjectID id, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSingleAsync(group, id, action, cancellationToken).Forget();
 
-        public async UniTask UnloadSingleAsync(GameObjectGroup group, GameObjectID id, Action action = null)
+        public async UniTask UnloadSingleAsync(GameObjectGroup group, GameObjectID id, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedGameObjects.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
             {
@@ -5829,10 +5883,10 @@ namespace GameCore.Gameobject
         // （バイナリ生成時に書き出し済み）から都度判定する。
         // 既存の loadedGameObjects キャッシュをそのまま使い、専用の管理は持たない。
         // =============================================================
-        internal void LoadSubGroupInternal(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
-            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+        internal void LoadSubGroupInternal(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
             while (database == null)
             {
@@ -5865,10 +5919,10 @@ namespace GameCore.Gameobject
             action?.Invoke();
         }
 
-        internal void UnloadSubGroupInternal(GameObjectGroup group, int subGroupId, Action action = null)
-            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+        internal void UnloadSubGroupInternal(GameObjectGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action, cancellationToken).Forget();
 
-        internal async UniTask UnloadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, Action action = null)
+        internal async UniTask UnloadSubGroupInternalAsync(GameObjectGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedGameObjects.TryGetValue(group, out var dict) && database != null)
             {
@@ -6598,7 +6652,9 @@ def generate_gameobject_core_subgroups(data):
     lines = []
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
+    lines.append("using System.Threading;")
     lines.append("using GameCore.Enums;")
+    lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
     lines.append("namespace GameCore.Gameobject")
     lines.append("{")
@@ -6610,17 +6666,17 @@ def generate_gameobject_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"GameObject_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => LoadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => await LoadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => UnloadSubGroupInternal(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => await UnloadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(GameObjectGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
 
     lines.append("    }")
@@ -7076,6 +7132,7 @@ def generate_material_core_subgroups(data):
     lines = []
     lines.append("// 自動生成ファイルです。手動編集しても generate 実行時に上書きされます。")
     lines.append("using System;")
+    lines.append("using System.Threading;")
     lines.append("using GameCore.Enums;")
     lines.append("using Cysharp.Threading.Tasks;")
     lines.append("")
@@ -7089,17 +7146,17 @@ def generate_material_core_subgroups(data):
         if not subgroups:
             continue
         enum_name = f"Material_{group_name}ID"
-        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => LoadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public void LoadSubGroup({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => LoadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null)")
-        lines.append(f"            => await LoadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted);")
+        lines.append(f"        public async UniTask LoadSubGroupAsync({enum_name} subGroupId, AddressableSystem.GroupCategory groupCategory, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await LoadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, groupCategory, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => UnloadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public void UnloadSubGroup({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => UnloadSubGroupInternal(MaterialGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
-        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null)")
-        lines.append(f"            => await UnloadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, onCompleted);")
+        lines.append(f"        public async UniTask UnloadSubGroupAsync({enum_name} subGroupId, Action onCompleted = null, CancellationToken cancellationToken = default)")
+        lines.append(f"            => await UnloadSubGroupInternalAsync(MaterialGroup.{group_name}, (int)subGroupId, onCompleted, cancellationToken);")
         lines.append("")
 
     lines.append("    }")
@@ -7524,13 +7581,16 @@ namespace GameCore.MaterialData
         // 個別ID単位のロード／アンロード
         // 既存の loadedMaterials（グループロードと同じキャッシュ）をそのまま使う。
         // =============================================================
-        internal void LoadSingle(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
-            => LoadSingleAsync(group, id, groupCategory, action).Forget();
+        internal void LoadSingle(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSingleAsync(group, id, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSingleAsync(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSingleAsync(MaterialGroup group, MaterialID id, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(destroyToken, cancellationToken);
+            var ct = linkedCts.Token;
+
             while (database == null)
-                await UniTask.Yield(cancellationToken: destroyToken);
+                await UniTask.Yield(cancellationToken: ct);
 
             if (loadedMaterials.TryGetValue(group, out var existing) && existing.ContainsKey(id))
             {
@@ -7555,15 +7615,15 @@ namespace GameCore.MaterialData
             }, ex =>
             {
                 Debug.LogError($"Failed to load single material {id} at {mat.AddressablePath}: {ex.Message}");
-            }).AttachExternalCancellation(destroyToken);
+            }, ct).AttachExternalCancellation(ct);
 
             action?.Invoke();
         }
 
-        public void UnloadSingle(MaterialGroup group, MaterialID id, Action action = null)
-            => UnloadSingleAsync(group, id, action).Forget();
+        public void UnloadSingle(MaterialGroup group, MaterialID id, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSingleAsync(group, id, action, cancellationToken).Forget();
 
-        public async UniTask UnloadSingleAsync(MaterialGroup group, MaterialID id, Action action = null)
+        public async UniTask UnloadSingleAsync(MaterialGroup group, MaterialID id, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedMaterials.TryGetValue(group, out var dict) && dict.TryGetValue(id, out var addressable))
             {
@@ -7581,10 +7641,10 @@ namespace GameCore.MaterialData
         // どのマテリアルがどのSubGroupに属するかは MaterialAssetData.SubGroupId から都度判定する。
         // 既存の loadedMaterials キャッシュをそのまま使い、専用の管理は持たない。
         // =============================================================
-        internal void LoadSubGroupInternal(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
-            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action).Forget();
+        internal void LoadSubGroupInternal(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
+            => LoadSubGroupInternalAsync(group, subGroupId, groupCategory, action, cancellationToken).Forget();
 
-        internal async UniTask LoadSubGroupInternalAsync(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null)
+        internal async UniTask LoadSubGroupInternalAsync(MaterialGroup group, int subGroupId, GroupCategory groupCategory, Action action = null, CancellationToken cancellationToken = default)
         {
             while (database == null)
                 await UniTask.Yield(cancellationToken: destroyToken);
@@ -7616,10 +7676,10 @@ namespace GameCore.MaterialData
             action?.Invoke();
         }
 
-        internal void UnloadSubGroupInternal(MaterialGroup group, int subGroupId, Action action = null)
-            => UnloadSubGroupInternalAsync(group, subGroupId, action).Forget();
+        internal void UnloadSubGroupInternal(MaterialGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
+            => UnloadSubGroupInternalAsync(group, subGroupId, action, cancellationToken).Forget();
 
-        internal async UniTask UnloadSubGroupInternalAsync(MaterialGroup group, int subGroupId, Action action = null)
+        internal async UniTask UnloadSubGroupInternalAsync(MaterialGroup group, int subGroupId, Action action = null, CancellationToken cancellationToken = default)
         {
             if (loadedMaterials.TryGetValue(group, out var dict) && database != null)
             {
