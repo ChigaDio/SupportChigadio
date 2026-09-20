@@ -16,6 +16,11 @@ ScenarioMatrix 高速編集ツール（モダンUI）
   - 行ごとの演出メモ（コメント）を保存（サイドカー JSON）
   - 本文入力中のタグ補完（Ctrl+Space）と / による自動閉じタグ
     （既存の日本語・英語本文の途中でも <s などで候補が出る）
+  - ボイス設定（ScenarioVoice Matrix: 行=言語 / 列=シナリオ / voices=SoundID配列）
+    ・SoundID を検索して1つずつ追加（サウンド定義に無いIDも手入力可）
+    ・フォルダを選ぶと直下の音声ファイルを名前順に並べ、サウンド定義と紐づく
+      SoundID を一括で取り込み
+    ・サウンド定義は起動中のサーバ(/api/sound)または /api/sound 形式のJSONから取得
 """
 
 from __future__ import annotations
@@ -199,6 +204,14 @@ DEFAULT_SETTINGS = {
     "tags_path": "",
     "geometry": "",
     "recent_paths": [],
+    # ボイス設定（ScenarioVoice Matrix）
+    "voice_matrix_path": "",
+    "voice_last_row": "",
+    "voice_last_col": "",
+    "voice_last_folder": "",
+    "voice_geometry": "",
+    "sound_server_url": "",
+    "sound_registry_path": "",
 }
 
 
@@ -1079,7 +1092,9 @@ class ScenarioMatrixEditor(tk.Tk):
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=16, pady=(14, 6))
         ttk.Label(header, text="Scenario Matrix Editor", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, text="  高速 · 配列編集 · 行コメント · テキストI/O · 翻訳 · タグ補完", style="Muted.TLabel").pack(side=tk.LEFT)
+        ttk.Label(header, text="  高速 · 配列編集 · 行コメント · テキストI/O · 翻訳 · タグ補完 · ボイス設定", style="Muted.TLabel").pack(side=tk.LEFT)
+        # ボイス設定は、横幅がいっぱいのツールバーではなくヘッダー右上に置く（見切れ防止）
+        self._btn(header, "ボイス設定…", self.open_voice_editor, accent=True).pack(side=tk.RIGHT, padx=(10, 0))
         ttk.Label(header, text=f"設定: {CONFIG_DIR}", style="Muted.TLabel").pack(side=tk.RIGHT)
 
         # パスバー
@@ -2019,6 +2034,16 @@ class ScenarioMatrixEditor(tk.Tk):
         path = ensure_tag_file(self.tags_path)
         TagDefinitionEditor(self, initial_path=path, on_path_changed=self._on_tags_path_changed)
 
+    def open_voice_editor(self) -> None:
+        """ボイス設定（ScenarioVoice Matrix）ウィンドウを開く。すでに開いていれば前面へ。"""
+        win = getattr(self, "_voice_win", None)
+        if win is not None and win.winfo_exists():
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+            return
+        self._voice_win = VoiceMatrixEditor(self)
+
     def _on_tags_path_changed(self, new_path: str) -> None:
         self.tags_path = os.path.abspath(new_path)
         self.tag_config = _read_json(self.tags_path, DEFAULT_TAG_CONFIG)
@@ -2735,6 +2760,1006 @@ class TagDefinitionEditor(tk.Toplevel):
     def _on_close(self) -> None:
         if self._dirty and not messagebox.askyesno("確認", "未保存の変更があります。閉じますか？", parent=self):
             return
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# ボイス設定（ScenarioVoice Matrix）
+#   行 = Language / 列 = シナリオ("{イベント名}_{サブイベント名}") / voices = SoundID の配列
+#   ScenarioText Matrix のボイス版。Role の voice_ref は「voices の何番目か」を
+#   int(インデックス)で持つので、言語ごとに同じ並び順でボイスを並べておくこと。
+# ---------------------------------------------------------------------------
+
+VOICE_FIELD_DEFAULT = "voices"
+AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".aiff", ".aif")
+DEFAULT_SOUND_SERVER_URL = "http://localhost:8000"  # app.py の flask_main() の port=8000
+
+
+def natural_sort_key(s: str) -> list:
+    """Line2 < Line10 になる自然順ソート用キー（大文字小文字は区別しない）。"""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def strip_sound_id_prefix(sound_id: str) -> str:
+    s = "" if sound_id is None else str(sound_id).strip()
+    return s.split(".")[-1] if "." in s else s
+
+
+def normalize_sound_id(text: str) -> str:
+    """"Scn_Test_L1" → "SoundID.Scn_Test_L1"。すでに "." を含む完全修飾ならそのまま。"""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    return t if "." in t else f"SoundID.{t}"
+
+
+def parse_sound_registry(obj) -> List[dict]:
+    """/api/sound のレスポンス（またはそれと同じ形の JSON）をサウンド定義のリストへ変換する。
+    受け付ける形: {"groups": {グループ名: {"items": [...]}}} / {グループ名: {"items": [...]}}
+                 / {グループ名: [...]} / group キーを持つ項目のフラットな配列
+    SoundID の命名規則は {group}_{subgroup}_{name}（subgroup が無ければ省略）。
+    nest_path を持つ定義にも対応するため、別名（aliases）として nest_path 版の名前も持つ。"""
+    entries: List[dict] = []
+
+    def add_items(group: str, items) -> None:
+        for it in items or []:
+            if not isinstance(it, dict) or not it.get("name"):
+                continue
+            g = it.get("group") or group or ""
+            if not g:
+                continue  # グループが分からないと SoundID を組み立てられない
+            sub = it.get("subgroup") or ""
+            nest = it.get("nest_path") if isinstance(it.get("nest_path"), list) else []
+            main_name = "_".join(x for x in (g, sub, it["name"]) if x)
+            nest_name = "_".join(x for x in (g, *nest, it["name"]) if x)
+            entries.append({
+                "group": g,
+                "subgroup": sub,
+                "name": str(it["name"]),
+                "type": str(it.get("type") or "").upper(),
+                "path": str(it.get("path") or ""),
+                "desc": str(it.get("desc") or ""),
+                "sound_id": f"SoundID.{main_name}",
+                "aliases": {main_name, nest_name},
+            })
+
+    groups = obj.get("groups") if isinstance(obj, dict) and isinstance(obj.get("groups"), dict) else obj
+    if isinstance(groups, dict):
+        for gname, gval in groups.items():
+            if isinstance(gval, dict):
+                add_items(str(gname), gval.get("items"))
+            elif isinstance(gval, list):
+                add_items(str(gname), gval)
+    elif isinstance(groups, list):
+        add_items("", groups)
+    return entries
+
+
+def fetch_sound_registry_from_server(base_url: str, timeout: float = 5.0) -> List[dict]:
+    """起動中の SupportChigadio サーバ（Flask）の GET /api/sound からサウンド定義を取得する。"""
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/api/sound"
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return parse_sound_registry(json.loads(resp.read().decode("utf-8")))
+
+
+def autodetect_sound_registry_file() -> Optional[str]:
+    """data/sound 配下（深さ2まで）の JSON から、サウンド定義として読めるものを探す。"""
+    root = os.path.join(_resolve_data_dir(), "sound")
+    if not os.path.isdir(root):
+        return None
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dirpath[len(root):].count(os.sep) >= 2:
+            dirnames[:] = []
+        for fn in sorted(filenames):
+            if not fn.lower().endswith(".json"):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                if parse_sound_registry(_read_json(p, None)):
+                    return p
+            except Exception:
+                continue
+    return None
+
+
+class SoundRegistry:
+    """サウンド定義の一覧と、SoundID 名からの引き当て。"""
+
+    def __init__(self, entries: Optional[List[dict]] = None, source: str = ""):
+        self.entries = entries or []
+        self.source = source
+        self.by_alias: Dict[str, dict] = {}
+        for e in self.entries:
+            for a in e["aliases"]:
+                self.by_alias.setdefault(a, e)
+
+    def lookup(self, sound_id: str) -> Optional[dict]:
+        return self.by_alias.get(strip_sound_id_prefix(sound_id))
+
+    def candidates(self, include_all: bool = False) -> List[dict]:
+        voices = [e for e in self.entries if e["type"] == "VOICE"]
+        return self.entries if (include_all or not voices) else voices
+
+
+def match_files_to_sounds(folder: str, filenames: List[str], entries: List[dict]) -> List[dict]:
+    """フォルダ直下のファイルを、サウンド定義（path）と突き合わせて SoundID を見つける。
+    照合の優先順: ①フルパス一致 ②ファイル名一致 ③拡張子を除いた名前(name)一致。
+    複数ヒットしたら ①VOICE種別 ②親フォルダ名が同じもの、を優先する。"""
+    folder_abs = os.path.normcase(os.path.abspath(folder))
+    folder_name = os.path.basename(folder_abs)
+
+    def base(p: str) -> str:
+        return os.path.basename(str(p).replace("\\", "/")).lower()
+
+    def parent_name(p: str) -> str:
+        return os.path.basename(os.path.dirname(str(p).replace("\\", "/"))).lower()
+
+    results = []
+    for fn in filenames:
+        full = os.path.normcase(os.path.abspath(os.path.join(folder, fn)))
+        stem = os.path.splitext(fn)[0].lower()
+        cands = [e for e in entries if e["path"] and os.path.normcase(os.path.abspath(e["path"])) == full]
+        if not cands:
+            cands = [e for e in entries if e["path"] and base(e["path"]) == fn.lower()]
+        if not cands:
+            cands = [e for e in entries if e["name"].lower() == stem]
+        best = None
+        if cands:
+            best = sorted(
+                cands,
+                key=lambda e: (e["type"] != "VOICE", parent_name(e["path"]) != folder_name.lower()),
+            )[0]
+        results.append({"file": fn, "entry": best, "ambiguous": len(cands) > 1})
+    return results
+
+
+def derive_voice_matrix_path(text_matrix_path: Optional[str]) -> Optional[str]:
+    """開いている ScenarioText.json の隣（同じ class_data_matrix_id 配下）にある
+    ScenarioVoice/ScenarioVoice.json のパスを返す。"""
+    if not text_matrix_path:
+        return None
+    matrix_root = os.path.dirname(os.path.dirname(os.path.abspath(text_matrix_path)))
+    return os.path.join(matrix_root, "ScenarioVoice", "ScenarioVoice.json")
+
+
+def resolve_existing_key(key: str, existing: List[str]) -> str:
+    """"Ja" と "LanguageID.Ja" のような表記ゆれを、既存キーの表記に揃える（無ければそのまま）。"""
+    if key in existing:
+        return key
+    norm = normalize_row_key(key)
+    return next((k for k in existing if normalize_row_key(k) == norm), key)
+
+
+class VoiceMatrixEditor(tk.Toplevel):
+    """ScenarioVoice Matrix（行=言語 / 列=シナリオ / voices=SoundID配列）の編集ウィンドウ。
+    SoundID を1つずつ検索して追加するほか、フォルダを選んで直下の音声ファイルを
+    名前順に並べ、サウンド定義と紐づく SoundID を一括で取り込める。"""
+
+    def __init__(self, app: "ScenarioMatrixEditor"):
+        super().__init__(app)
+        self.app = app
+        self.settings = app.settings
+        self.title("ボイス設定（ScenarioVoice）")
+        self.configure(bg=C["bg"])
+        self.minsize(1000, 640)
+        try:
+            self.geometry(self.settings.get("voice_geometry") or "1200x800")
+        except tk.TclError:
+            self.geometry("1200x800")
+
+        self.matrix: Optional[dict] = None
+        self.path: Optional[str] = None
+        self.field = VOICE_FIELD_DEFAULT
+        self.items: List[str] = []
+        # self.items が「どの行/列のセル」の内容かを覚えておく。コンボボックスは選択が変わった
+        # 時点で既に新しい値を指しているため、書き戻し先を画面の値から決めると、
+        # 前のセルの内容が新しいセルへコピーされてしまう（メイン画面と同じ落とし穴）。
+        self._loaded_keys: Tuple[str, str] = ("", "")
+        self.dirty = False
+        self.registry = SoundRegistry()
+        self._cand_entries: List[dict] = []
+
+        self._setup_tree_style()
+        self._build_ui()
+        self._load_registry(initial=True)
+        self._open_initial()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Control-s>", lambda e: self.save_file())
+
+    # -- UI -----------------------------------------------------------------
+    def _setup_tree_style(self) -> None:
+        style = ttk.Style(self)
+        style.configure(
+            "Voice.Treeview",
+            background=C["input_bg"],
+            fieldbackground=C["input_bg"],
+            foreground=C["text"],
+            rowheight=24,
+            borderwidth=0,
+        )
+        style.configure("Voice.Treeview.Heading", background=C["surface2"], foreground=C["text"], font=("Segoe UI", 9))
+        style.map("Voice.Treeview", background=[("selected", C["list_sel"])], foreground=[("selected", "#ffffff")])
+
+    def _btn(self, parent, text, command, accent=False, danger=False):
+        return self.app._btn(parent, text, command, accent=accent, danger=danger)
+
+    def _entry(self, parent, var, font=("Consolas", 10), fg=None, width=None):
+        kw = {"width": width} if width else {}
+        return tk.Entry(
+            parent,
+            textvariable=var,
+            bg=C["input_bg"],
+            fg=fg or C["text"],
+            insertbackground=fg or C["text"],
+            relief=tk.FLAT,
+            font=font,
+            highlightthickness=1,
+            highlightbackground=C["border"],
+            highlightcolor=C["accent"],
+            **kw,
+        )
+
+    def _build_ui(self) -> None:
+        header = ttk.Frame(self)
+        header.pack(fill=tk.X, padx=16, pady=(14, 6))
+        ttk.Label(header, text="ボイス設定", style="Title.TLabel").pack(side=tk.LEFT)
+        ttk.Label(
+            header,
+            text="  行=言語 / 列=シナリオ / voices=SoundID配列 · Roleのvoice_refは「何番目か」を保持（言語間で並び順を揃える）",
+            style="Muted.TLabel",
+        ).pack(side=tk.LEFT)
+
+        # ScenarioVoice.json のパス
+        path_card = tk.Frame(self, bg=C["surface"], highlightbackground=C["border"], highlightthickness=1)
+        path_card.pack(fill=tk.X, padx=16, pady=4)
+        pin = tk.Frame(path_card, bg=C["surface"])
+        pin.pack(fill=tk.X, padx=12, pady=8)
+        tk.Label(pin, text="ScenarioVoice.json のパス", bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 9)).pack(anchor=tk.W)
+        prow = tk.Frame(pin, bg=C["surface"])
+        prow.pack(fill=tk.X, pady=(4, 0))
+        self.path_var = tk.StringVar()
+        pe = self._entry(prow, self.path_var, fg=C["accent"])
+        pe.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 8))
+        pe.bind("<Return>", lambda e: self._open_from_entry())
+        self._btn(prow, "参照…", self.browse_open, accent=True).pack(side=tk.LEFT, padx=2)
+        self._btn(prow, "保存  (Ctrl+S)", self.save_file).pack(side=tk.LEFT, padx=2)
+        self._btn(prow, "再読込", self.reload_current).pack(side=tk.LEFT, padx=2)
+        self._btn(prow, "新規作成…", self.create_new).pack(side=tk.LEFT, padx=2)
+
+        # サウンド定義の取得元
+        reg_card = tk.Frame(self, bg=C["surface"], highlightbackground=C["border"], highlightthickness=1)
+        reg_card.pack(fill=tk.X, padx=16, pady=4)
+        rin = tk.Frame(reg_card, bg=C["surface"])
+        rin.pack(fill=tk.X, padx=12, pady=8)
+        self.reg_label = tk.Label(rin, text="", bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 9), anchor=tk.W)
+        self.reg_label.pack(fill=tk.X)
+        rrow = tk.Frame(rin, bg=C["surface"])
+        rrow.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(rrow, text="サーバURL", bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 8)).pack(side=tk.LEFT)
+        self.url_var = tk.StringVar(value=self.settings.get("sound_server_url") or DEFAULT_SOUND_SERVER_URL)
+        self._entry(rrow, self.url_var, width=32).pack(side=tk.LEFT, padx=(6, 8), ipady=3)
+        self._btn(rrow, "サーバから取得", lambda: self._load_registry(initial=False)).pack(side=tk.LEFT, padx=2)
+        self._btn(rrow, "サウンド定義JSONを指定…", self.browse_registry_json).pack(side=tk.LEFT, padx=2)
+
+        # 行(言語) / 列(シナリオ) の選択
+        sel = tk.Frame(self, bg=C["bg"])
+        sel.pack(fill=tk.X, padx=16, pady=(8, 2))
+        self.row_var = tk.StringVar()
+        self.col_var = tk.StringVar()
+        self.row_combo = self._combo(sel, "行 (Language)", self.row_var, 16)
+        self.col_combo = self._combo(sel, "列 (Scenario)", self.col_var, 40)
+        self._btn(sel, "読込", self._reload_list, accent=True).pack(side=tk.LEFT, padx=(8, 12))
+        self.count_label = tk.Label(sel, text="", bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 9), anchor=tk.W)
+        self.count_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(
+            self,
+            text="  存在しない行・列名を入力してもOK（ボイスを追加した時に作成。保存時に全言語×全シナリオが揃うよう空セルを補います）",
+            bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 8), anchor=tk.W,
+        ).pack(fill=tk.X, padx=16)
+
+        paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=16, pady=6)
+        left = tk.Frame(paned, bg=C["surface"], highlightbackground=C["border"], highlightthickness=1)
+        right = tk.Frame(paned, bg=C["surface"], highlightbackground=C["border"], highlightthickness=1)
+        paned.add(left, weight=3)
+        paned.add(right, weight=2)
+
+        # 左: 現在の voices 一覧
+        ltools = tk.Frame(left, bg=C["surface"])
+        ltools.pack(fill=tk.X, padx=8, pady=(8, 4))
+        for label, cmd, kw in [
+            ("↑ 上へ", self.move_up, {}),
+            ("↓ 下へ", self.move_down, {}),
+            ("入れ替え…", self.swap_items, {}),
+            ("削除", self.delete_item, {"danger": True}),
+        ]:
+            self._btn(ltools, label, cmd, **kw).pack(side=tk.LEFT, padx=2)
+        tk.Frame(ltools, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+        self._btn(ltools, "フォルダから取り込み…", self.import_from_folder, accent=True).pack(side=tk.LEFT, padx=2)
+
+        tk.Label(
+            left, text="  voices 一覧（この番号が Role の voice_ref に入るインデックス） ／ ドラッグで行間に移動",
+            bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 9), anchor=tk.W,
+        ).pack(fill=tk.X, pady=(2, 4))
+        lwrap = tk.Frame(left, bg=C["surface"])
+        lwrap.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self.listbox = tk.Listbox(
+            lwrap, bg=C["input_bg"], fg=C["text"], selectbackground=C["list_sel"], selectforeground="#ffffff",
+            activestyle="none", font=("Consolas", 11), relief=tk.FLAT, highlightthickness=0, borderwidth=0,
+            exportselection=False,
+        )
+        lsb = ttk.Scrollbar(lwrap, orient=tk.VERTICAL, command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=lsb.set)
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        lsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.listbox.bind("<Delete>", lambda e: self.delete_item())
+        self._dnd = ListboxDragInsert(self.listbox, self._reorder, lambda: len(self.items))
+
+        # 右: SoundID を検索して追加
+        tk.Label(
+            right, text="  SoundID を追加（検索 → 選択して追加）", bg=C["surface"], fg=C["text"],
+            font=("Segoe UI Semibold", 10), anchor=tk.W,
+        ).pack(fill=tk.X, pady=(10, 2))
+        srow = tk.Frame(right, bg=C["surface"])
+        srow.pack(fill=tk.X, padx=8, pady=(2, 4))
+        self.search_var = tk.StringVar()
+        se = self._entry(srow, self.search_var, font=("Segoe UI", 10))
+        se.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        se.bind("<Return>", lambda e: self.add_candidates(None))
+        self.search_var.trace_add("write", lambda *_: self._refresh_candidates())
+        self.include_all_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            right, text="VOICE 以外の種別も候補に含める", variable=self.include_all_var, command=self._refresh_candidates,
+            bg=C["surface"], fg=C["text_muted"], selectcolor=C["input_bg"], activebackground=C["surface"],
+            activeforeground=C["text"], font=("Segoe UI", 9), anchor=tk.W,
+        ).pack(fill=tk.X, padx=8)
+        self.cand_info = tk.Label(right, text="", bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 9), anchor=tk.W)
+        self.cand_info.pack(fill=tk.X, padx=8, pady=(2, 2))
+        cwrap = tk.Frame(right, bg=C["surface"])
+        cwrap.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        self.cand_list = tk.Listbox(
+            cwrap, bg=C["input_bg"], fg=C["text"], selectbackground=C["list_sel"], selectforeground="#ffffff",
+            activestyle="none", font=("Consolas", 10), relief=tk.FLAT, highlightthickness=0, borderwidth=0,
+            exportselection=False, selectmode=tk.EXTENDED,
+        )
+        csb = ttk.Scrollbar(cwrap, orient=tk.VERTICAL, command=self.cand_list.yview)
+        self.cand_list.configure(yscrollcommand=csb.set)
+        self.cand_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        csb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.cand_list.bind("<Double-Button-1>", lambda e: self.add_candidates(None))
+
+        brow = tk.Frame(right, bg=C["surface"])
+        brow.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self._btn(brow, "末尾に追加", lambda: self.add_candidates(None), accent=True).pack(side=tk.LEFT, padx=2)
+        self._btn(brow, "選択行の上に挿入", lambda: self.add_candidates("above")).pack(side=tk.LEFT, padx=2)
+        self._btn(brow, "選択行の下に挿入", lambda: self.add_candidates("below")).pack(side=tk.LEFT, padx=2)
+        self._btn(brow, "位置指定…", lambda: self.add_candidates("index")).pack(side=tk.LEFT, padx=2)
+        tk.Label(
+            right,
+            text="  候補が無いときは、入力した文字列をそのまま SoundID として追加します\n"
+                 "  （例: Scn_Test_L1 → SoundID.Scn_Test_L1）",
+            bg=C["surface"], fg=C["text_muted"], font=("Segoe UI", 8), anchor=tk.W, justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        self.status = ttk.Label(self, text="ScenarioVoice.json を開くか、「新規作成…」してください", style="Status.TLabel")
+        self.status.pack(fill=tk.X, side=tk.BOTTOM)
+
+    def _combo(self, parent, label: str, var: tk.StringVar, width: int) -> ttk.Combobox:
+        box = tk.Frame(parent, bg=C["bg"])
+        box.pack(side=tk.LEFT, padx=(0, 12))
+        tk.Label(box, text=label, bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 8)).pack(anchor=tk.W)
+        combo = ttk.Combobox(box, textvariable=var, width=width)  # 入力も可（新しい行/列名を作れる）
+        combo.pack()
+        combo.bind("<<ComboboxSelected>>", lambda e: self._reload_list())
+        combo.bind("<Return>", lambda e: self._reload_list())
+        return combo
+
+    def _set_status(self, msg: str) -> None:
+        self.status.config(text=msg)
+
+    # -- サウンド定義 -------------------------------------------------------
+    def _set_registry(self, entries: List[dict], source: str) -> None:
+        self.registry = SoundRegistry(entries, source)
+        n_voice = sum(1 for e in entries if e["type"] == "VOICE")
+        if entries:
+            self.reg_label.config(
+                text=f"サウンド定義: {len(entries)} 件（VOICE {n_voice} 件） ← {source}", fg=C["success"]
+            )
+        else:
+            self.reg_label.config(
+                text="サウンド定義: 未取得（サーバ未起動 / JSON未指定）— SoundID の手入力は可能。フォルダ取り込みには定義が必要です",
+                fg=C["comment"],
+            )
+        self._refresh_candidates()
+        if hasattr(self, "listbox"):
+            self._redraw()
+
+    def _load_registry(self, initial: bool = False) -> None:
+        """優先順: ①起動中のサーバ(/api/sound) ②前回指定したJSON ③data/sound 配下から自動検出"""
+        errors: List[str] = []
+        url = (self.url_var.get().strip() or DEFAULT_SOUND_SERVER_URL)
+        try:
+            entries = fetch_sound_registry_from_server(url, timeout=2.0 if initial else 5.0)
+            if entries:
+                self.settings["sound_server_url"] = url
+                save_settings(self.settings)
+                self._set_registry(entries, f"サーバ {url}")
+                return
+            errors.append("サーバの応答にサウンド定義がありませんでした")
+        except Exception as e:
+            errors.append(f"サーバ({url})に接続できませんでした: {e}")
+
+        stored = self.settings.get("sound_registry_path") or ""
+        candidates = []
+        if stored:
+            candidates.append(from_stored_path(stored))
+        auto = autodetect_sound_registry_file()
+        if auto:
+            candidates.append(auto)
+        for p in candidates:
+            try:
+                entries = parse_sound_registry(_read_json(p, None))
+                if entries:
+                    self._set_registry(entries, f"ファイル {p}")
+                    return
+            except Exception as e:
+                errors.append(f"{p}: {e}")
+
+        self._set_registry([], "")
+        if not initial:
+            messagebox.showwarning(
+                "サウンド定義を取得できません",
+                "\n".join(errors) + "\n\nサーバ（SupportChigadio）を起動するか、URLを確認してください。\n"
+                "または「サウンド定義JSONを指定…」で /api/sound と同じ形式のJSONを選べます。",
+                parent=self,
+            )
+
+    def browse_registry_json(self) -> None:
+        p = filedialog.askopenfilename(
+            title="サウンド定義 JSON を選択（/api/sound と同じ形式）",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            parent=self,
+        )
+        if not p:
+            return
+        try:
+            entries = parse_sound_registry(_read_json(p, None))
+        except Exception as e:
+            messagebox.showerror("エラー", str(e), parent=self)
+            return
+        if not entries:
+            messagebox.showerror(
+                "エラー",
+                "サウンド定義を読み取れませんでした。\n{\"groups\": {グループ名: {\"items\": [...]}}} 形式（/api/sound の応答）が必要です。",
+                parent=self,
+            )
+            return
+        self.settings["sound_registry_path"] = to_relative_path(p)
+        save_settings(self.settings)
+        self._set_registry(entries, f"ファイル {p}")
+
+    # -- 追加候補 -----------------------------------------------------------
+    def _refresh_candidates(self) -> None:
+        if not hasattr(self, "cand_list"):
+            return
+        tokens = self.search_var.get().strip().lower().split()
+        pool = self.registry.candidates(self.include_all_var.get())
+        hits = []
+        for e in pool:
+            hay = f"{e['sound_id']} {e['desc']} {os.path.basename(e['path'].replace(chr(92), '/'))} {e['type']}".lower()
+            if all(t in hay for t in tokens):
+                hits.append(e)
+        total = len(hits)
+        hits.sort(key=lambda e: natural_sort_key(e["sound_id"]))
+        self._cand_entries = hits[:500]
+        self.cand_list.delete(0, tk.END)
+        for e in self._cand_entries:
+            line = e["sound_id"]
+            if e["desc"]:
+                line += f"   — {e['desc']}"
+            self.cand_list.insert(tk.END, line)
+        if not self.registry.entries:
+            self.cand_info.config(text="  （サウンド定義が未取得のため候補はありません）")
+        else:
+            more = f"（先頭500件を表示）" if total > 500 else ""
+            self.cand_info.config(text=f"  候補 {total} 件 {more}")
+
+    def add_candidates(self, mode: Optional[str]) -> None:
+        """選択中の候補（無ければ入力文字列）を追加する。
+        mode: None=末尾 / "above" / "below" = 選択行の上・下 / "index" = 位置を指定"""
+        if not self._ensure_target():
+            return
+        sel = self.cand_list.curselection()
+        ids = [self._cand_entries[i]["sound_id"] for i in sel if i < len(self._cand_entries)]
+        if not ids:
+            if len(self._cand_entries) == 1:
+                ids = [self._cand_entries[0]["sound_id"]]
+            elif self._cand_entries:
+                messagebox.showinfo("情報", "追加する候補を選択してください（Ctrl/Shiftで複数選択）", parent=self)
+                return
+            else:
+                typed = normalize_sound_id(self.search_var.get())
+                if not typed:
+                    messagebox.showinfo("情報", "追加する SoundID を検索・入力してください", parent=self)
+                    return
+                ids = [typed]
+        cur = self._selected_index()
+        if mode == "above":
+            pos = cur if cur is not None else len(self.items)
+        elif mode == "below":
+            pos = cur + 1 if cur is not None else len(self.items)
+        elif mode == "index":
+            pos = ask_insert_index(self, len(self.items))
+            if pos is None:
+                return
+        else:
+            pos = len(self.items)
+        self._insert_ids(ids, pos)
+
+    # -- 配列操作 -----------------------------------------------------------
+    def _selected_index(self) -> Optional[int]:
+        sel = self.listbox.curselection()
+        return int(sel[0]) if sel else None
+
+    def _ensure_target(self) -> bool:
+        if not self.matrix:
+            messagebox.showinfo("情報", "先に ScenarioVoice.json を開くか、新規作成してください", parent=self)
+            return False
+        row, col = self.row_var.get().strip(), self.col_var.get().strip()
+        if not row or not col:
+            messagebox.showinfo("情報", "行 (Language) と 列 (Scenario) を指定してください", parent=self)
+            return False
+        # 入力しただけで「読込」していない行/列が指定されていたら、先に切り替える
+        row = resolve_existing_key(row, list_row_keys(self.matrix))
+        col = resolve_existing_key(col, list_col_keys(self.matrix))
+        if (row, col) != self._loaded_keys:
+            self._reload_list()
+        return True
+
+    def _insert_ids(self, ids: List[str], pos: int) -> None:
+        pos = max(0, min(pos, len(self.items)))
+        self.items[pos:pos] = ids
+        self._after_change(select=pos)
+
+    def move_up(self) -> None:
+        i = self._selected_index()
+        if i is None or i <= 0:
+            return
+        self.items[i - 1], self.items[i] = self.items[i], self.items[i - 1]
+        self._after_change(select=i - 1)
+
+    def move_down(self) -> None:
+        i = self._selected_index()
+        if i is None or i >= len(self.items) - 1:
+            return
+        self.items[i + 1], self.items[i] = self.items[i], self.items[i + 1]
+        self._after_change(select=i + 1)
+
+    def swap_items(self) -> None:
+        r = ask_swap_indices(self, len(self.items) - 1)
+        if not r:
+            return
+        a, b = r
+        self.items[a], self.items[b] = self.items[b], self.items[a]
+        self._after_change(select=b)
+
+    def delete_item(self) -> None:
+        i = self._selected_index()
+        if i is None:
+            return
+        del self.items[i]
+        self._after_change(select=min(i, len(self.items) - 1) if self.items else None)
+
+    def _reorder(self, frm: int, to: int) -> None:
+        if not (0 <= frm < len(self.items)) or not (0 <= to < len(self.items)):
+            self._redraw(select=frm)
+            return
+        self.items.insert(to, self.items.pop(frm))
+        self._after_change(select=to)
+
+    def _after_change(self, select: Optional[int] = None) -> None:
+        self._commit()
+        self._redraw(select=select)
+        self._update_counts()
+
+    def _commit(self) -> None:
+        """画面上の配列を Matrix へ書き戻す（空のまま新しいセルを作ることはしない）。"""
+        if not self.matrix:
+            return
+        row, col = self._loaded_keys
+        if not row or not col:
+            return
+        exists = col in ((self.matrix.get("data") or {}).get(row) or {})
+        if not self.items and not exists:
+            return
+        set_cell_list(self.matrix, row, col, self.items, self.field)
+        self.dirty = True
+
+    # -- 表示 ---------------------------------------------------------------
+    def _redraw(self, select: Optional[int] = None) -> None:
+        self.listbox.delete(0, tk.END)
+        have_registry = bool(self.registry.entries)
+        for i, sid in enumerate(self.items):
+            entry = self.registry.lookup(sid)
+            line = f" {i:4d} │ {sid}"
+            if entry:
+                extra = os.path.basename(entry["path"].replace("\\", "/")) if entry["path"] else ""
+                if entry["desc"]:
+                    extra = f"{extra}  {entry['desc']}".strip()
+                if extra:
+                    line += f"    ← {extra}"
+            elif have_registry:
+                line += "    ⚠ サウンド定義に無いID"
+            self.listbox.insert(tk.END, line)
+            if not entry and have_registry:
+                self.listbox.itemconfig(tk.END, foreground=C["danger"])
+        if select is not None and 0 <= select < len(self.items):
+            self.listbox.selection_set(select)
+            self.listbox.see(select)
+            self.listbox.activate(select)
+
+    def _update_counts(self) -> None:
+        """同じ列(シナリオ)について、言語ごとの件数を並べて表示する。
+        件数が違うと同じインデックスが別のセリフを指してしまうので警告する。"""
+        if not self.matrix:
+            self.count_label.config(text="")
+            return
+        col = self.col_var.get().strip()
+        data = self.matrix.get("data") or {}
+        counts = {}
+        for r in sorted(data):
+            cell = data[r].get(col)
+            if cell is not None:
+                counts[r] = len(get_cell_list(self.matrix, r, col, self.field))
+        current_row = self._loaded_keys[0]
+        if current_row and self._loaded_keys[1] == col and self.items:
+            counts[current_row] = len(self.items)
+        if not counts:
+            self.count_label.config(text="", fg=C["text_muted"])
+            return
+        text = "件数: " + " / ".join(f"{normalize_row_key(r)}:{n}" for r, n in counts.items())
+        mismatch = len(set(counts.values())) > 1
+        if mismatch:
+            text += "   ⚠ 言語間で件数が違います"
+        self.count_label.config(text=text, fg=C["comment"] if mismatch else C["text_muted"])
+
+    # -- Matrix ファイル ----------------------------------------------------
+    def _open_initial(self) -> None:
+        stored = self.settings.get("voice_matrix_path") or ""
+        candidates = []
+        if stored:
+            candidates.append(from_stored_path(stored))
+        derived = derive_voice_matrix_path(self.app.path)
+        if derived:
+            candidates.append(derived)
+        for p in candidates:
+            if p and os.path.isfile(p):
+                self._open_path(p, restore=(self.settings.get("voice_last_row") or "", self.settings.get("voice_last_col") or ""))
+                return
+        if derived:
+            self.path_var.set(derived)
+            self._set_status("ScenarioVoice.json が見つかりません。「新規作成…」で作るか、サーバ起動時の自動生成を待ってください")
+
+    def _open_from_entry(self) -> None:
+        p = self.path_var.get().strip().strip('"')
+        if p and os.path.isfile(p):
+            self._open_path(p)
+        elif p:
+            messagebox.showerror("エラー", f"ファイルが見つかりません:\n{p}", parent=self)
+
+    def browse_open(self) -> None:
+        cur = self.path_var.get().strip()
+        initial = os.path.dirname(cur) if cur else (os.path.dirname(self.app.path) if self.app.path else os.getcwd())
+        p = filedialog.askopenfilename(
+            title="ScenarioVoice の Matrix JSON を開く", initialdir=initial,
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")], parent=self,
+        )
+        if p:
+            self._open_path(p)
+
+    def _open_path(self, path: str, restore: Tuple[str, str] = ("", "")) -> None:
+        if self.dirty and not messagebox.askyesno("確認", "未保存の変更があります。別のファイルを開きますか？", parent=self):
+            return
+        try:
+            matrix = load_matrix(path)
+        except Exception as e:
+            messagebox.showerror("読込エラー", str(e), parent=self)
+            return
+        if not isinstance(matrix.get("data"), dict):
+            matrix["data"] = {}
+        self.matrix = matrix
+        self.items = []
+        self._loaded_keys = ("", "")
+        self.path = os.path.abspath(path)
+        self.path_var.set(self.path)
+        names = [f.get("name") for f in (matrix.get("fields") or []) if f.get("name")]
+        self.field = VOICE_FIELD_DEFAULT if (VOICE_FIELD_DEFAULT in names or not names) else names[0]
+        self.dirty = False
+        self.settings["voice_matrix_path"] = to_relative_path(self.path)
+        save_settings(self.settings)
+        self._refresh_combos(*restore)
+
+    def reload_current(self) -> None:
+        if not self.path or not os.path.isfile(self.path):
+            self.browse_open()
+            return
+        if self.dirty and not messagebox.askyesno("確認", "未保存の変更があります。再読込しますか？", parent=self):
+            return
+        self.dirty = False
+        self._open_path(self.path, restore=(self.row_var.get(), self.col_var.get()))
+
+    def save_file(self) -> None:
+        if not self.matrix or not self.path:
+            return
+        self._commit()
+        self._fill_rectangular()
+        try:
+            _write_json(self.path, self.matrix)
+        except Exception as e:
+            messagebox.showerror("保存エラー", str(e), parent=self)
+            return
+        self.dirty = False
+        self._set_status(f"保存しました  ·  {self.path}")
+        self._update_counts()
+
+    def _fill_rectangular(self) -> None:
+        """全言語(行)×全シナリオ(列)のセルが揃うように、足りないセルを空の voices で埋める。
+        バイナリ生成は「最初の行の列一覧」で全行を読むため、行ごとに列が欠けていると
+        生成に失敗する。"""
+        data = self.matrix.setdefault("data", {})
+        cols = set()
+        for r in data.values():
+            if isinstance(r, dict):
+                cols.update(r.keys())
+        for r in data.values():
+            if not isinstance(r, dict):
+                continue
+            for c in cols:
+                cell = r.setdefault(c, {})
+                if isinstance(cell, dict):
+                    cell.setdefault(self.field, [])
+
+    def create_new(self) -> None:
+        target = self.path_var.get().strip().strip('"') or derive_voice_matrix_path(self.app.path) or ""
+        if not target:
+            target = filedialog.asksaveasfilename(
+                title="ScenarioVoice.json の保存先", defaultextension=".json", filetypes=[("JSON", "*.json")], parent=self,
+            )
+            if not target:
+                return
+        if os.path.exists(target):
+            messagebox.showinfo("情報", f"すでに存在します。開きます:\n{target}", parent=self)
+            self._open_path(target)
+            return
+        text_matrix = self.app.matrix
+        rows = list_row_keys(text_matrix) if text_matrix else []
+        cols = list_col_keys(text_matrix) if text_matrix else []
+        msg = f"次の場所に ScenarioVoice.json を作成します:\n{target}\n"
+        if rows or cols:
+            msg += f"\n開いている ScenarioText の言語行 {len(rows)} 件・シナリオ列 {len(cols)} 件を、空のボイス欄として引き継ぎます。"
+        if not messagebox.askyesno("新規作成", msg, parent=self):
+            return
+        skeleton = {
+            "name": "ScenarioVoice",
+            "rowId": "Language",
+            "colId": "ScenarioEvent",
+            "fields": [{
+                "name": VOICE_FIELD_DEFAULT,
+                "type": "SoundID",  # サウンドのenum。サーバ起動時に、環境の型名(SoundID/Sound)へ自動で揃えられる
+                "arraySize": -1,
+                "description": "そのシナリオ×言語のボイス(SoundID)一覧（インデックスで参照）",
+                "options": {},
+            }],
+            "data": {r: {c: {VOICE_FIELD_DEFAULT: []} for c in cols} for r in rows},
+        }
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            _write_json(target, skeleton)
+        except Exception as e:
+            messagebox.showerror("作成エラー", str(e), parent=self)
+            return
+        self._open_path(target)
+        self._set_status(
+            "作成しました。サーバ(Flask)の次回起動時に Matrix 一覧へ自動登録されます  ·  " + target
+        )
+
+    # -- 行/列コンボ --------------------------------------------------------
+    @staticmethod
+    def _merge_keys(primary: List[str], secondary: List[str]) -> List[str]:
+        merged = list(primary)
+        known = {normalize_row_key(k) for k in merged}
+        for k in secondary:
+            if normalize_row_key(k) not in known:
+                merged.append(k)
+                known.add(normalize_row_key(k))
+        return merged
+
+    def _refresh_combos(self, restore_row: str = "", restore_col: str = "") -> None:
+        if not self.matrix:
+            return
+        text_matrix = self.app.matrix
+        rows = self._merge_keys(list_row_keys(self.matrix), list_row_keys(text_matrix) if text_matrix else [])
+        cols = self._merge_keys(list_col_keys(self.matrix), list_col_keys(text_matrix) if text_matrix else [])
+        self.row_combo["values"] = rows
+        self.col_combo["values"] = cols
+        want_row = resolve_existing_key(restore_row, rows) if restore_row else ""
+        if want_row in rows:
+            self.row_var.set(want_row)
+        elif rows:
+            self.row_var.set(next((r for r in rows if normalize_row_key(r).lower() in ("ja", "jp", "japanese")), rows[0]))
+        want_col = resolve_existing_key(restore_col, cols) if restore_col else ""
+        if want_col in cols:
+            self.col_var.set(want_col)
+        elif cols:
+            self.col_var.set(cols[0])
+        self._reload_list()
+
+    def _reload_list(self) -> None:
+        if not self.matrix:
+            return
+        self._commit()  # 直前に編集していたセル(_loaded_keys)へ書き戻してから切り替える
+        voice_rows = list_row_keys(self.matrix)
+        voice_cols = list_col_keys(self.matrix)
+        row = resolve_existing_key(self.row_var.get().strip(), voice_rows)
+        col = resolve_existing_key(self.col_var.get().strip(), voice_cols)
+        self.row_var.set(row)
+        self.col_var.set(col)
+        self.items = [str(x) for x in get_cell_list(self.matrix, row, col, self.field)] if row and col else []
+        self._loaded_keys = (row, col)
+        self._redraw()
+        self._update_counts()
+        self.settings["voice_last_row"] = row
+        self.settings["voice_last_col"] = col
+        save_settings(self.settings)
+        self._set_status(f"{row}  /  {col}  /  {self.field}  —  {len(self.items)} 件")
+
+    # -- フォルダから取り込み -----------------------------------------------
+    def import_from_folder(self) -> None:
+        if not self._ensure_target():
+            return
+        if not self.registry.entries:
+            messagebox.showinfo(
+                "情報",
+                "フォルダ取り込みには、ファイルとSoundIDを結びつけるサウンド定義が必要です。\n"
+                "サーバ（SupportChigadio）を起動して「サーバから取得」するか、\n"
+                "「サウンド定義JSONを指定…」で読み込んでください。",
+                parent=self,
+            )
+            return
+        folder = filedialog.askdirectory(
+            title="ボイスのフォルダを選択（直下の音声ファイルを名前順に取り込みます）",
+            initialdir=self.settings.get("voice_last_folder") or "",
+            parent=self,
+        )
+        if not folder:
+            return
+        self.settings["voice_last_folder"] = folder
+        save_settings(self.settings)
+        try:
+            files = [
+                fn for fn in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, fn)) and fn.lower().endswith(AUDIO_EXTENSIONS)
+            ]
+        except OSError as e:
+            messagebox.showerror("エラー", str(e), parent=self)
+            return
+        if not files:
+            messagebox.showinfo("情報", "直下に音声ファイル（.mp3 / .wav / .ogg / .aiff）がありません", parent=self)
+            return
+        files.sort(key=natural_sort_key)
+        self._show_import_preview(folder, match_files_to_sounds(folder, files, self.registry.entries))
+
+    def _show_import_preview(self, folder: str, matches: List[dict]) -> None:
+        win = tk.Toplevel(self)
+        win.title("フォルダ取り込みの確認")
+        win.configure(bg=C["bg"])
+        win.transient(self)
+        win.grab_set()
+        win.geometry("980x640")
+
+        n_ok = sum(1 for m in matches if m["entry"])
+        n_ng = len(matches) - n_ok
+        n_amb = sum(1 for m in matches if m["entry"] and m["ambiguous"])
+        tk.Label(
+            win, text=f"フォルダ: {folder}", bg=C["bg"], fg=C["accent"], font=("Consolas", 10), anchor=tk.W,
+        ).pack(fill=tk.X, padx=16, pady=(14, 2))
+        summary = f"音声ファイル {len(matches)} 件（名前順） → SoundID に対応 {n_ok} 件 / 未登録 {n_ng} 件"
+        if n_amb:
+            summary += f" / 同名が複数ありVOICE・同フォルダを優先したもの {n_amb} 件"
+        tk.Label(win, text=summary, bg=C["bg"], fg=C["text"], font=("Segoe UI", 10), anchor=tk.W).pack(fill=tk.X, padx=16)
+        if n_ng:
+            tk.Label(
+                win,
+                text="⚠ 未登録のファイルはスキップされ、以降の番号がずれます。先にサウンド画面でフォルダ一括追加してから取り込み直すのがおすすめです。",
+                bg=C["bg"], fg=C["comment"], font=("Segoe UI", 9), anchor=tk.W, justify=tk.LEFT, wraplength=930,
+            ).pack(fill=tk.X, padx=16, pady=(2, 0))
+
+        wrap = tk.Frame(win, bg=C["bg"])
+        wrap.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        tree = ttk.Treeview(wrap, columns=("no", "file", "sid", "state"), show="headings", style="Voice.Treeview")
+        for key, text, width, anchor in [
+            ("no", "#", 50, tk.E), ("file", "ファイル", 300, tk.W), ("sid", "SoundID", 450, tk.W), ("state", "状態", 120, tk.W),
+        ]:
+            tree.heading(key, text=text)
+            tree.column(key, width=width, anchor=anchor)
+        tree.tag_configure("ng", foreground=C["danger"])
+        tsb = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=tsb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tsb.pack(side=tk.RIGHT, fill=tk.Y)
+        idx = 0
+        for m in matches:
+            if m["entry"]:
+                tree.insert("", tk.END, values=(idx, m["file"], m["entry"]["sound_id"], "同名複数" if m["ambiguous"] else "OK"))
+                idx += 1
+            else:
+                tree.insert("", tk.END, values=("-", m["file"], "（サウンド定義に無い）", "スキップ"), tags=("ng",))
+
+        cur = self._selected_index()
+        mode_var = tk.StringVar(value="replace" if not self.items else "append")
+        mrow = tk.Frame(win, bg=C["bg"])
+        mrow.pack(fill=tk.X, padx=16, pady=(0, 4))
+        tk.Label(
+            mrow, text=f"取り込み先: {self.row_var.get()} / {self.col_var.get()}（現在 {len(self.items)} 件）",
+            bg=C["bg"], fg=C["text_muted"], font=("Segoe UI", 9),
+        ).pack(anchor=tk.W)
+        options = [("replace", "この一覧を置き換える"), ("append", "末尾に追加する")]
+        if cur is not None:
+            options.append(("after", f"選択中の行（{cur}）の下に挿入する"))
+        orow = tk.Frame(win, bg=C["bg"])
+        orow.pack(fill=tk.X, padx=16)
+        for value, label in options:
+            tk.Radiobutton(
+                orow, text=label, value=value, variable=mode_var, bg=C["bg"], fg=C["text"], selectcolor=C["input_bg"],
+                activebackground=C["bg"], activeforeground=C["text"], font=("Segoe UI", 10),
+            ).pack(side=tk.LEFT, padx=(0, 16))
+
+        def apply() -> None:
+            ids = [m["entry"]["sound_id"] for m in matches if m["entry"]]
+            if not ids:
+                messagebox.showinfo("情報", "取り込める SoundID がありません", parent=win)
+                return
+            mode = mode_var.get()
+            if mode == "replace":
+                if self.items and not messagebox.askyesno(
+                    "確認", f"現在の {len(self.items)} 件を破棄して置き換えます。よろしいですか？", parent=win
+                ):
+                    return
+                self.items = list(ids)
+                select = 0
+            elif mode == "after" and cur is not None:
+                self.items[cur + 1:cur + 1] = ids
+                select = cur + 1
+            else:
+                select = len(self.items)
+                self.items.extend(ids)
+            win.destroy()
+            self._after_change(select=select)
+            self._set_status(f"フォルダから {len(ids)} 件取り込みました（未登録スキップ {n_ng} 件）  ·  {folder}")
+
+        brow = tk.Frame(win, bg=C["bg"])
+        brow.pack(fill=tk.X, padx=16, pady=(8, 14))
+        self._btn(brow, f"{n_ok} 件を取り込む", apply, accent=True).pack(side=tk.LEFT)
+        self._btn(brow, "キャンセル", win.destroy).pack(side=tk.LEFT, padx=8)
+
+    # -- 終了 ---------------------------------------------------------------
+    def _on_close(self) -> None:
+        if self.dirty:
+            ans = messagebox.askyesnocancel("確認", "未保存の変更があります。保存して閉じますか？", parent=self)
+            if ans is None:
+                return
+            if ans:
+                self.save_file()
+                if self.dirty:
+                    return
+        try:
+            self.settings["voice_geometry"] = self.winfo_geometry()
+        except tk.TclError:
+            pass
+        save_settings(self.settings)
         self.destroy()
 
 
