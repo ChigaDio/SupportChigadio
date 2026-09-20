@@ -2182,6 +2182,10 @@ def generate_sound_csharp():
 
 
 
+
+
+
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -2459,16 +2463,19 @@ namespace GameCore.Sound
         // Group全体を読み込む LoadGroupAsync と違い、対象SubGroupの
         // サウンドだけをAddressableロードするため、無駄な同時ロードを避けられる。
         // =============================================================
-        public void LoadSubGroup(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
-            => LoadSubGroupAsync(group, subGroupId, category, onCompleted).Forget();
+        public void LoadSubGroup(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null,CancellationToken cancellationToken = default)
+            => LoadSubGroupAsync(group, subGroupId, category, onCompleted,cancellationToken).Forget();
 
-        public async UniTask LoadSubGroupAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null)
+        public async UniTask LoadSubGroupAsync(SoundGroup group, int subGroupId, GroupCategory category, Action onCompleted = null,CancellationToken cancellationToken = default)
         {
             while (!IsLoadDatabase)
                 await UniTask.Yield(combinedToken);
 
             if (database.IsLazyGroup(group))
                 await database.EnsureSubGroupChunkLoadedAsync(group, subGroupId);
+
+            using var linkedCts = CreateLinkedCts(cancellationToken);
+            var ct = linkedCts.Token;
 
             var groupData = database.GetGroupData(group);
             if (groupData == null) { onCompleted?.Invoke(); return; }
@@ -3008,10 +3015,6 @@ namespace GameCore.Sound
         }
     }
 }
-
-
-
-
 
 
 

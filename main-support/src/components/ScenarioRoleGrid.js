@@ -158,9 +158,14 @@ function ScenarioRoleGrid() {
       <Typography variant="h4" gutterBottom>
         シナリオロール
       </Typography>
-      <Box sx={{ mb: 2 }}>
+      <Box sx={{ mb: 2, display: 'flex', gap: 1 }}>
         <Button variant="contained" onClick={handleAddRole}>
           追加
+        </Button>
+        {/* サブグループ（ロールを追加する各グループ）ごとの設定(入力待ち is_wait_key など)の
+            共通フィールド定義ページ。全イベント共通。 */}
+        <Button variant="outlined" onClick={() => navigate('/scenario-subgroup-setting')}>
+          サブグループ設定
         </Button>
       </Box>
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>

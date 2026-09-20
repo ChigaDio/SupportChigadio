@@ -13,13 +13,17 @@ import {
   Tooltip,
   Divider,
   Slider,
-  Button
+  Button,
+  ToggleButton,
+  ToggleButtonGroup
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 // ============================================================
@@ -41,68 +45,224 @@ const VECTOR_AXIS_LABELS = {
 };
 
 // ============================================================
-// voice_ref: Voice専用Role(VoiceLine)専用の特殊フィールド型。
-// そのサブイベントの物語設定(story_setting)で指定されたvoice_series_id
-// （Group+SubGroup）に属するSoundID（type=VOICE）だけへ絞り込んだ
-// ドロップダウンを表示する。eventId/subIdはScenarioEventTransition.js
-// から伝播される（無い場合はRole単体プレビュー等の文脈なので、その旨を表示）。
+// voice_ref: ScenarioVoice Matrix の List<SoundID> インデックス選択
+// （Voice専用Role(VoiceLine)専用の特殊フィールド型）
+//
+// text_list_index と同じ仕組みで動く:
+//   - ScenarioVoice Matrix: 行 = Language / 列 = ScenarioEvent("{イベント名}_{サブイベント名}")
+//     / voices フィールド = SoundID の配列
+//   - Role に保存する値は int（voices 配列のインデックス、-1 = 未選択）
+//   - eventId / subId は ScenarioEventTransition.js から伝播される
+//
+// text_list_index との違い:
+//   選んだインデックスが本当に狙ったボイスかを耳で確かめられるよう、
+//   /api/sound/serve でサンプル再生できる。言語(Ja / En など、Matrixの行)を
+//   切り替えれば、同じインデックスを別言語で聞き比べられる。
+//   ドロップダウンの各候補にも試聴ボタンがあり、選ばずに聞ける。
+//
+// options: { matrixName, fieldName, previewLanguage }
 // ============================================================
-function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
-  const [options, setOptions] = useState([]);
-  const [seriesLabel, setSeriesLabel] = useState('');
-  const [loadingVoice, setLoadingVoice] = useState(true);
-  const [errorMsg, setErrorMsg] = useState('');
 
-  // 保存値の正規化: "SoundID.xxx" / "xxx" どちらでも property 部分を取り出す
-  const normalizeValue = (v) => {
-    if (v == null || v === '') return '';
-    const s = String(v);
-    return s.includes('.') ? s.split('.').pop() : s;
-  };
-  const currentProp = normalizeValue(value);
+// "SoundID.Scenario_Test_Line001" / "Scenario_Test_Line001" どちらでも末尾の名前だけ取り出す
+const stripSoundIdPrefix = (v) => {
+  if (v == null) return '';
+  const s = String(v);
+  return s.includes('.') ? s.split('.').pop() : s;
+};
+
+// /api/sound のレスポンスから「SoundID名 → 再生に必要な情報」の対応表を作る。
+// SoundID の命名規則は {group}_{subgroup}_{name}。nest_path を持つ定義にも
+// 対応できるよう、subgroup 版と nest_path 版の両方のキーを登録しておく。
+const buildSoundLookup = (soundData) => {
+  const map = new Map();
+  Object.entries(soundData?.groups || {}).forEach(([groupName, groupValue]) => {
+    (groupValue?.items || []).forEach((item, index) => {
+      const entry = { group: groupName, index, name: item.name, desc: item.desc || '', type: item.type };
+      const nest = Array.isArray(item.nest_path) ? item.nest_path : [];
+      const keys = new Set([
+        [groupName, item.subgroup, item.name].filter(Boolean).join('_'),
+        [groupName, ...nest, item.name].join('_'),
+      ]);
+      keys.forEach((k) => { if (!map.has(k)) map.set(k, entry); });
+    });
+  });
+  return map;
+};
+
+// セル(1つのシナリオ×言語)から voices の配列を取り出す。
+// {value: [...]} 形式・素の配列形式のどちらでも読める。フィールド自体が無ければ null。
+const extractCellList = (cell, fieldName) => {
+  if (!cell || typeof cell !== 'object') return [];
+  if (Array.isArray(cell)) return cell;
+  const fieldCell = cell[fieldName];
+  if (fieldCell === undefined) return null;
+  if (fieldCell && typeof fieldCell === 'object' && 'value' in fieldCell) {
+    return Array.isArray(fieldCell.value) ? fieldCell.value : [];
+  }
+  return Array.isArray(fieldCell) ? fieldCell : [];
+};
+
+// 試聴言語の選択は、同じ画面内の別の voice_ref フィールドにも引き継ぐ
+let lastVoicePreviewLanguage = null;
+
+function VoiceRefFieldEditor({ value, onChange, options, eventId, subId }) {
+  const matrixName = options?.matrixName || 'ScenarioVoice';
+  const fieldName = options?.fieldName || 'voices';
+  const defaultLanguage = options?.previewLanguage || 'Ja';
+
+  const [table, setTable] = useState(null);
+  const [soundLookup, setSoundLookup] = useState(null); // null = サウンド定義を取得できなかった
+  const [scenarioKey, setScenarioKey] = useState('');
+  const [language, setLanguage] = useState(lastVoicePreviewLanguage || defaultLanguage);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [playingIndex, setPlayingIndex] = useState(null);
+  const [playError, setPlayError] = useState('');
+  const audioRef = useRef(null);
+
+  const numericValue = (() => {
+    if (typeof value === 'number' && !Number.isNaN(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const n = parseInt(value, 10);
+      return Number.isNaN(n) ? -1 : n;
+    }
+    return -1;
+  })();
 
   useEffect(() => {
     if (!eventId || !subId) {
-      setErrorMsg('このRoleはシナリオイベントの遷移編集画面からのみ使用できます（物語設定のvoice_series_idが必要）。');
-      setLoadingVoice(false);
+      setErrorMsg('シナリオイベント文脈が必要です（eventId / subId）。');
+      setLoading(false);
       return;
     }
-    setLoadingVoice(true);
+    let cancelled = false;
+    setLoading(true);
     setErrorMsg('');
-    Promise.all([
-      fetch(`/api/scenario-event/${eventId}/sub/${subId}/story`).then((r) => r.json()),
-      fetch('/api/sound').then((r) => r.json()),
-    ])
-      .then(([story, soundData]) => {
-        const series = story.voiceSeriesId;
-        if (!series) {
-          setErrorMsg('このサブイベントの物語設定にvoice_series_idが設定されていません。先に物語設定画面でVoice系列を指定してください。');
-          setOptions([]);
-          return;
-        }
-        setSeriesLabel(`Sound_${series.group}_${series.subGroup}`);
-        const items = [];
-        Object.entries(soundData.groups || {}).forEach(([groupName, groupValue]) => {
-          if (groupName !== series.group) return;
-          (groupValue.items || []).forEach((item) => {
-            if (item.type === 'VOICE' && item.subgroup === series.subGroup) {
-              // SoundID enum の命名規則: {group}_{subgroup}_{name}
-              const enumName = `${groupName}_${item.subgroup}_${item.name}`;
-              items.push({ name: item.name, enumName });
-            }
-          });
-        });
-        setOptions(items);
-      })
-      .catch((e) => setErrorMsg('取得エラー: ' + e.message))
-      .finally(() => setLoadingVoice(false));
-  }, [eventId, subId]);
+    setScenarioKey('');
 
-  if (loadingVoice) {
+    (async () => {
+      try {
+        // 3つは互いに独立なので並列で取る。サウンド定義が取れなくても
+        // インデックスの選択自体はできる（試聴だけ無効になる）。
+        const [listRes, matrixRes, soundRes] = await Promise.all([
+          fetch('/api/scenario-event'),
+          fetch(`/api/class-data-matrix-id/${matrixName}`),
+          fetch('/api/sound').catch(() => null),
+        ]);
+        if (!listRes.ok) throw new Error(`シナリオイベント一覧の取得に失敗 (${listRes.status})`);
+        if (!matrixRes.ok) throw new Error(`Matrix ${matrixName} の取得に失敗 (${matrixRes.status})`);
+
+        // 列キーの解決は TextListIndexFieldEditor と同じ:
+        // eventId / subId は内部の安定IDなので、名前を引き直して "{イベント名}_{サブイベント名}" にする。
+        const eventList = await listRes.json();
+        const ev = (eventList || []).find((e) => String(e.id) === String(eventId));
+        const sub = (ev?.subEvents || []).find((s) => String(s.subId) === String(subId));
+        if (!ev || !sub) {
+          throw new Error('このシナリオ／サブイベントが見つかりませんでした（一覧を再読み込みしてください）。');
+        }
+        const matrixTable = await matrixRes.json();
+        let lookup = null;
+        if (soundRes && soundRes.ok) {
+          try { lookup = buildSoundLookup(await soundRes.json()); } catch (_) { lookup = null; }
+        }
+        if (cancelled) return;
+        setScenarioKey(`${ev.name}_${sub.name}`);
+        setTable(matrixTable);
+        setSoundLookup(lookup);
+      } catch (e) {
+        if (!cancelled) setErrorMsg(e.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [eventId, subId, matrixName]);
+
+  // Matrix の各行(=言語)から、このシナリオの列にある voices を取り出す。
+  const languages = useMemo(() => {
+    if (!table || !scenarioKey) return [];
+    const data = table.data || {};
+    return Object.keys(data).map((rowKey) => {
+      const rowDict = data[rowKey] || {};
+      const colKey = Object.keys(rowDict).find(
+        (k) => k === scenarioKey || k === `ScenarioEventID.${scenarioKey}` || k.endsWith(`.${scenarioKey}`)
+      );
+      const list = colKey ? extractCellList(rowDict[colKey], fieldName) : null;
+      return {
+        label: rowKey.includes('.') ? rowKey.split('.').pop() : rowKey,
+        colKey: colKey || null,
+        list, // null = このシナリオの列 or フィールドが無い
+      };
+    });
+  }, [table, scenarioKey, fieldName]);
+
+  const activeLang = useMemo(
+    () => languages.find((l) => l.label.toLowerCase() === String(language).toLowerCase()) || languages[0] || null,
+    [languages, language]
+  );
+
+  const items = useMemo(() => {
+    const list = activeLang?.list || [];
+    return list.map((sid, i) => {
+      const soundId = stripSoundIdPrefix(sid);
+      const info = soundLookup ? soundLookup.get(soundId) || null : null;
+      return {
+        index: i,
+        soundId,
+        info,
+        label: `${i} : ${soundId}${info?.desc ? ` — ${info.desc}` : ''}`,
+      };
+    });
+  }, [activeLang, soundLookup]);
+
+  // 言語ごとにボイス数が違うと、同じインデックスが別のセリフを指してしまう
+  const lengthMismatch = useMemo(() => {
+    const withList = languages.filter((l) => Array.isArray(l.list));
+    if (withList.length < 2) return '';
+    const lens = new Set(withList.map((l) => l.list.length));
+    return lens.size > 1 ? withList.map((l) => `${l.label}:${l.list.length}件`).join(' / ') : '';
+  }, [languages]);
+
+  const stopAudio = useCallback(() => {
+    const a = audioRef.current;
+    if (a) {
+      a.onended = null;
+      a.onerror = null;
+      a.pause();
+      audioRef.current = null;
+    }
+    setPlayingIndex(null);
+  }, []);
+
+  // アンマウント時・言語切替時は再生を止める
+  useEffect(() => stopAudio, [stopAudio]);
+  useEffect(() => { stopAudio(); setPlayError(''); }, [language, stopAudio]);
+
+  const playItem = (item) => {
+    if (!item) return;
+    if (playingIndex === item.index && audioRef.current) { stopAudio(); return; }
+    stopAudio();
+    setPlayError('');
+    if (!item.info) return;
+    const audio = new Audio(`/api/sound/serve/${encodeURIComponent(item.info.group)}/${item.info.index}`);
+    audio.onended = () => { if (audioRef.current === audio) { audioRef.current = null; setPlayingIndex(null); } };
+    audio.onerror = () => {
+      if (audioRef.current === audio) { audioRef.current = null; setPlayingIndex(null); }
+      setPlayError(`${item.soundId} の音声ファイルを再生できませんでした。`);
+    };
+    audioRef.current = audio;
+    setPlayingIndex(item.index);
+    audio.play().catch(() => {
+      if (audioRef.current === audio) { audioRef.current = null; setPlayingIndex(null); }
+    });
+  };
+
+  if (loading) {
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <CircularProgress size={16} />
-        <Typography variant="caption" color="text.secondary">Voice候補を読み込み中...</Typography>
+        <Typography variant="caption" color="text.secondary">ボイス一覧を読み込み中...</Typography>
       </Box>
     );
   }
@@ -111,25 +271,118 @@ function VoiceRefFieldEditor({ value, onChange, eventId, subId }) {
     return <Typography variant="caption" color="error">{errorMsg}</Typography>;
   }
 
-  // 新旧両方の命名（subgroup 有り/無し）にマッチさせる
-  const selected = options.find((o) => o.enumName === currentProp)
-    || options.find((o) => currentProp.endsWith(`_${o.name}`) && o.enumName.split('_').pop() === o.name)
-    || null;
+  if (languages.length === 0) {
+    return (
+      <Typography variant="caption" color="error">
+        Matrix {matrixName} に言語の行がありません。Matrix にボイスを追加してください。
+      </Typography>
+    );
+  }
+
+  const selected = items.find((o) => o.index === numericValue) || null;
+  const isPlayingSelected = selected != null && playingIndex === selected.index;
 
   return (
     <Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-        Voice系列: {seriesLabel}（{options.length}件）
+        {matrixName}.{fieldName}（{activeLang?.label}） / シナリオ {scenarioKey || eventId} — {items.length}件
       </Typography>
-      <Autocomplete
-        size="small"
-        options={options}
-        value={selected}
-        onChange={(e, v) => onChange(v ? `SoundID.${v.enumName}` : '')}
-        getOptionLabel={(o) => (o ? `SoundID.${o.enumName}` : '')}
-        isOptionEqualToValue={(a, b) => a?.enumName === b?.enumName}
-        renderInput={(params) => <TextField {...params} label="Voice (SoundID)" />}
-      />
+
+      {languages.length > 1 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">試聴言語</Typography>
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={activeLang?.label}
+            onChange={(e, v) => {
+              if (!v) return;
+              lastVoicePreviewLanguage = v;
+              setLanguage(v);
+            }}
+          >
+            {languages.map((l) => (
+              <ToggleButton key={l.label} value={l.label} sx={{ py: 0, px: 1, textTransform: 'none' }}>
+                {l.label}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        </Box>
+      )}
+
+      {activeLang && activeLang.list === null && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mb: 0.5 }}>
+          Matrix {matrixName}（{activeLang.label}）に「{scenarioKey}」の {fieldName} がありません。
+          scenario_matrix_editor.py のボイス設定などで追加してください。
+        </Typography>
+      )}
+      {lengthMismatch && (
+        <Typography variant="caption" color="warning.main" sx={{ display: 'block', mb: 0.5 }}>
+          言語ごとのボイス数が一致していません（{lengthMismatch}）。同じインデックスが別言語で別のセリフを指す恐れがあります。
+        </Typography>
+      )}
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Autocomplete
+          size="small"
+          sx={{ flex: 1 }}
+          options={items}
+          value={selected}
+          onChange={(e, v) => onChange(v ? v.index : -1)}
+          getOptionLabel={(o) => (o ? o.label : '')}
+          isOptionEqualToValue={(a, b) => a?.index === b?.index}
+          renderInput={(params) => <TextField {...params} label="ボイスインデックス" />}
+          renderOption={(props, option) => {
+            const { key, ...liProps } = props;
+            const playing = playingIndex === option.index;
+            return (
+              <li key={key} {...liProps}>
+                <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', gap: 0.5 }}>
+                  <Typography variant="body2" sx={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
+                    {option.label}
+                  </Typography>
+                  <Tooltip title={option.info ? (playing ? '停止' : '試聴') : 'サウンド定義が見つかりません'}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={!option.info}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); playItem(option); }}
+                      >
+                        {playing ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Box>
+              </li>
+            );
+          }}
+          noOptionsText="このシナリオ×言語のボイスがありません。Matrix に追加してください。"
+        />
+        <Tooltip title={selected?.info ? (isPlayingSelected ? '停止' : '選択中のボイスを試聴') : '試聴できません'}>
+          <span>
+            <IconButton disabled={!selected?.info} onClick={() => playItem(selected)}>
+              {isPlayingSelected ? <StopIcon /> : <PlayArrowIcon />}
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+
+      {selected && !selected.info && (
+        <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+          {soundLookup
+            ? `SoundID「${selected.soundId}」に対応するサウンド定義が見つかりません（削除・リネームされた可能性があります）。`
+            : 'サウンド定義(/api/sound)を取得できなかったため試聴できません。'}
+        </Typography>
+      )}
+      {numericValue >= 0 && !selected && activeLang?.list && (
+        <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+          インデックス {numericValue} は {activeLang.label} のボイス一覧（{items.length}件）の範囲外です。
+        </Typography>
+      )}
+      {playError && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>{playError}</Typography>
+      )}
     </Box>
   );
 }
@@ -899,7 +1152,11 @@ function NestedClassDataField({ value, subSchema, onChange }) {
   return <BaseRoleInputForm schema={subSchema} initialData={subInitialData} onChange={handleSubChange} />;
 }
 
-const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, roleName }) => {
+// fieldDefaultUrl: 「デフォルト保存」(ブックマークボタン)の保存先を、Role用の
+//   /api/scenario-role/<roleName>/field-default 以外に差し替えたい場合に指定する
+//   (例: サブグループ設定は /api/scenario-subgroup-setting/field-default)。
+//   POST {fieldName, value} を受け取れるエンドポイントであること。
+const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, roleName, fieldDefaultUrl }) => {
   const [formData, setFormData] = useState(initialData || []);
 
   // 親(呼び出し元)がすでにContextでenum/classData/customClassSchemasを
@@ -938,7 +1195,8 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
           // text_list_index は int だが、0 は「0番目のテキスト」という有効な値。
           // 未選択は -1（TextListIndexFieldEditor もこの規約で描画している）。
           if (type === 'text_list_index') return -1;
-          if (type === 'voice_ref') return '';
+          // voice_ref も text_list_index と同じ int インデックス（-1 = 未選択）。
+          if (type === 'voice_ref') return -1;
           if (type in customClassSchemas) {
             const obj = {};
             (customClassSchemas[type] || []).forEach(f => { obj[f.name] = getDefaultValue(f.type, f.arraySize, f.options); });
@@ -1150,11 +1408,11 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
   // 際の初期値として使われる(schema.fields[].default → BaseRoleInputForm冒頭のformattedData参照)。
   const [savingDefaultField, setSavingDefaultField] = useState(null);
   const handleSaveAsDefault = async (field) => {
-    if (!roleName) return;
+    if (!roleName && !fieldDefaultUrl) return;
     const current = formData.find(d => d.name === field.name);
     setSavingDefaultField(field.name);
     try {
-      const res = await fetch(`/api/scenario-role/${encodeURIComponent(roleName)}/field-default`, {
+      const res = await fetch(fieldDefaultUrl || `/api/scenario-role/${encodeURIComponent(roleName)}/field-default`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fieldName: field.name, value: current ? current.value : null }),
@@ -1190,7 +1448,16 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
     const renderSingle = (value, onValueChange) => {
       // bit / color / bezier (CustomClassDataの拡張型)
       if (field.type === 'voice_ref') {
-        return <VoiceRefFieldEditor key={key} value={value} onChange={onValueChange} eventId={eventId} subId={subId} />;
+        return (
+          <VoiceRefFieldEditor
+            key={key}
+            value={value}
+            onChange={onValueChange}
+            options={field.options || {}}
+            eventId={eventId}
+            subId={subId}
+          />
+        );
       }
       if (field.type === 'text_list_index') {
         return (
@@ -1565,7 +1832,7 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 {renderField(field)}
               </Box>
-              {roleName && (
+              {(roleName || fieldDefaultUrl) && (
                 <Tooltip title={field.default !== undefined && field.default !== null
                   ? `デフォルト保存済み（現在の値で更新できます）`
                   : `今の値をこのフィールドのデフォルト値として保存（次にこのRoleを追加した時の初期値になります）`}>

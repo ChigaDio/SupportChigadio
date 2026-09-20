@@ -46,6 +46,7 @@ function Sidebar({ selectedMenu, handleMenuClick }) {
         { name: 'ScenarioRole', key: 'scenario-role' },
         { name: 'ScenarioEvent', key: 'scenario-event' },
         { name: 'ScenarioConditions', key: 'scenario-conditions' },
+        {name: "ScenarioSubGroupSettings",key : 'scenario-subgroup-setting'},
       ],
     },
     {

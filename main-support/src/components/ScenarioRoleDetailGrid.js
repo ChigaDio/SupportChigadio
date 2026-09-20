@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -14,6 +14,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import SubdirectoryArrowRightIcon from '@mui/icons-material/SubdirectoryArrowRight';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import BaseRoleInputForm from '../scenario/BaseRoleInputForm';
 
 /**
  * 依存関係の「有効になる値」選択 UI
@@ -337,8 +338,81 @@ function DictionaryOptionsEditor({ options, onChange, keyTypeOptions, valueTypeO
   );
 }
 
-function ScenarioRoleDetailGrid() {
-  const { name } = useParams();
+// ============================================================
+// サブグループ設定のデフォルト値パネル (settingMode のときだけ表示)
+// 各フィールドの右のブックマークで「そのフィールドだけ」、下のボタンで「全項目」を
+// 手動デフォルトとして保存できる。新しいサブグループ(GUI/DSLのショートカット)を作ったときに、
+// まずこの値が入る(手動デフォルトが無いフィールドは型ごとの自動デフォルト)。
+// ============================================================
+const SETTING_API = '/api/scenario-subgroup-setting';
+const SETTING_NAME = 'ScenarioSubGroupSetting';
+
+function SettingDefaultsPanel({ reloadKey }) {
+  const [schema, setSchema] = useState(null);
+  const [initial, setInitial] = useState([]);
+  const [error, setError] = useState('');
+  const draftRef = useRef([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError('');
+    fetch(`${SETTING_API}/form-schema`)
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+      .then(({ schema: sc, defaults }) => {
+        if (cancelled) return;
+        setSchema(sc);
+        setInitial(defaults || []);
+        draftRef.current = defaults || [];
+      })
+      .catch(e => { if (!cancelled) setError(String(e.message || e)); });
+    return () => { cancelled = true; };
+  }, [reloadKey]);
+
+  const handleSaveAll = () => {
+    const values = {};
+    (draftRef.current || []).forEach(d => { values[d.name] = d.value; });
+    fetch(`${SETTING_API}/defaults`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    })
+      .then(res => res.json())
+      .then(result => alert(result.message || result.error))
+      .catch(e => alert('デフォルト値の保存エラー: ' + e));
+  };
+
+  if (error) return <Typography color="error" sx={{ mt: 2 }}>デフォルト値の読み込みエラー: {error}</Typography>;
+  if (!schema) return null;
+  return (
+    <Box sx={{ mt: 3, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, maxWidth: 720 }}>
+      <Typography variant="h6" gutterBottom>デフォルト値</Typography>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        新しいサブグループに最初に入る値です。各項目右のブックマークで項目ごとに、下のボタンで全項目をまとめて保存できます
+        （未保存の項目は型ごとの自動デフォルト）。フィールドを追加・削除した直後は、上の「保存」を先に押してください。
+        既にあるサブグループの値は変わりません。
+      </Typography>
+      <BaseRoleInputForm
+        schema={schema}
+        initialData={initial}
+        onChange={(d) => { draftRef.current = d; }}
+        roleName={SETTING_NAME}
+        fieldDefaultUrl={`${SETTING_API}/field-default`}
+      />
+      <Button variant="contained" onClick={handleSaveAll} sx={{ mt: 1 }}>全項目をデフォルトとして保存</Button>
+    </Box>
+  );
+}
+
+// settingMode: 「サブグループ設定」(全イベント共通・組み込みフィールド is_wait_key 付き)の
+// フィールド定義編集として動かす。Roleのフィールド定義編集と同じ画面・同じ型(class_data_id /
+// class_data / enum / bezier / color / bit / 配列 / dictionary / ネスト等)を使えるようにするため、
+// このコンポーネントを流用している(ScenarioSubGroupSettingGrid.js が settingMode で呼ぶ)。
+function ScenarioRoleDetailGrid({ settingMode = false }) {
+  const params = useParams();
+  const name = settingMode ? SETTING_NAME : params.name;
+  // フィールド定義の取得・保存先(Roleは /api/scenario-role/<name>、設定は /api/scenario-subgroup-setting)
+  const definitionUrl = settingMode ? SETTING_API : `/api/scenario-role/${name}`;
+  const [savedVersion, setSavedVersion] = useState(0);
   const navigate = useNavigate();
   const [data, setData] = useState([]);
   const [typeOptions, setTypeOptions] = useState([]);
@@ -425,7 +499,7 @@ function ScenarioRoleDetailGrid() {
 
   // Fetch data for the role
   useEffect(() => {
-    fetch(`/api/scenario-role/${name}`)
+    fetch(definitionUrl)
       .then(response => response.json())
       .then(fetchedData => {
         setData(fetchedData.data.map((item, index) => ({ ...item, id: item.id || index + 1, required: item.required !== false })));
@@ -436,7 +510,7 @@ function ScenarioRoleDetailGrid() {
         console.error('シナリオロールデータ取得エラー:', error);
         setLoading(false);
       });
-  }, [name]);
+  }, [name, definitionUrl]);
 
   // Fetch type suggestions
   useEffect(() => {
@@ -458,12 +532,15 @@ function ScenarioRoleDetailGrid() {
       const customValueTypes = Array.from(new Set([...(customOptions.custom_types || []), 'dictionary'])); // ['bit', 'color', 'bezier', 'dictionary']
       // text_list_index はバックエンド(/api/custom-class-data-type-options)が
       // 返す型ではなく、シナリオRole専用の特殊型なのでここで足す。
-      setTypeOptions([
+      const allTypes = [
         ...basicTypes, ...unityTypes,
         ...enumTypes, ...classTypes, ...classIdTypes,
         ...customClassTypes, ...customClassIdTypes, ...customValueTypes,
         'text_list_index'
-      ]);
+      ];
+      // text_list_index はシナリオイベント(eventId/subId)の文脈が必要な型なので、
+      // 全イベント共通のサブグループ設定では選べないようにする。
+      setTypeOptions(settingMode ? allTypes.filter(t => t !== 'text_list_index') : allTypes);
       setEnumNames(enumTypes);
       setClassDataIdNames(classIdTypes);
       setCustomClassDataIdNames(customClassIdTypes);
@@ -474,6 +551,10 @@ function ScenarioRoleDetailGrid() {
   const handleAddRow = () => {
     if (!newType.trim() || !newName.trim()) {
       alert('タイプと名前は必須です');
+      return;
+    }
+    if (settingMode && data.some(item => item.name === newName.trim())) {
+      alert(`「${newName.trim()}」は既に存在します`);
       return;
     }
     const maxId = Math.max(...data.map(item => item.id), 0) + 1;
@@ -548,6 +629,7 @@ function ScenarioRoleDetailGrid() {
 
   // Delete row（親を消した場合は子の dependency もクリア）
   const handleDeleteRow = (id) => {
+    if (settingMode && data.find(item => item.id === id)?.builtin) return; // 組み込みフィールドは削除不可
     const deleted = data.find(item => item.id === id);
     const deletedName = deleted?.name;
     setData(
@@ -574,6 +656,8 @@ function ScenarioRoleDetailGrid() {
     const index = data.findIndex((r) => r.id === id);
     const targetIndex = index + direction;
     if (index === -1 || targetIndex < 0 || targetIndex >= data.length) return;
+    // 組み込みフィールド(is_wait_key)は常に先頭のまま。動かすことも、その上へ割り込むこともできない。
+    if (settingMode && (data[index]?.builtin || data[targetIndex]?.builtin)) return;
     const newData = [...data];
     const [movedRow] = newData.splice(index, 1);
     newData.splice(targetIndex, 0, movedRow);
@@ -593,13 +677,21 @@ function ScenarioRoleDetailGrid() {
 
   // Save data
   const handleSave = () => {
-    fetch(`/api/scenario-role/${name}`, {
+    fetch(definitionUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data, branchType }),
     })
       .then(response => response.json())
-      .then(result => alert(result.message))
+      .then(result => {
+        // 設定の場合、サーバーが全シナリオの既存サブグループへ追加/削除フィールドを反映し、
+        // ScenarioSubGroupSetting.cs も再生成している。その結果を併せて知らせる。
+        let msg = result.message || result.error || '';
+        if (settingMode && result.sync) msg += `\n（既存シナリオの ${result.sync.nodes_touched} 個のサブグループへ反映）`;
+        if (settingMode && result.error_detail) msg += `\n⚠ ${result.error_detail}`;
+        alert(msg);
+        if (settingMode) setSavedVersion(v => v + 1);
+      })
       .catch(error => alert('データ保存エラー: ' + error));
   };
 
@@ -618,7 +710,7 @@ function ScenarioRoleDetailGrid() {
 
   // Generate C#
   const handleGenerateCs = () => {
-    fetch(`/api/generate-scenario-role/${name}`, {
+    fetch(settingMode ? `${SETTING_API}/generate` : `/api/generate-scenario-role/${name}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data, branchType }),
@@ -783,8 +875,12 @@ function ScenarioRoleDetailGrid() {
       headerName: 'アクション',
       width: 100,
       renderCell: (params) => (
-        <Button variant="contained" color="error" size="small" onClick={() => handleDeleteRow(params.id)}>
-          削除
+        <Button
+          variant="contained" color="error" size="small"
+          disabled={settingMode && !!params.row.builtin}
+          onClick={() => handleDeleteRow(params.id)}
+        >
+          {settingMode && params.row.builtin ? '組み込み' : '削除'}
         </Button>
       )
     }
@@ -793,15 +889,25 @@ function ScenarioRoleDetailGrid() {
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        シナリオロール詳細: {name}
+        {settingMode ? 'サブグループ設定（全イベント共通）' : `シナリオロール詳細: ${name}`}
       </Typography>
+      {settingMode && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 800 }}>
+          サブグループ（ロールを追加する各グループ）ごとに持たせる設定のフィールド定義です。全イベント・全サブグループで共通です。
+          先頭の <b>is_wait_key</b>（入力待ち）は組み込みで、削除・改名はできません（デフォルト値は下で変更できます）。
+          フィールドを追加・削除して「保存」すると、既存のすべてのサブグループへ反映され（追加はデフォルト値、削除は除去）、
+          C#（ScenarioSubGroupSetting.cs）も再生成されます。
+        </Typography>
+      )}
       <Box sx={{ mb: 2, display: 'flex', alignItems: 'center' }}>
-        <Autocomplete
-          options={['General', 'Branch']}
-          value={branchType}
-          onChange={(e, newValue) => setBranchType(newValue || 'General')}
-          renderInput={(params) => <TextField {...params} label="ロールタイプ" sx={{ width: 200, mr: 2 }} />}
-        />
+        {!settingMode && (
+          <Autocomplete
+            options={['General', 'Branch']}
+            value={branchType}
+            onChange={(e, newValue) => setBranchType(newValue || 'General')}
+            renderInput={(params) => <TextField {...params} label="ロールタイプ" sx={{ width: 200, mr: 2 }} />}
+          />
+        )}
         <Button variant="contained" color="primary" startIcon={<AddIcon />} onClick={() => setOpen(true)} sx={{ mr: 1 }}>
           新しい変数を追加
         </Button>
@@ -811,9 +917,11 @@ function ScenarioRoleDetailGrid() {
         <Button variant="contained" color="secondary" onClick={handleGenerateCs} sx={{ mr: 1 }}>
           C#を生成
         </Button>
-        <Button variant="contained" color="error" onClick={handleDelete}>
-          削除
-        </Button>
+        {!settingMode && (
+          <Button variant="contained" color="error" onClick={handleDelete}>
+            削除
+          </Button>
+        )}
       </Box>
       {loading ? (
         <Typography>読み込み中...</Typography>
@@ -824,9 +932,11 @@ function ScenarioRoleDetailGrid() {
             columns={columns}
             pageSizeOptions={[5]}
             getRowId={(row) => row.id}
+            isCellEditable={(cell) => !(settingMode && cell.row.builtin)}
           />
         </div>
       )}
+      {settingMode && !loading && <SettingDefaultsPanel reloadKey={savedVersion} />}
       <Dialog open={open} onClose={() => setOpen(false)}>
         <DialogTitle>新しい変数を追加</DialogTitle>
         <DialogContent>

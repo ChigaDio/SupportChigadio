@@ -34,9 +34,20 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import TuneIcon from '@mui/icons-material/Tune';
 import RoleInputFactory from '../scenario/RoleInputFactory';
 import ScenarioTransactionCodeEditor from '../scenario/ScenarioTransactionCodeEditor';
-import { compileDocument, decompileRoles, renumberDuplicateNodeIds } from '../scenario/scenarioTransactionDsl';
+import {
+  compileDocument, decompileRoles, renumberDuplicateNodeIds,
+  compileSubGroupSetting, decompileSubGroupSetting, extractSubGroupSettingLines,
+} from '../scenario/scenarioTransactionDsl';
+import {
+  fetchSubGroupSettingSchema, buildInitialSetting, buildDefaultSettingLine, getNodeSetting,
+  getSettingValue, setSettingValue, IS_WAIT_KEY_FIELD, SUBGROUP_SETTING_NODE_KEY,
+} from '../scenario/scenarioSubGroupSetting';
+import {
+  SubGroupWaitKeyToggle, SubGroupSettingIconButton, SubGroupWaitKeyChip, SubGroupSettingDrawer,
+} from '../scenario/SubGroupSettingControls';
 import { debounce } from 'lodash';
 
 // ============================================================
@@ -793,8 +804,10 @@ const BlockCard = ({
   onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
+  subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const [showSettingDrawer, setShowSettingDrawer] = useState(false);
   const [showRoleSelect, setShowRoleSelect] = useState(false);
   const [showDataInput, setShowDataInput] = useState(false);
   const [formDataState, setFormDataState] = useState({});
@@ -815,6 +828,13 @@ const BlockCard = ({
   const roles = node.data.roles || [];
   const isGroup = !isSub;
   const headerBg = isSub ? 'secondary.main' : 'primary.main';
+
+  // サブグループ設定（全イベント共通のフィールド定義。組み込みの is_wait_key=入力待ち + 追加フィールド）。
+  // スキーマを取得できなかった場合(旧サーバー等)は、設定UIを出さず従来どおり動く。
+  const settingEnabled = !!subGroupSettingSchema;
+  const nodeSetting = getNodeSetting(node, subGroupSettingSchema, subGroupSettingDefaults);
+  const waitKey = settingEnabled && !!getSettingValue(nodeSetting, IS_WAIT_KEY_FIELD, false);
+  const hasExtraSettingFields = (subGroupSettingSchema?.fields || []).length > 1;
 
   // roleData初期化
   // データ入力Drawerを開いている最中は、ユーザーがGUIで編集中の formDataStateを
@@ -948,8 +968,18 @@ const BlockCard = ({
             sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(255,255,255,0.25)', color: 'white', flexShrink: 0 }} />
         )}
 
+        {/* 入力待ち(is_wait_key)がONのときは、折り畳んでいても分かるようにヘッダーに表示 */}
+        <SubGroupWaitKeyChip waitKey={waitKey} />
+
         {/* アクションボタン群 */}
         <Box sx={{ display: 'flex', gap: 0, flexShrink: 0 }} onMouseDown={e => e.stopPropagation()}>
+          {settingEnabled && (
+            <SubGroupSettingIconButton
+              onClick={() => setShowSettingDrawer(true)}
+              hasExtraFields={hasExtraSettingFields}
+              waitKey={waitKey}
+            />
+          )}
           <Tooltip title="上へ">
             <span>
               <IconButton size="small" disabled={index === 0} onClick={onMoveUp}
@@ -1006,6 +1036,34 @@ const BlockCard = ({
 
           {/* 接続バッジ */}
           <ConnectionBadge nodeId={node.id} edges={edges} onRemove={onRemoveEdge} />
+
+          {/* サブグループ設定: 入力待ち(is_wait_key)のトグルと、その他のフィールドの編集 */}
+          {settingEnabled && (
+            <Box sx={{ mt: 0.75, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <SubGroupWaitKeyToggle
+                value={waitKey}
+                onChange={(next) => onSaveSubGroupSetting(
+                  node.id,
+                  setSettingValue(nodeSetting, IS_WAIT_KEY_FIELD, next, subGroupSettingSchema, subGroupSettingDefaults)
+                )}
+              />
+              {hasExtraSettingFields && (
+                <Button
+                  size="small" variant="text"
+                  startIcon={<TuneIcon sx={{ fontSize: 14 }} />}
+                  onClick={() => setShowSettingDrawer(true)}
+                  sx={{ fontSize: '0.68rem', py: 0.1, px: 0.75, minWidth: 0 }}
+                >
+                  その他の設定
+                </Button>
+              )}
+              {isGroup && (
+                <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>
+                  グループ直下のRole用
+                </Typography>
+              )}
+            </Box>
+          )}
 
           {/* Role リスト */}
           {roles.length > 0 && (
@@ -1111,6 +1169,21 @@ const BlockCard = ({
         flushStructureSave={flushStructureSave}
       />
 
+      {/* ── サブグループ設定Drawer(is_wait_key + 追加した共通フィールドの入力) ── */}
+      {settingEnabled && (
+        <SubGroupSettingDrawer
+          open={showSettingDrawer}
+          onClose={() => setShowSettingDrawer(false)}
+          title={`サブグループ設定 — ノード ${node.id}${node.data.description ? `（${String(node.data.description).split('\n')[0]}）` : ''}`}
+          schema={subGroupSettingSchema}
+          defaults={subGroupSettingDefaults}
+          setting={nodeSetting}
+          onApply={(data) => onSaveSubGroupSetting(node.id, data)}
+          eventId={eventId}
+          subId={subId}
+        />
+      )}
+
       {/* ── 接続追加ダイアログ ── */}
       <Dialog open={showConnectDialog} onClose={() => setShowConnectDialog(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ pb: 1 }}>
@@ -1176,6 +1249,7 @@ const BlockCanvas = ({
   onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onMoveToGroup,
+  subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
 }) => {
   const allNodeIds = nodes.map(n => n.id);
 
@@ -1225,6 +1299,9 @@ const BlockCanvas = ({
           onRemoveEdge={onRemoveEdge}
           onUpdateFormData={onUpdateFormData}
           onMoveToGroup={onMoveToGroup}
+          subGroupSettingSchema={subGroupSettingSchema}
+          subGroupSettingDefaults={subGroupSettingDefaults}
+          onSaveSubGroupSetting={onSaveSubGroupSetting}
         />
       ))}
     </Box>
@@ -1268,6 +1345,18 @@ function ScenarioEventTransition() {
   // シンタックスハイライト・リンター・補完へそのまま渡す
   // (class_data型フィールドの { フィールド名: 値, ... } を正しく扱うために必要)。
   const [classDataSchemas, setClassDataSchemas] = useState({});
+  // サブグループ設定（全イベント共通のフィールド定義。組み込みの is_wait_key + 追加フィールド）の
+  // スキーマと、デフォルト値（手動デフォルト→自動デフォルト解決済み）。
+  // 取得できなかった場合は null / [] のまま（設定UI・DSLの '#@' 行は無効になり従来どおり動く）。
+  const [subGroupSettingSchema, setSubGroupSettingSchema] = useState(null);
+  const [subGroupSettingDefaults, setSubGroupSettingDefaults] = useState([]);
+  // DSLエディタのショートカット(Ctrl/Cmd+Alt+G/H)で新しい見出しに添える、デフォルトの設定行
+  const subGroupSettingDefaultLine = useMemo(
+    () => (subGroupSettingSchema
+      ? buildDefaultSettingLine(subGroupSettingSchema, subGroupSettingDefaults, classDataSchemas)
+      : ''),
+    [subGroupSettingSchema, subGroupSettingDefaults, classDataSchemas]
+  );
 
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
 
@@ -1367,6 +1456,8 @@ function ScenarioEventTransition() {
             roles: [],
             subgroups: {},
             isSubGroup: isSub,
+            // 新しいサブグループには、まずデフォルト値の設定を入れる(手動デフォルト→自動デフォルト)
+            ...(subGroupSettingSchema ? { [SUBGROUP_SETTING_NODE_KEY]: buildInitialSetting(subGroupSettingDefaults) } : {}),
           },
         };
         list.push(node);
@@ -1412,6 +1503,8 @@ function ScenarioEventTransition() {
 
     // pathKey ("1", "1/1", ...) → roles[]  親子で同じ node.id でも混線しない
     const localRolesByPath = {};
+    // pathKey → subGroupSetting (GUIのトグル/Drawerで変更した直後の最新値を優先する)
+    const localSettingByPath = {};
     // サブグループタブ表示中は、タブ内ノードのパス先頭に parentId が付く
     const pathPrefix = (isSub && parentId) ? [String(parentId)] : [];
 
@@ -1421,6 +1514,9 @@ function ScenarioEventTransition() {
         const path = [...pathIds, String(n.id)];
         const pathKey = path.join('/');
         localRolesByPath[pathKey] = (n.data && n.data.roles) ? n.data.roles.map((r) => ({ ...r })) : [];
+        if (n.data && Array.isArray(n.data[SUBGROUP_SETTING_NODE_KEY])) {
+          localSettingByPath[pathKey] = n.data[SUBGROUP_SETTING_NODE_KEY].map((d) => ({ ...d }));
+        }
         // roleDataCache も pathKey で載っていれば上書き
         const cached = roleDataCache?.[pathKey];
         if (cached && localRolesByPath[pathKey]) {
@@ -1443,6 +1539,10 @@ function ScenarioEventTransition() {
         const path = [...pathIds, String(node.id)];
         const pathKey = path.join('/');
         const localRoles = localRolesByPath[pathKey];
+        if (localSettingByPath[pathKey]) {
+          node.data = node.data || {};
+          node.data[SUBGROUP_SETTING_NODE_KEY] = localSettingByPath[pathKey];
+        }
         if (localRoles) {
           node.data = node.data || {};
           // ローカルの roles を優先（中身の data を path 一致で転写）
@@ -1482,6 +1582,14 @@ function ScenarioEventTransition() {
       targetsOut[`${sid}::${pathKey}`] = t.node;
       const labelSuffix = t.label ? ` (${t.label})` : '';
       lines.push(`# ==== SUB:${sid} NODE:${pathKey}${labelSuffix} ====`);
+      // 見出しの直下に、そのサブグループの設定(is_wait_key など)を '#@ ...' のコメント形式で1行出す
+      if (subGroupSettingSchema) {
+        const settingLine = decompileSubGroupSetting(
+          getNodeSetting(t.node, subGroupSettingSchema, subGroupSettingDefaults),
+          subGroupSettingSchema, classDataSchemas
+        );
+        if (settingLine) lines.push(settingLine);
+      }
       const roles = (t.node.data && t.node.data.roles) || [];
       const bodyText = decompileRoles(roles, roleFormSchemas, classDataSchemas);
       if (bodyText) lines.push(bodyText);
@@ -1494,6 +1602,9 @@ function ScenarioEventTransition() {
     lines.push(`# 例: チェックを入れたうえで、下記のような見出しを書いてください（この案内行自体は無視されます）`);
     lines.push(`# 例: ==== SUB:${sid} NODE:新しいノードID ====`);
     lines.push(`# 例: ==== SUB:${sid} NODE:既存または新規の親ID/新しいサブグループのノードID ====`);
+    if (subGroupSettingSchema) {
+      lines.push(`# 例: 見出しの直下に「#@ is_wait_key=true」のように書くと、そのサブグループの設定(入力待ち等)になります`);
+    }
     lines.push('');
     return lines;
   };
@@ -1557,6 +1668,32 @@ function ScenarioEventTransition() {
         targetNode = ensureAllEditNodePath(tree, section.pathKey.split('/'));
         targetsRef.current[key] = targetNode;
       }
+      // サブグループ設定行('#@ ...')。書かれたフィールドだけ既存値(無ければデフォルト)を上書きし、
+      // 省略したフィールドは既存の値のまま。エラーがあればこのセクションは適用しない(Roleと同じ)。
+      let nextSetting = null;
+      let settingHasError = false;
+      if (subGroupSettingSchema) {
+        nextSetting = getNodeSetting(targetNode, subGroupSettingSchema, subGroupSettingDefaults);
+        extractSubGroupSettingLines(section.bodyLines).forEach((lineText) => {
+          const { data: written, diagnostics: settingDiagnostics } = compileSubGroupSetting(
+            lineText, subGroupSettingSchema, classDataSchemas
+          );
+          settingDiagnostics
+            .filter((d) => d.severity === 'error')
+            .forEach((d) => {
+              settingHasError = true;
+              diagnostics.push({
+                message: `SUB:${section.subId} NODE:${section.pathKey} - #@ ${d.message}`,
+                subId: section.subId, path: section.pathKey,
+              });
+            });
+          nextSetting = nextSetting.map((cur) => {
+            const w = written.find((x) => x.name === cur.name);
+            return w && w.value !== undefined && w.value !== null ? { ...cur, value: w.value } : cur;
+          });
+        });
+      }
+
       const existingRoles = (targetNode.data && targetNode.data.roles) || [];
       const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
         section.bodyLines.join('\n'), roleFormSchemas, existingRoles, classDataSchemas
@@ -1567,10 +1704,11 @@ function ScenarioEventTransition() {
           message: `SUB:${section.subId} NODE:${section.pathKey} - ${d.message}`,
           subId: section.subId, path: section.pathKey,
         }));
-      if (sectionDiagnostics.some((d) => d.severity === 'error')) continue;
+      if (sectionDiagnostics.some((d) => d.severity === 'error') || settingHasError) continue;
 
       targetNode.data = targetNode.data || {};
       targetNode.data.roles = compiledRoles;
+      if (nextSetting) targetNode.data[SUBGROUP_SETTING_NODE_KEY] = nextSetting;
       touchedSubIds.add(section.subId);
     }
 
@@ -1852,6 +1990,21 @@ function ScenarioEventTransition() {
       .catch(err => console.error('ClassDataスキーマ取得エラー:', err));
   }, []);
 
+  // ── サブグループ設定スキーマ取得 ──
+  // 設定のフィールド追加・デフォルト値の変更は別ページで行われるため、初回に加えて、
+  // 「Roleスキーマ再取得」・各ダイアログを開くタイミングでも最新化する。
+  const refreshSubGroupSetting = useCallback(async () => {
+    try {
+      const { schema, defaults } = await fetchSubGroupSettingSchema();
+      setSubGroupSettingSchema(schema);
+      setSubGroupSettingDefaults(defaults);
+    } catch (e) {
+      // 旧サーバー(APIなし)・一時的な失敗のときは設定UIを出さず従来どおり動かす
+      console.error('サブグループ設定スキーマ取得エラー:', e);
+    }
+  }, []);
+  useEffect(() => { refreshSubGroupSetting(); }, [refreshSubGroupSetting]);
+
   // Role一覧・全Roleスキーマを強制的に再取得する共通関数。
   // 「Roleスキーマ再取得」ボタンに加え、Role追加ダイアログ／データ入力ダイアログを
   // 開くタイミングでも自動的に呼び、新規作成したばかりのRole種別が一覧に出ない、
@@ -1883,7 +2036,9 @@ function ScenarioEventTransition() {
     } catch (e) {
       console.error('ClassDataスキーマ再取得エラー:', e);
     }
-  }, []);
+    // サブグループ設定の定義・デフォルト値も同じタイミングで最新化する
+    await refreshSubGroupSetting();
+  }, [refreshSubGroupSetting]);
 
   // ── スキーマ一括ロード（重複排除済み） ──
   useEffect(() => {
@@ -1984,7 +2139,11 @@ function ScenarioEventTransition() {
       nodes: cur.nodes.map(n => ({
         id: n.id, type: n.type || (tabId === 'main' ? 'customGroup' : 'subGroupNode'),
         position: n.position || { x: 0, y: 0 },
-        data: { label: n.data.label, description: n.data.description || '', roles: n.data.roles || [], subgroups: n.data.subgroups || {}, isSubGroup: n.data.isSubGroup },
+        data: {
+          label: n.data.label, description: n.data.description || '', roles: n.data.roles || [], subgroups: n.data.subgroups || {}, isSubGroup: n.data.isSubGroup,
+          // サブグループ設定(is_wait_key など)。無い場合はキー自体を送らない(サーバー側がデフォルトで補う)
+          ...(n.data[SUBGROUP_SETTING_NODE_KEY] !== undefined ? { [SUBGROUP_SETTING_NODE_KEY]: n.data[SUBGROUP_SETTING_NODE_KEY] } : {}),
+        },
         draggable: true,
       })),
       edges: cur.edges,
@@ -2119,6 +2278,8 @@ function ScenarioEventTransition() {
         roles: [],
         subgroups: {},
         isSubGroup: isSub,
+        // 新しいサブグループには、まずデフォルト値の設定を入れる(手動デフォルト→自動デフォルト)
+        ...(subGroupSettingSchema ? { [SUBGROUP_SETTING_NODE_KEY]: buildInitialSetting(subGroupSettingDefaults) } : {}),
       },
     };
     updateTabData(prev => ({
@@ -2221,6 +2382,22 @@ function ScenarioEventTransition() {
     setEditDialogOpen(false);
     scheduleSave();
     showSnack('更新しました');
+  };
+
+  // ── サブグループ設定の保存(トグル/Drawerからの変更) ──
+  // ノードの data.subGroupSetting だけを差し替えて、他のデータには触れない。保存は構造の
+  // 自動保存(デバウンス)に乗せる。
+  const handleSaveSubGroupSetting = (nodeId, settingData) => {
+    updateTabData(prev => ({
+      ...prev,
+      [activeTab]: {
+        ...prev[activeTab],
+        nodes: prev[activeTab].nodes.map(n =>
+          n.id === nodeId ? { ...n, data: { ...n.data, [SUBGROUP_SETTING_NODE_KEY]: settingData } } : n
+        )
+      }
+    }));
+    scheduleSave();
   };
 
   // ── Role操作 ──
@@ -2588,6 +2765,9 @@ function ScenarioEventTransition() {
           onAddRole={handleAddRole}
           onDeleteRole={handleDeleteRole}
           onSaveRole={handleSaveRole}
+          subGroupSettingSchema={subGroupSettingSchema}
+          subGroupSettingDefaults={subGroupSettingDefaults}
+          onSaveSubGroupSetting={handleSaveSubGroupSetting}
           onAddEdge={handleAddEdge}
           onRemoveEdge={handleRemoveEdge}
           onUpdateFormData={handleUpdateFormData}
@@ -2609,7 +2789,10 @@ function ScenarioEventTransition() {
             ただし新規作成したグループは他のノードと接続されていない状態で追加されるため、必要に応じて
             通常のGUI操作で他のノードと接続してください。既存の見出しコメントは削除・改変しないでください。
             編集中は Ctrl(⌘)+Alt+G で新しいグループの見出しを、Ctrl(⌘)+Alt+H でカーソル位置のグループの
-            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます。
+            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます
+            （サブグループ設定の行「#@ is_wait_key=false ...」もデフォルト値で一緒に入ります）。
+            各見出しの直下の「#@ ...」行は、そのサブグループの設定（入力待ち is_wait_key など。全イベント共通の
+            フィールド定義）です。値の書き方はRoleの「フィールド=値」と同じで、省略した項目は今の値のままです。
             Vector2/3/4・color・bit・bezierも class_data と同じ「{`{ フィールド名: 値, ... }`}」の書き方で入力できます
             （例: {`target={ x: 1, y: 0, z: 2.5 }`} / {`color={ r: 1, g: 0.5, b: 0, a: 1 }`}）。
           </Typography>
@@ -2643,6 +2826,8 @@ function ScenarioEventTransition() {
                 roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
                 classDataSchemas={classDataSchemas}
+                subGroupSettingSchema={subGroupSettingSchema}
+                subGroupSettingDefaultLine={subGroupSettingDefaultLine}
                 height="60vh"
               />
               {allEditDiagnostics.length > 0 && (
@@ -2682,7 +2867,10 @@ function ScenarioEventTransition() {
             新しい見出し（# ==== SUB:{subId} NODE:新しいID ====）を書き足してください。
             他のSubの内容をまとめて編集したい場合は「全体編集(全Sub一括)」を使ってください。
             編集中は Ctrl(⌘)+Alt+G で新しいグループの見出しを、Ctrl(⌘)+Alt+H でカーソル位置のグループの
-            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます。
+            中に新しいサブグループの見出しを、直前の見出しからIDを自動で1つ増やして挿入できます
+            （サブグループ設定の行「#@ is_wait_key=false ...」もデフォルト値で一緒に入ります）。
+            各見出しの直下の「#@ ...」行は、そのサブグループの設定（入力待ち is_wait_key など。全イベント共通の
+            フィールド定義）です。値の書き方はRoleの「フィールド=値」と同じで、省略した項目は今の値のままです。
             Vector2/3/4・color・bit・bezierも class_data と同じ「{`{ フィールド名: 値, ... }`}」の書き方で入力できます。
             セクションをコピー&amp;貼り付けして並び替えたい場合、実行順はそのまま貼り付けた位置になります。
             IDが重複してしまったときは「重複IDを振り直す」ボタンで自動的にID重複だけを解消できます。
@@ -2717,6 +2905,8 @@ function ScenarioEventTransition() {
                 roleNames={globalRoleNamesForDsl}
                 roleSchemas={roleFormSchemas}
                 classDataSchemas={classDataSchemas}
+                subGroupSettingSchema={subGroupSettingSchema}
+                subGroupSettingDefaultLine={subGroupSettingDefaultLine}
                 height="60vh"
               />
               {subEditDiagnostics.length > 0 && (

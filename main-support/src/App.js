@@ -12,6 +12,7 @@ import ClassDataGrid from './components/ClassDataGrid';
 import ClassDataDetailGrid from './components/ClassDataDetailGrid';
 import ClassDataIdGrid from './components/ClassDataIdGrid';
 import ClassDataIdDetailGrid from './components/ClassDataIdDetailGrid';
+import ScenarioSubGroupSettingGrid from './components/ScenarioSubGroupSettingGrid';
 
 import CustomClassDataGrid from './components/CustomClassDataGrid';
 import CustomClassDataDetailGrid from './components/CustomClassDataDetailGrid';
@@ -160,6 +161,9 @@ function AppContent() {
         case 'scenario-conditions':
           navigate('/scenario-conditions');
           break;
+          case 'scenario-subgroup-setting':
+          navigate('/scenario-subgroup-setting');
+          break;
         default:
           navigate('/scenario-role'); // Scenario default
       }
@@ -282,6 +286,7 @@ function AppContent() {
             <Route path="/permission-matrix" element={<PermissionMatrixGrid />} />
             <Route path="/log" element={<DbgLog />} />
             <Route path="/command" element={<DbgCommand />} />
+            <Route path="/scenario-subgroup-setting" element={<ScenarioSubGroupSettingGrid />} />
 
             {/* --- 追加ページ --- */}
             <Route path="/mypage" element={<MyPage />} />

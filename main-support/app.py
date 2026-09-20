@@ -1393,8 +1393,15 @@ def handle_scenario_role_detail(name):
         data = request.json
         with open(data_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
+        # Role定義のフィールド追加・削除を、全シナリオの既存データへ即時反映する
+        # (追加: 手動デフォルト→自動デフォルト / 削除: 該当フィールドを除去)
+        sync_stats = None
+        try:
+            sync_stats = scenario.sync_role_fields_in_scenarios(name)
+        except Exception as e:
+            logger.error(f"Role '{name}' のシナリオ同期に失敗しました: {e}")
         generate_scenario_role_factory()
-        return jsonify({"message": "Data saved"})
+        return jsonify({"message": "Data saved", "sync": sync_stats})
     elif request.method == 'DELETE':
         list_path = os.path.join(DATA_DIR, scenario.SCENARIO_ROLE, 'scenario_role_list.json')
         deleted_entry = None
@@ -3472,6 +3479,7 @@ if __name__ == '__main__':
     pythonSrc.matrix.register(app, DATA_DIR)
     pythonSrc.state.register(app, DATA_DIR)
     pythonSrc.behavior_routes.register(app, DATA_DIR)
+    scenario.register_subgroup_setting_routes(app, DATA_DIR)   # ← 追加（サブグループ設定 is_wait_key など）
 
     # お知らせ / ワークスペース / ダウンロード
     # announcements(お知らせ)はバージョン管理の対象外(META_DIR)に保存する。

@@ -2546,6 +2546,141 @@ def ensure_scenario_text_matrix():
     return False
 
 
+# ============================================================
+# ScenarioVoice Matrix
+# Col = ScenarioEvent（シナリオ/イベント識別）, Row = Language
+# Cell.voices = List<SoundID>（arraySize=-1）
+#
+# ScenarioText と同じ構造のボイス版。Role の voice_ref フィールド（VoiceLine 等）は
+# 「このシナリオ×言語の voices の何番目か」を int で保持する（text_list_index と同じ方式）。
+# 言語ごとに同じ並び順でボイスを並べておけば、Role側は1つのインデックスだけで
+# どの言語のボイスも引ける。
+# ============================================================
+SCENARIO_VOICE_MATRIX_NAME = 'ScenarioVoice'
+SCENARIO_VOICE_FIELD_NAME = 'voices'
+# voices フィールドの要素型 = SoundID(サウンドのenum)。Unity側では List<SoundID> として直接読める。
+# 型の名前は、data_utils.get_type_lists() の enum / class_data_id の一覧の中から、
+# 次の候補を順に探して決める(環境によって "SoundID" か "Sound" のどちらの名前で登録されて
+# いるか分からないため、決め打ちにしない)。どちらも見つからなければ 'SoundID'。
+# JSONに保存される値は "SoundID.{group}_{subgroup}_{name}" 形式（旧voice_refと同じ）。
+SCENARIO_VOICE_FIELD_TYPE_CANDIDATES = ('SoundID', 'Sound')
+# 以前の版(型を string にしていた/型名を決め打ちしていた)で作られた voices フィールドを、
+# 検出した SoundID 型へ自動で直すための「置き換えてよい旧い型名」。
+# これ以外の型(利用者が意図して変えたもの)は上書きしない。
+SCENARIO_VOICE_FIELD_TYPE_LEGACY = ('string', 'SoundID', 'Sound')
+
+
+def _detect_sound_field_type():
+    try:
+        _basic, _unity, enum_list, _class_list, class_data_id_list, *_rest = get_type_lists()
+    except Exception as e:
+        logger.warning(f'型一覧を取得できませんでした(SoundIDを既定にします): {e}')
+        return SCENARIO_VOICE_FIELD_TYPE_CANDIDATES[0]
+    for cand in SCENARIO_VOICE_FIELD_TYPE_CANDIDATES:
+        if cand in enum_list or cand in class_data_id_list:
+            return cand
+    logger.warning('enum / class_data_id の一覧に SoundID が見つかりません(SoundIDを既定にします)。'
+                   'サウンドの生成(enum)を先に行ってください')
+    return SCENARIO_VOICE_FIELD_TYPE_CANDIDATES[0]
+
+
+def _ensure_scenario_matrix(matrix_name, description, field_def, retype_from=()):
+    """Language(行) × ScenarioEvent(列) の Matrix が無ければ作成し、field_def の
+    フィールドが無ければ追加する。何か変更したら True を返す。
+    (ensure_scenario_text_matrix と同じ規約。ScenarioVoice 用に共通化した版)
+    retype_from: 既存の同名フィールドの型がこの中のどれかで、field_def の型と違う場合は、
+    field_def の型へ更新する(旧い版で作られたフィールドの自動修正用)。"""
+    matrix_root = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID)
+    os.makedirs(matrix_root, exist_ok=True)
+    list_path = os.path.join(matrix_root, 'class_data_matrix_id_list.json')
+    table_dir = os.path.join(matrix_root, matrix_name)
+    table_path = os.path.join(table_dir, f'{matrix_name}.json')
+
+    try:
+        with open(list_path, 'r', encoding='utf-8') as f:
+            id_list = json.load(f)
+        if not isinstance(id_list, list):
+            id_list = []
+    except (FileNotFoundError, json.JSONDecodeError):
+        id_list = []
+
+    changed = False
+    if not any(item.get('name') == matrix_name for item in id_list):
+        next_id = max([item.get('id', 0) for item in id_list], default=0) + 1
+        id_list.append({
+            'id': next_id,
+            'name': matrix_name,
+            'description': description,
+            'rowId': 'Language',
+            'colId': 'ScenarioEvent',
+            'tag': None,
+        })
+        with open(list_path, 'w', encoding='utf-8') as f:
+            json.dump(id_list, f, ensure_ascii=False, indent=2)
+        logger.info(f'Matrix list に {matrix_name} を登録しました')
+        changed = True
+
+    if not os.path.isfile(table_path):
+        os.makedirs(table_dir, exist_ok=True)
+        table_data = {
+            'name': matrix_name,
+            'rowId': 'Language',
+            'colId': 'ScenarioEvent',
+            'fields': [field_def],
+            'data': {},
+        }
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f'{matrix_name} Matrix を新規作成しました')
+        return True
+
+    try:
+        with open(table_path, 'r', encoding='utf-8') as f:
+            table_data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f'{matrix_name} 読み込み失敗: {e}')
+        return changed
+
+    fields = table_data.get('fields') or []
+    existing = next((f for f in fields if f.get('name') == field_def['name']), None)
+    if existing is None:
+        fields.append(field_def)
+        table_data['fields'] = fields
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"{matrix_name} に {field_def['name']} フィールドを追加しました")
+        return True
+
+    if existing.get('type') in retype_from and existing.get('type') != field_def['type']:
+        old_type = existing.get('type')
+        existing['type'] = field_def['type']
+        with open(table_path, 'w', encoding='utf-8') as f:
+            json.dump(table_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"{matrix_name}.{field_def['name']} の型を {old_type} から {field_def['type']} へ修正しました")
+        return True
+
+    return changed
+
+
+def ensure_scenario_voice_matrix():
+    """ScenarioVoice Matrix が無ければ作成する。
+    rowId=Language, colId=ScenarioEvent, fields=[{name:voices, type:SoundID, arraySize:-1}]
+    既に string などの旧い型で作られている場合は、SoundID 型へ自動で修正する。
+    """
+    return _ensure_scenario_matrix(
+        SCENARIO_VOICE_MATRIX_NAME,
+        'シナリオ×言語のボイス(SoundID)リスト（Role の voice_ref から参照）',
+        {
+            'name': SCENARIO_VOICE_FIELD_NAME,
+            'type': _detect_sound_field_type(),
+            'arraySize': -1,
+            'description': 'そのシナリオ×言語のボイス(SoundID)一覧（インデックスで参照）',
+            'options': {},
+        },
+        retype_from=SCENARIO_VOICE_FIELD_TYPE_LEGACY,
+    )
+
+
 def register(app, data_dir):
     """app.py から呼び出し、DATA_DIR を設定・ボイラープレート生成した上でルートを登録する。"""
     global DATA_DIR
@@ -2555,4 +2690,8 @@ def register(app, data_dir):
         ensure_scenario_text_matrix()
     except Exception as e:
         logger.error(f'ensure_scenario_text_matrix 失敗: {e}')
+    try:
+        ensure_scenario_voice_matrix()
+    except Exception as e:
+        logger.error(f'ensure_scenario_voice_matrix 失敗: {e}')
     app.register_blueprint(bp)

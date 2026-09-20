@@ -21,10 +21,18 @@
 //   array      := '[' (value (',' value)*)? ']'
 //   bareword   := 上記以外の連続文字（enum値・ID参照名などに使う）
 //
+// サブグループ設定行（見出しの直下に書くコメント形式の1行。全イベント共通のフィールド定義に従う）:
+//   # ==== SUB:1 NODE:1/2 (説明) ====
+//   #@ is_wait_key=true
+//   Say text="..."
+//   '#@' で始まる行は通常のコメントと同じくRole呼び出しとしては無視され、見出しのサブグループの
+//   設定値(is_wait_key など)として読み書きされる。値の書き方はRoleの引数(field=value)と同じ。
+//   省略したフィールドは既存の値(無ければデフォルト値)のまま。
+//
 // 例:
 //   # 主人公が挨拶する
 //   Say text="こんにちは" speed=1.5 wait=true
-//   VoiceLine voiceId=Scenario_Line001
+//   VoiceLine voiceId=3
 //   Move target={ x: 1.0, y: 0, z: 2.5 }
 //   SetFlags flags=[Flag1, Flag3]
 //   SetColor color={ r: 1, g: 0.5, b: 0, a: 1 }
@@ -179,11 +187,13 @@ function tokensToSourceText(tokens) {
   return { from, to };
 }
 
-// text_list_index は「ScenarioText Matrix の List<string> の何番目か」を指す
-// 特殊型だが、保存される値も送られるバイナリも単なる int（-1 = 未選択）。
-// GUI側(BaseRoleInputForm.js)だけが専用のプルダウンを出しているので、
+// text_list_index は「ScenarioText Matrix の List<string> の何番目か」、
+// voice_ref は「ScenarioVoice Matrix の List<SoundID> の何番目か」を指す
+// 特殊型だが、どちらも保存される値も送られるバイナリも単なる int（-1 = 未選択）。
+// GUI側(BaseRoleInputForm.js)だけが専用のプルダウン(voice_refは試聴付き)を出しているので、
 // DSL側では素の整数として読み書きできれば十分。
-const NUMERIC_TYPES = new Set(['int', 'uint', 'short', 'long', 'byte', 'text_list_index']);
+const NUMERIC_TYPES = new Set(['int', 'uint', 'short', 'long', 'byte', 'text_list_index', 'voice_ref']);
+const INDEX_REF_TYPES = new Set(['text_list_index', 'voice_ref']);
 const FLOAT_TYPES = new Set(['float', 'double', 'decimal']);
 const VECTOR_SIZES = { vector2: 2, vector3: 3, vector4: 4 };
 const VECTOR_FIELD_NAMES = { vector2: ['x', 'y'], vector3: ['x', 'y', 'z'], vector4: ['x', 'y', 'z', 'w'] };
@@ -555,7 +565,9 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
         value: undefined,
         error: baseLower === 'text_list_index'
           ? `テキストのインデックス(整数)を指定してください（-1 = 未選択）`
-          : `整数を指定してください`,
+          : baseLower === 'voice_ref'
+            ? `ボイスのインデックス(整数)を指定してください（-1 = 未選択）`
+            : `整数を指定してください`,
       };
     }
     return { value: Math.trunc(Number(tok.value)), error: null };
@@ -576,7 +588,7 @@ export function coerceValueTokens(valueTokens, fieldType, fieldOptions, lineText
     return { value: raw, error: null };
   }
 
-  // string / enum / class_data_id / custom_class_data_id / voice_ref など:
+  // string / enum / class_data_id / custom_class_data_id など:
   // 文字列としてそのまま扱う。field.optionsがあれば候補チェックする。
   // enum / class_data_id は "TypeName.Property"（例: FadeID.In）の完全修飾形式で
   // 保存する規約になっている(GUI側のAutocompleteやC#生成側もこの形式を前提としている)。
@@ -672,8 +684,8 @@ function serializeValue(value, fieldType, subFields, classDataSchemas) {
     return `[${arr.map((v) => serializeValue(v, baseType, undefined, classDataSchemas)).join(', ')}]`;
   }
   if (NUMERIC_TYPES.has(baseLower) || FLOAT_TYPES.has(baseLower)) {
-    // text_list_index の未設定は 0 ではなく -1（未選択）が正しい既定値。
-    return String(value ?? (baseLower === 'text_list_index' ? -1 : 0));
+    // text_list_index / voice_ref の未設定は 0 ではなく -1（未選択）が正しい既定値。
+    return String(value ?? (INDEX_REF_TYPES.has(baseLower) ? -1 : 0));
   }
   if (baseLower === 'bool') {
     return value ? 'true' : 'false';
@@ -698,7 +710,7 @@ function serializeValue(value, fieldType, subFields, classDataSchemas) {
   if (baseLower === 'string') {
     return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   }
-  // enum / class_data_id / voice_ref / char など、通常は素のまま（無引用）で
+  // enum / class_data_id / char など、通常は素のまま（無引用）で
   // 保存したい型については、DSLの予約記号（空白 " # = ( ) [ ] , { } :）を
   // 1つでも含む場合のみ "" で囲む。
   if (s === '' || /[\s"#=()[\]{},:]/.test(s)) {
@@ -829,9 +841,101 @@ export function decompileRoles(roles, roleSchemas, classDataSchemas = {}) {
 // 診断一覧の取得（Linter用）
 // ============================================================
 
-export function lintDocument(text, roleSchemas, classDataSchemas = {}) {
+export function lintDocument(text, roleSchemas, classDataSchemas = {}, settingSchema = null) {
+  if (settingSchema) {
+    // '#@' の設定行を、同じ桁数の疑似Role呼び出し('@@ ...')へ置き換えてから通常どおり
+    // コンパイルする(桁がずれないので、診断の位置がそのままエディタ上の波線位置になる)。
+    const lines = text.split('\n').map((l) => (SETTING_LINE_RE.test(l) ? SETTING_PSEUDO_ROLE + l.slice(2) : l));
+    const { diagnostics } = compileDocument(
+      lines.join('\n'),
+      { ...roleSchemas, [SETTING_PSEUDO_ROLE]: optionalSettingSchema(settingSchema) },
+      [], classDataSchemas
+    );
+    return diagnostics.map(relabelSettingDiagnostic);
+  }
   const { diagnostics } = compileDocument(text, roleSchemas, [], classDataSchemas);
   return diagnostics;
+}
+
+// ============================================================
+// サブグループ設定行 ('#@ field=value ...')
+// ------------------------------------------------------------
+// 全イベント共通の「サブグループ設定」(is_wait_key など。ScenarioSubGroupSetting)を、
+// 見出しの直下のコメント形式の1行として読み書きする。コンパイル・逆変換・診断・補完は、
+// Roleと同じ実装を、疑似Role名 '@@' (= '#@' と同じ2文字) で再利用している。
+// ============================================================
+const SETTING_PSEUDO_ROLE = '@@';
+const SETTING_LINE_RE = /^#@(?:\s|$)/;
+export const SUBGROUP_SETTING_LINE_PREFIX = '#@';
+
+export function isSubGroupSettingLine(line) {
+  return SETTING_LINE_RE.test(line || '');
+}
+
+// 設定のフィールドはすべて省略可能(省略時は既存値/デフォルト値のまま)として扱う。
+function optionalSettingSchema(settingSchema) {
+  return {
+    ...settingSchema,
+    fields: (settingSchema?.fields || []).map((f) => ({ ...f, required: false })),
+  };
+}
+
+function relabelSettingDiagnostic(issue) {
+  if (issue && typeof issue.message === 'string' && issue.message.includes(SETTING_PSEUDO_ROLE)) {
+    issue.message = issue.message
+      .replace(`Role「${SETTING_PSEUDO_ROLE}」`, 'サブグループ設定')
+      .replace(`未知のRoleです: ${SETTING_PSEUDO_ROLE}`, 'サブグループ設定を読み取れません');
+  }
+  return issue;
+}
+
+/** セクション本文から '#@' の設定行(先頭の '#@ ' を除いた中身)を全て取り出す。無ければ空配列。 */
+export function extractSubGroupSettingLines(bodyLines) {
+  return (bodyLines || [])
+    .filter((l) => SETTING_LINE_RE.test(l))
+    .map((l) => l.slice(2).trim());
+}
+
+/**
+ * 設定行(1行分の中身)を、設定スキーマに従ってコンパイルする。
+ * 戻り値: { data: [{name,type,value}], diagnostics }（この行に書かれたフィールドだけ）
+ */
+export function compileSubGroupSetting(lineText, settingSchema, classDataSchemas = {}) {
+  const { roles, diagnostics } = compileDocument(
+    `${SETTING_PSEUDO_ROLE} ${lineText}`,
+    { [SETTING_PSEUDO_ROLE]: optionalSettingSchema(settingSchema) },
+    [], classDataSchemas
+  );
+  return { data: roles.length > 0 ? roles[0].data : [], diagnostics: diagnostics.map(relabelSettingDiagnostic) };
+}
+
+/**
+ * 設定値を、現在のスキーマの全フィールド(スキーマ順)へ揃える。
+ * 値が無い/nullのフィールドは defaultsData(手動→自動デフォルト解決済み)の値で埋める。
+ * スキーマが未取得の場合は current をそのまま返す。
+ */
+export function normalizeSubGroupSetting(current, settingSchema, defaultsData) {
+  const cur = Array.isArray(current) ? current : [];
+  if (!settingSchema || !Array.isArray(settingSchema.fields) || settingSchema.fields.length === 0) return cur;
+  return settingSchema.fields.map((f) => {
+    const found = cur.find((d) => d && d.name === f.name);
+    if (found && found.value !== undefined && found.value !== null) {
+      return { name: f.name, type: f.type, value: found.value };
+    }
+    const def = (defaultsData || []).find((d) => d && d.name === f.name);
+    return { name: f.name, type: f.type, value: def ? def.value : null };
+  });
+}
+
+/** 設定値[{name,type,value}]を '#@ a=1 b=true' 形式の1行へ変換する（フィールドが無ければ空文字）。 */
+export function decompileSubGroupSetting(data, settingSchema, classDataSchemas = {}) {
+  if (!Array.isArray(data) || data.length === 0 || !settingSchema) return '';
+  const text = decompileRoles(
+    [{ name: SETTING_PSEUDO_ROLE, data }],
+    { [SETTING_PSEUDO_ROLE]: settingSchema },
+    classDataSchemas
+  );
+  return SUBGROUP_SETTING_LINE_PREFIX + text.slice(SETTING_PSEUDO_ROLE.length);
 }
 
 // ============================================================
@@ -1063,8 +1167,14 @@ function buildRoleInsertText(roleName, schema, classDataSchemas) {
   return `${roleName} ${parts.join(' ')}`;
 }
 
-export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas, classDataSchemas = {}) {
+export function getCompletionsAt(text, cursorLine, cursorCh, roleNames, roleSchemas, classDataSchemas = {}, settingSchema = null) {
   const lines = text.split('\n');
+  // '#@ ' の設定行の中(値・フィールド名の入力位置)にいるときは、その行を疑似Role呼び出し('@@ ...')
+  // として扱い、設定スキーマのフィールド名・値を補完する(桁数が同じなので位置はそのまま)。
+  if (settingSchema && cursorCh >= 3 && SETTING_LINE_RE.test(lines[cursorLine] ?? '')) {
+    lines[cursorLine] = SETTING_PSEUDO_ROLE + lines[cursorLine].slice(2);
+    roleSchemas = { ...roleSchemas, [SETTING_PSEUDO_ROLE]: optionalSettingSchema(settingSchema) };
+  }
   const line = lines[cursorLine] ?? '';
   const tokens = tokenizeLine(line).filter((t) => t.type !== 'COMMENT');
 

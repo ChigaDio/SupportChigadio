@@ -33,6 +33,17 @@ else:
 STATIC_FOLDER = os.path.join(BASE_DIR, 'build')
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 
+# ScenarioVoice Matrix(voice_ref の参照先)のJSONを読むために使う。
+# matrix.py と同じ pythonSrc.constants の定数。
+try:
+    from pythonSrc.constants import CLASS_DATA_MATRIX_ID
+except Exception:  # pragma: no cover - 定数が無い環境向けの保険
+    CLASS_DATA_MATRIX_ID = 'class_data_matrix_id'
+
+# voice_ref の既定の参照先 (matrix.py の SCENARIO_VOICE_* と同じ値)
+SCENARIO_VOICE_MATRIX_NAME = 'ScenarioVoice'
+SCENARIO_VOICE_FIELD_NAME = 'voices'
+
 CLASS_DATA_ID = 'class_data_id'
 # generate_role_form_schema がclass_data型フィールドをネストして解決する際に使う。
 # 以前はこの定数が無く、ネスト解決の再帰呼び出しが常に SCENARIO_ROLE 配下を
@@ -59,6 +70,9 @@ def generate_scenario_folder(parent_path : str):
         os.makedirs(os.path.join(parent_path, SCENARIO_CONDITIONS_DATA))
     if not os.path.exists(os.path.join(parent_path, SCENARIO_EVENT)):
         os.makedirs(os.path.join(parent_path, SCENARIO_EVENT))
+        
+    # サブグループ設定(is_wait_key を組み込みで持つ共通フィールド定義)を用意する
+    ensure_subgroup_setting_schema(parent_path)
 
 def compute_max_role_concurrency():
     """全シナリオイベントの遷移図データを走査し、役職(Role名)ごとに
@@ -818,10 +832,21 @@ public class ScenarioSubGroupExecuteAction
 {
     private List<ScenarioExecuteAction> scenarioActionList = new List<ScenarioExecuteAction>();
     public int SubGroupID { get; private set; }
+    
+    public ScenarioSubGroupSetting SubGroupSetting { get; private set; } = new ScenarioSubGroupSetting();
+    
+    // 各フェーズの実行のたびに、共有のExecuteDataへ「このサブグループの設定」を入れ直す。
+    // (ExecuteDataは全サブグループで1つを共有しているため、フェーズごと・待機ループの周回ごとに
+    //  差し替えておかないと、別のサブグループの設定を各RoleActionが見てしまう)
+    private void ApplySetting(ScenarioExecuteData executeData)
+    {
+        if (executeData != null) executeData.SubGroupSetting = SubGroupSetting;
+    }
 
     public void SetUp(BinaryReader reader)
     {
         SubGroupID = reader.ReadInt32(); // サブイベントID
+        SubGroupSetting.ReadBinary(reader);  // ← ここ。SubGroupID の直後
         int actionCount = reader.ReadInt32(); // アクション（ロール）数
         for (int i = 0; i < actionCount; i++)
         {
@@ -834,6 +859,7 @@ public class ScenarioSubGroupExecuteAction
 
     public async UniTask OnInitializeAsync(ScenarioExecuteData executeData, CancellationTokenSource ct)
     {
+        ApplySetting(executeData); 
         var tasks = scenarioActionList.Select(action => action.OnInitializeAsync(executeData,ct));
        
         await UniTask.WhenAll(tasks).AttachExternalCancellation(ct.Token);
@@ -1164,6 +1190,7 @@ namespace GameCore.Scenario
         code_str = """
 
 using UnityEngine;
+using GameCore.Scenario; 
 using GameCore.Scenario.StorySetting;
 
 /// <summary>
@@ -1171,7 +1198,11 @@ using GameCore.Scenario.StorySetting;
 /// </summary>
 public class ScenarioExecuteData : BaseScenarioExecuteData
 {
-    
+    /// <summary>今実行中のサブグループの設定。ScenarioSubGroupExecuteAction が各フェーズで入れ直す。</summary>
+    public ScenarioSubGroupSetting SubGroupSetting { get; set; } = new ScenarioSubGroupSetting();
+
+    /// <summary>今のサブグループが入力待ち(is_wait_key)か</summary>
+    public bool IsWaitKey => SubGroupSetting != null && SubGroupSetting.is_wait_key;
 }
 
         
@@ -1600,6 +1631,16 @@ def generate_role_form_schema(role_name, data_dir, depth=0, max_depth=3, _custom
         if var_type in ('bit', 'color', 'bezier', 'dictionary', 'voice_ref', 'text_list_index'):
             field['type'] = var_type
             field['options'] = var.get('options', {})
+            # voice_ref は text_list_index と同じ「Matrixのインデックス(int)」方式。
+            # 参照先 Matrix(ScenarioVoice.voices)は固定なので、Role定義側に
+            # options が無くても(story_setting.ensure_voice_role が作った既存Roleを含む)
+            # フロントが困らないよう既定値を補う。
+            if var_type == 'voice_ref':
+                voice_options = dict(field['options'] or {})
+                voice_options.setdefault('matrixName', SCENARIO_VOICE_MATRIX_NAME)
+                voice_options.setdefault('fieldName', SCENARIO_VOICE_FIELD_NAME)
+                voice_options.setdefault('previewLanguage', 'Ja')
+                field['options'] = voice_options
 
         # 各数値型を個別に割り当て
         elif var_type in ['int', 'float', 'double', 'short', 'long', 'decimal', 'byte', 'char']:
@@ -2417,6 +2458,10 @@ def get_initial_value(type_):
         return [0.0, 0.0, 0.0, 0.0]
     elif type_lower == 'dictionary':
         return {"entries": []}
+    elif type_lower in ('text_list_index', 'voice_ref'):
+        # Matrixのリストインデックス。0 は「0番目」という有効な値なので、
+        # 未選択は -1（BaseRoleInputForm.js の getDefaultValue と同じ規約）。
+        return -1
     else:  # enum, class_id など
         return 0
 
@@ -2458,8 +2503,129 @@ def build_default_role_data(role_name, data_dir):
     ]
 
 
+# ============================================================
+# voice_ref: 旧形式(SoundID文字列) → ScenarioVoice のインデックス(int) への移行ヘルパー
+# voice_ref は text_list_index と同じ方式に変わった。古いデータに残っている
+# "SoundID.Scenario_Test_Line001" のような文字列は、そのシナリオ(サブイベント)の
+# ScenarioVoice.voices の何番目かに変換する(見つからなければ -1=未選択)。
+# ============================================================
+def _strip_sound_id(v):
+    s = '' if v is None else str(v)
+    return s.split('.')[-1] if '.' in s else s
+
+
+def _load_scenario_voice_data():
+    """ScenarioVoice Matrix の data 部分 ({行キー(言語): {列キー(シナリオ): セル}}) を返す。無ければ {}。"""
+    path = os.path.join(DATA_DIR, CLASS_DATA_MATRIX_ID, SCENARIO_VOICE_MATRIX_NAME, f'{SCENARIO_VOICE_MATRIX_NAME}.json')
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            table = json.load(f)
+        data = table.get('data') if isinstance(table, dict) else None
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.error(f"ScenarioVoice Matrix の読み込みに失敗しました: {e}")
+        return {}
+
+
+def _cell_voice_list(cell):
+    """セルから voices の配列を取り出す({value:[...]}形式・素の配列形式の両対応)。"""
+    if not isinstance(cell, dict):
+        return []
+    raw = cell.get(SCENARIO_VOICE_FIELD_NAME)
+    if isinstance(raw, dict) and 'value' in raw:
+        raw = raw['value']
+    return list(raw) if isinstance(raw, list) else []
+
+
+def make_voice_index_resolver(voice_data, event_data, sub_id, preferred_language='Ja'):
+    """(イベント, サブイベント)に対応する旧形式SoundID文字列 → voicesインデックスの変換関数を返す。
+    列キーは ScenarioText と同じ "{イベント名}_{サブイベント名}"。
+    優先言語(既定 Ja)の行を基準にし、無ければ最初の行を使う。"""
+    sub_name = next(
+        (sub.get('name') for sub in (event_data.get('subEvents') or [])
+         if str(sub.get('subId')) == str(sub_id)),
+        None,
+    )
+    row_keys = list(voice_data.keys())
+    row_key = next(
+        (r for r in row_keys
+         if r == preferred_language or r.endswith(f'.{preferred_language}') or r.lower() == preferred_language.lower()),
+        row_keys[0] if row_keys else None,
+    )
+    names = []
+    if sub_name is not None and row_key is not None:
+        want_key = f"{event_data.get('name')}_{sub_name}"
+        row = voice_data.get(row_key) or {}
+        col_key = next(
+            (k for k in row if k == want_key or k == f'ScenarioEventID.{want_key}' or k.endswith(f'.{want_key}')),
+            None,
+        )
+        if col_key is not None:
+            names = [_strip_sound_id(v) for v in _cell_voice_list(row[col_key])]
+
+    def resolve(legacy_value):
+        name = _strip_sound_id(legacy_value)
+        if name and name in names:
+            return names.index(name)
+        if name:
+            logger.warning(f"voice_ref の旧値 '{legacy_value}' を ScenarioVoice で見つけられませんでした(未選択=-1にします)")
+        return -1
+
+    return resolve
+
+
+def _build_role_schema_map(only_role_name=None):
+    """role名 -> {field名: role-form-schemaの1フィールド定義} のマップを構築する。
+    generate_role_form_schema() を使うので options/subFields/default まで解決済み
+    (get_default_field_value がそのまま使える)。同名Roleは1回だけ生成する。
+    only_role_name を渡すとそのRoleだけ構築する。"""
+    role_schemas = {}
+    role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
+    for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
+        role_name = os.path.basename(os.path.dirname(role_file))
+        if only_role_name is not None and role_name != only_role_name:
+            continue
+        if role_name in role_schemas:
+            continue
+        schema = generate_role_form_schema(role_name, DATA_DIR)
+        if not schema or schema.get('error'):
+            continue
+        role_schemas[role_name] = {field['name']: field for field in schema.get('fields', [])}
+    return role_schemas
+
+
+def _iter_event_role_lists(event_data):
+    """イベントJSON内の全 roles リストを (sub_id, roles) で列挙する。
+    fix_all_events と同じ走査範囲(メインnode + その中のネストしたsubgroups)。"""
+    subgroups = event_data.get('subgroups', {})
+    if not isinstance(subgroups, dict):
+        return
+    for sub_id, sub_group in subgroups.items():
+        if not isinstance(sub_group, dict) or 'nodes' not in sub_group:
+            continue
+        for node in sub_group.get('nodes', []):
+            node_data = node.get('data', {}) or {}
+            yield sub_id, node_data.get('roles', [])
+            inner_subgroups = node_data.get('subgroups', {})
+            if not isinstance(inner_subgroups, dict):
+                continue
+            for inner_sub in inner_subgroups.values():
+                inner_nodes = inner_sub.get('nodes', []) if isinstance(inner_sub, dict) else []
+                for inner_node in inner_nodes:
+                    yield sub_id, (inner_node.get('data', {}) or {}).get('roles', [])
+
+
 # Fix 関数: 全 event を fix
 def fix_all_events():
+    
+    # サブグループ設定(is_wait_key など)のフィールド追加・削除を、全ノードの既存データへ反映する
+    # (設定が無いノードはデフォルト値で作る)。失敗してもRoleの修正は続行する。
+    try:
+        sync_subgroup_settings_in_scenarios()
+    except Exception as e:
+        logger.error(f"サブグループ設定の同期に失敗しました: {e}")
     # 全 role schema マップ。
     # 以前はRole定義ファイル(scenario_role/<Role>/<Role>.json)をそのまま読んで
     # type/defaultだけの簡易マップを作っていたが、それだとenum/class_data_id/
@@ -2468,16 +2634,10 @@ def fix_all_events():
     # 挙動が食い違う原因)。generate_role_form_schema() を使えばoptions/subFields
     # まで含めて解決済みのフィールド一覧が手に入るので、それをそのまま使う
     # (同名Roleが複数箇所から参照されるため、role_name単位でキャッシュする)。
-    role_schemas = {}
-    role_dir = os.path.join(DATA_DIR, SCENARIO_ROLE)
-    for role_file in glob.glob(os.path.join(role_dir, '*', '*.json')):
-        role_name = os.path.basename(os.path.dirname(role_file))
-        if role_name in role_schemas:
-            continue
-        schema = generate_role_form_schema(role_name, DATA_DIR)
-        if not schema or schema.get('error'):
-            continue
-        role_schemas[role_name] = {field['name']: field for field in schema.get('fields', [])}
+    role_schemas = _build_role_schema_map()
+
+    # voice_ref の旧値(SoundID文字列)をインデックスへ移行するための参照データ
+    voice_data = _load_scenario_voice_data()
 
     # 全eventを走査(フォルダを直接globせず、scenario_event_list.jsonのid一覧を使う。
     # これによりイベントフォルダの命名規則(新レイアウトの名前ベースフォルダ)に
@@ -2513,10 +2673,11 @@ def fix_all_events():
                 continue
             nodes = sub_group.get('nodes', [])
             logger.debug(f"Subgroup {sub_id}: {len(nodes)} nodes")
+            voice_resolver = make_voice_index_resolver(voice_data, event_data, sub_id)
             for node in nodes:
                 # メイン node の roles
                 roles = node.get('data', {}).get('roles', [])
-                updated = fix_roles(roles, role_schemas) or updated
+                updated = fix_roles(roles, role_schemas, voice_resolver=voice_resolver) or updated
                 
                 # subgroups 内 (nested)
                 inner_subgroups = node.get('data', {}).get('subgroups', {})
@@ -2528,7 +2689,7 @@ def fix_all_events():
                     inner_nodes = inner_sub.get('nodes', [])
                     for inner_node in inner_nodes:
                         inner_roles = inner_node.get('data', {}).get('roles', [])
-                        updated = fix_roles(inner_roles, role_schemas) or updated
+                        updated = fix_roles(inner_roles, role_schemas, voice_resolver=voice_resolver) or updated
         
         if updated:
             write_event_data(event_id, event_data)
@@ -2538,28 +2699,470 @@ def fix_all_events():
     # 呼ばれているため、個別のカスケード通知に漏れがあってもここで最終的に整合する。
     sync_all_prefill_scenario_safety_net()
 
-def fix_roles(roles, role_schemas):
+
+def sync_role_fields_in_scenarios(role_name=None):
+    """Role定義のフィールド追加・削除を、全シナリオの既存データへ「事前に」反映する。
+
+    fix_all_events() はバイナリ生成の直前にまとめて整合を取る安全網だが、こちらは
+    Role定義を編集・保存した"その場"で呼ぶ想定(app.py のRole保存ルートから呼び出す)。
+    role_name を渡せばそのRoleだけ、None なら全Role分を対象にする。
+
+      - 新しく追加されたフィールド: そのRoleを使っている全シナリオ(全イベント×全サブイベント
+        ×ネストしたsubgroups)のロールデータへ、デフォルト値を書き込む。
+        値は get_default_field_value と同じ優先順位: 手動で保存したデフォルト(Role定義の
+        "default") → subFields / 候補一覧の先頭 → 型ごとの自動デフォルト。
+      - 削除されたフィールド: 全シナリオのロールデータから取り除く。
+      - 既に値があるフィールドは一切変更しない(デフォルト値の変更は既存データへ波及しない)。
+      - voice_ref の旧値(SoundID文字列)は ScenarioVoice のインデックスへ移行する。
+
+    Role定義を読めなかった(エラー)Roleは、誤ってデータを消さないよう対象外にする。
+    戻り値: {'events_updated', 'roles_touched', 'fields_added', 'fields_removed', 'voice_migrated'}
+    """
+    stats = {'events_updated': 0, 'roles_touched': 0, 'fields_added': 0, 'fields_removed': 0, 'voice_migrated': 0}
+    role_schemas = _build_role_schema_map(only_role_name=role_name)
+    if not role_schemas:
+        return stats
+
+    voice_data = _load_scenario_voice_data()
+    for event_id in _list_all_event_ids():
+        event_data = read_event_data(event_id)
+        if not event_data:
+            continue
+        changed = False
+        resolvers = {}
+        for sub_id, roles in _iter_event_role_lists(event_data):
+            if sub_id not in resolvers:
+                resolvers[sub_id] = make_voice_index_resolver(voice_data, event_data, sub_id)
+            changed = fix_roles(
+                roles, role_schemas,
+                only_role_name=role_name,
+                voice_resolver=resolvers[sub_id],
+                skip_unknown_roles=True,
+                stats=stats,
+            ) or changed
+        if changed:
+            write_event_data(event_id, event_data)
+            stats['events_updated'] += 1
+
+    logger.info(f"Roleフィールド同期({role_name or '全Role'}): {stats}")
+    return stats
+
+
+def fix_roles(roles, role_schemas, only_role_name=None, voice_resolver=None,
+              skip_unknown_roles=False, stats=None):
+    """rolesリストの各ロールデータを、現在のRole定義(role_schemas)に合わせる。
+      only_role_name     : 指定するとそのRoleだけ処理する
+      voice_resolver     : voice_ref の旧値(SoundID文字列)→インデックスの変換関数
+      skip_unknown_roles : Trueなら role_schemas に無いRoleは触らない
+                           (Falseの従来動作は、定義が無いRoleの全フィールドを消す)
+      stats              : 渡すと追加・削除・移行の件数を加算する
+    戻り値: 1つでも変更したか"""
     updated = False
     for role in roles:
         role_name = role['name']
+        if only_role_name is not None and role_name != only_role_name:
+            continue
+        if skip_unknown_roles and role_name not in role_schemas:
+            continue
         schema_fields = role_schemas.get(role_name, {})
-        current_data = {d['name']: d['value'] for d in role.get('data', [])}
-        
+        role_data = role.get('data') or []
+        current_data = {d['name']: d['value'] for d in role_data}
+        role_changed = False
+
         # schema にない field を削除
-        new_data = [d for d in role['data'] if d['name'] in schema_fields]
-        if len(new_data) != len(role['data']):
-            updated = True
-        
+        new_data = [d for d in role_data if d['name'] in schema_fields]
+        removed = len(role_data) - len(new_data)
+        if removed:
+            role_changed = True
+            if stats is not None:
+                stats['fields_removed'] += removed
+
+        # voice_ref の旧形式(SoundID文字列)を ScenarioVoice のインデックスへ移行
+        for d in new_data:
+            meta = schema_fields.get(d['name'])
+            if meta and meta.get('type') == 'voice_ref' and isinstance(d.get('value'), str):
+                d['value'] = voice_resolver(d['value']) if voice_resolver else -1
+                role_changed = True
+                if stats is not None:
+                    stats['voice_migrated'] += 1
+
         # schema に新しく追加された field を初期値で追加
         # (get_default_field_value: 保存済みdefault → subFields再構築 →
         #  候補一覧の先頭 → 型ごとの汎用初期値、の優先順位で解決する)
         for field_name, field_meta in schema_fields.items():
             if field_name not in current_data:
-                updated = True
-                new_data.append({"name": field_name, "value": get_default_field_value(field_meta)})
-        
+                role_changed = True
+                new_data.append({
+                    "name": field_name,
+                    "type": field_meta.get('type'),
+                    "value": get_default_field_value(field_meta),
+                })
+                if stats is not None:
+                    stats['fields_added'] += 1
+
         role['data'] = new_data
+        if role_changed:
+            updated = True
+            if stats is not None:
+                stats['roles_touched'] += 1
     return updated
+
+# ============================================================
+# サブグループ設定 (ScenarioSubGroupSetting)
+# ------------------------------------------------------------
+# 「サブグループ」= ロールを追加する各グループ(C#側の ScenarioSubGroupExecuteAction 1つ分。
+# グループ直下のRole置き場=SubGroupID 0、および入れ子ノード=SubGroupID n の両方)。
+# そこに持たせる設定値(入力待ち is_wait_key など)のフィールド定義は、イベントやサブグループを
+# またいで共通の1つだけ(scenario_subgroup_setting/ScenarioSubGroupSetting/ScenarioSubGroupSetting.json)。
+# ロールと同じ形式({"data": [フィールド定義...]})なので、generate_role_form_schema /
+# get_default_field_value / write_field_value / generate_csharp_field をそのまま再利用する。
+#
+# 各ノードの値は node.data.subGroupSetting = [{name, type, value}, ...] に保存する
+# (roles[].data と同じ形)。デフォルトは「手動デフォルト(field.default) → 自動デフォルト」の順。
+# ============================================================
+SCENARIO_SUBGROUP_SETTING = os.path.join(SCENARIO_DATA, 'scenario_subgroup_setting')
+SUBGROUP_SETTING_NAME = 'ScenarioSubGroupSetting'
+SUBGROUP_SETTING_NODE_KEY = 'subGroupSetting'
+
+# 削除・改名できない組み込みフィールド(常に先頭。デフォルト値だけは変更できる)
+SUBGROUP_SETTING_BUILTIN_FIELDS = [
+    {
+        'id': 1,
+        'name': 'is_wait_key',
+        'type': 'bool',
+        'description': '入力待ち（このサブグループの実行後、キー入力を待つ）',
+        'arraySize': 0,
+        'required': False,
+        'builtin': True,
+        'default': False,
+    },
+]
+
+
+def _subgroup_setting_path(data_dir=None):
+    data_dir = data_dir or DATA_DIR
+    return os.path.join(data_dir, SCENARIO_SUBGROUP_SETTING, SUBGROUP_SETTING_NAME, f'{SUBGROUP_SETTING_NAME}.json')
+
+
+def _apply_subgroup_setting_builtins(fields):
+    """組み込みフィールドを必ず先頭に置き、それ以外は元の並びのまま続ける。
+    組み込みフィールドの default だけは保存済みの値を引き継ぐ。"""
+    fields = [f for f in (fields or []) if isinstance(f, dict) and f.get('name')]
+    existing = {f['name']: f for f in fields}
+    builtin_names = {b['name'] for b in SUBGROUP_SETTING_BUILTIN_FIELDS}
+    result = []
+    for b in SUBGROUP_SETTING_BUILTIN_FIELDS:
+        merged = dict(b)
+        cur = existing.get(b['name'])
+        if cur is not None and cur.get('default') is not None:
+            merged['default'] = cur['default']
+        result.append(merged)
+    result.extend(f for f in fields if f['name'] not in builtin_names)
+    return result
+
+
+def load_subgroup_setting_json(data_dir=None):
+    """フィールド定義を読み込む({"data": [...], "branchType": "General"})。ファイルが無い/壊れている
+    場合も、組み込みフィールドだけを持つ定義を返す。"""
+    path = _subgroup_setting_path(data_dir)
+    raw = {}
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            raw = {}
+    if isinstance(raw, list):
+        raw = {'data': raw}
+    return {'data': _apply_subgroup_setting_builtins((raw or {}).get('data')), 'branchType': 'General'}
+
+
+def save_subgroup_setting_json(fields, data_dir=None):
+    path = _subgroup_setting_path(data_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {'data': _apply_subgroup_setting_builtins(fields), 'branchType': 'General'}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return payload
+
+
+def ensure_subgroup_setting_schema(data_dir=None):
+    """定義ファイルが無ければ、組み込みフィールドだけの定義を作る。"""
+    if not os.path.exists(_subgroup_setting_path(data_dir)):
+        save_subgroup_setting_json(load_subgroup_setting_json(data_dir)['data'], data_dir)
+
+
+def get_subgroup_setting_form_schema(data_dir=None):
+    """フロント(BaseRoleInputForm / DSL)用のスキーマ。generate_role_form_schema をそのまま使うので
+    enum/class_data/class_data_id/bit/color/bezier/dictionary/配列/ネストも Role と同じに扱える。"""
+    data_dir = data_dir or DATA_DIR
+    ensure_subgroup_setting_schema(data_dir)
+    schema = generate_role_form_schema(SUBGROUP_SETTING_NAME, data_dir, base_dir_name=SCENARIO_SUBGROUP_SETTING)
+    return schema or {'fields': [], 'error': 'ScenarioSubGroupSetting schema not found'}
+
+
+def build_default_subgroup_setting(data_dir=None, schema=None):
+    """新しいサブグループに最初に入れる設定値 [{name,type,value}]。
+    手動デフォルト(field.default)があればそれ、無ければ型ごとの自動デフォルト。"""
+    schema = schema or get_subgroup_setting_form_schema(data_dir)
+    return [
+        {'name': f['name'], 'type': f['type'], 'value': get_default_field_value(f)}
+        for f in schema.get('fields', [])
+    ]
+
+
+def save_subgroup_setting_field_default(field_name, value, data_dir=None):
+    payload = load_subgroup_setting_json(data_dir)
+    for f in payload['data']:
+        if f.get('name') == field_name:
+            f['default'] = value
+            save_subgroup_setting_json(payload['data'], data_dir)
+            return {'message': f'{field_name} のデフォルト値を保存しました', 'default': value}
+    return {'error': f'Field not found: {field_name}'}
+
+
+def clear_subgroup_setting_field_default(field_name, data_dir=None):
+    payload = load_subgroup_setting_json(data_dir)
+    for f in payload['data']:
+        if f.get('name') == field_name:
+            f.pop('default', None)
+            # 組み込みフィールドは default を消すと元の既定値(is_wait_key=False)に戻る
+            save_subgroup_setting_json(payload['data'], data_dir)
+            return {'message': f'{field_name} のデフォルト値をクリアしました'}
+    return {'error': f'Field not found: {field_name}'}
+
+
+def _iter_event_nodes(event_data):
+    """イベントJSON内の、設定を持ちうる全ノード(グループ + 入れ子のサブグループ)を列挙する。"""
+    def walk(nodes):
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            yield node
+            inner = (node.get('data') or {}).get('subgroups') or {}
+            if isinstance(inner, dict):
+                for sg in inner.values():
+                    if isinstance(sg, dict):
+                        yield from walk(sg.get('nodes'))
+
+    subs = event_data.get('subgroups', {})
+    if isinstance(subs, dict):
+        for sub in subs.values():
+            if isinstance(sub, dict):
+                yield from walk(sub.get('nodes'))
+
+
+def _normalize_node_subgroup_setting(node, schema_fields):
+    """node.data.subGroupSetting を現在のスキーマに合わせる:
+      - 無い/壊れている → 全フィールドをデフォルトで作る
+      - 新しく追加されたフィールド → デフォルト(手動→自動)で追加
+      - 削除されたフィールド → 取り除く
+      - 既にある値は変更しない。並びはスキーマ順に揃える
+    変更したら True。"""
+    if not isinstance(node.get('data'), dict):
+        node['data'] = {}
+    data_obj = node['data']
+    cur = data_obj.get(SUBGROUP_SETTING_NODE_KEY)
+    cur_list = cur if isinstance(cur, list) else []
+    order = {f['name']: i for i, f in enumerate(schema_fields)}
+
+    kept = [d for d in cur_list if isinstance(d, dict) and d.get('name') in order]
+    present = {d['name'] for d in kept}
+    for f in schema_fields:
+        if f['name'] not in present:
+            kept.append({'name': f['name'], 'type': f['type'], 'value': get_default_field_value(f)})
+    kept.sort(key=lambda d: order[d['name']])
+
+    changed = (not isinstance(cur, list)) or [d.get('name') for d in cur_list] != [d['name'] for d in kept] \
+        or len(cur_list) != len(kept)
+    data_obj[SUBGROUP_SETTING_NODE_KEY] = kept
+    return changed
+
+
+def sync_subgroup_settings_in_scenarios(data_dir=None):
+    """サブグループ設定のフィールド追加・削除を、全イベント・全ノードの既存データへ反映する。
+    (設定の定義を保存した時、および fix_all_events からバイナリ生成前に呼ばれる)
+    スキーマを読めなかった場合は、誤ってデータを消さないよう何もしない。"""
+    stats = {'events_updated': 0, 'nodes_touched': 0}
+    schema = get_subgroup_setting_form_schema(data_dir)
+    fields = schema.get('fields', [])
+    if schema.get('error') or not fields:
+        return stats
+    for event_id in _list_all_event_ids():
+        event_data = read_event_data(event_id)
+        if not event_data:
+            continue
+        touched = 0
+        for node in _iter_event_nodes(event_data):
+            if _normalize_node_subgroup_setting(node, fields):
+                touched += 1
+        if touched:
+            write_event_data(event_id, event_data)
+            stats['events_updated'] += 1
+            stats['nodes_touched'] += touched
+    logger.info(f'サブグループ設定の同期: {stats}')
+    return stats
+
+
+def _subgroup_setting_binary_schema(data_dir=None):
+    """バイナリ書き込み用のフィールド一覧 [{name,type,arraySize,options,default}]。
+    default は「手動デフォルト → 自動デフォルト」を解決済みの値(ノードに値が無い場合の代わり)。"""
+    payload = load_subgroup_setting_json(data_dir)
+    form = get_subgroup_setting_form_schema(data_dir)
+    default_by_name = {f['name']: get_default_field_value(f) for f in form.get('fields', [])}
+    return [
+        {
+            'name': f['name'],
+            'type': f['type'],
+            'arraySize': f.get('arraySize', 0) or 0,
+            'options': f.get('options', {}),
+            'default': default_by_name.get(f['name']),
+        }
+        for f in payload['data']
+    ]
+
+
+def write_subgroup_setting_fields(buf, node_setting, setting_schema, type_info):
+    """1つのサブグループ分の設定値をバイナリへ追記する。C#側 ScenarioSubGroupSetting.ReadBinary が
+    読む順(=スキーマ定義順)で書く。ノード側に値が無いフィールドはデフォルト値を使う
+    (定義済みのフィールドがバイナリから欠けて、後続の読み取りがずれるのを防ぐ)。"""
+    by_name = {d.get('name'): d for d in (node_setting or []) if isinstance(d, dict) and d.get('name')}
+    for sf in setting_schema:
+        item = by_name.get(sf['name'])
+        value = item.get('value') if item is not None and item.get('value') is not None else sf['default']
+        write_field_value(buf, value, sf['type'], sf['arraySize'], sf['options'], type_info)
+
+
+def generate_subgroup_setting_cs(data_dir=None):
+    """ScenarioSubGroupSetting.cs (フィールド + ReadBinary) を、定義ファイルの隣へ生成する。
+    Roleの {name}RoleData.cs の生成(app.py generate_scenario_role_cs)と同じ generate_csharp_field を使う。"""
+    from pythonSrc.data_utils import (
+        get_type_lists as du_get_type_lists, build_custom_type_info, generate_csharp_field,
+    )
+    data_dir = data_dir or DATA_DIR
+    ensure_subgroup_setting_schema(data_dir)
+    (basic_types, unity_types, enum_list, class_list, class_data_id_list,
+     _enum_data, _class_data_id, _class_data) = du_get_type_lists()
+    custom_type_info = build_custom_type_info(enum_list, class_list, class_data_id_list)
+
+    fields_code, read_codes = [], []
+    for item in load_subgroup_setting_json(data_dir)['data']:
+        gen = generate_csharp_field(
+            item, enum_list, class_list, unity_types, basic_types, class_data_id_list,
+            custom_type_info=custom_type_info,
+        )
+        fields_code.append(gen['field'])
+        read_codes.append(gen['read'])
+
+    out_dir = os.path.dirname(_subgroup_setting_path(data_dir))
+    os.makedirs(out_dir, exist_ok=True)
+    cs_path = os.path.join(out_dir, f'{SUBGROUP_SETTING_NAME}.cs')
+
+    code = "using System;\nusing System.IO;\nusing System.Collections.Generic;\nusing UnityEngine;\n"
+    code += "namespace GameCore.Scenario \n{\n"
+    code += "    /// <summary>\n    /// サブグループ(ロールを追加する各グループ)ごとの設定。全イベント共通の定義。\n"
+    code += "    /// ScenarioSubGroupExecuteAction がバイナリから読み込み、ScenarioExecuteData 経由で各RoleActionへ渡す。\n    /// </summary>\n"
+    code += f"    [Serializable]\n    public class {SUBGROUP_SETTING_NAME}\n    {{\n"
+    code += ''.join(fields_code)
+    code += "\n        public void ReadBinary(BinaryReader reader)\n        {\n"
+    code += ''.join(read_codes)
+    code += "        }\n    }\n}\n"
+
+    # 内容が同じなら書き込まない(サーバー起動のたびにUnity側の再インポートを起こさないため)
+    try:
+        with open(cs_path, 'r', encoding='utf-8') as f:
+            if f.read() == code:
+                return cs_path
+    except OSError:
+        pass
+    with open(cs_path, 'w', encoding='utf-8') as f:
+        f.write(code)
+    return cs_path
+
+
+def register_subgroup_setting_routes(app, data_dir=None):
+    """サブグループ設定のAPIルートを登録する(app.py から register 系と同じタイミングで1行呼ぶ)。
+      GET  /api/scenario-subgroup-setting                フィールド定義 {data, branchType}
+      POST /api/scenario-subgroup-setting                フィールド定義を保存 → 全シナリオへ同期 → C#再生成
+      GET  /api/scenario-subgroup-setting/form-schema    {schema, defaults}  (GUI/DSL用)
+      POST /api/scenario-subgroup-setting/field-default  {fieldName, value}  手動デフォルトの保存
+      DELETE 同上                                        手動デフォルトのクリア
+      POST /api/scenario-subgroup-setting/defaults       {values: {name: value}} 全項目のデフォルトを一括保存
+      POST /api/scenario-subgroup-setting/generate       C#(ScenarioSubGroupSetting.cs)の再生成
+      POST /api/scenario-subgroup-setting/sync           全シナリオへの手動同期"""
+    from flask import jsonify, request
+    if data_dir:
+        init(data_dir)
+    ensure_subgroup_setting_schema()
+    # 起動時にも C#(ScenarioSubGroupSetting.cs)を用意しておく(ScenarioSubGroupExecuteAction.cs が
+    # このクラスを参照するため、無いとUnity側でコンパイルエラーになる)。失敗しても起動は続ける。
+    try:
+        generate_subgroup_setting_cs()
+    except Exception as e:
+        logger.error(f'ScenarioSubGroupSetting.cs の生成に失敗しました(起動時): {e}')
+    base = '/api/scenario-subgroup-setting'
+
+    @app.route(base, methods=['GET', 'POST'], endpoint='scenario_subgroup_setting_root')
+    def _sgs_root():
+        if request.method == 'GET':
+            ensure_subgroup_setting_schema()
+            return jsonify(load_subgroup_setting_json())
+        body = request.get_json(silent=True) or {}
+        fields = body.get('data')
+        if not isinstance(fields, list):
+            return jsonify({'error': 'data(list) is required'}), 400
+        save_subgroup_setting_json(fields)
+        stats, cs_error = None, None
+        try:
+            stats = sync_subgroup_settings_in_scenarios()
+        except Exception as e:
+            logger.error(f'サブグループ設定の同期に失敗: {e}')
+            cs_error = f'同期に失敗: {e}'
+        try:
+            generate_subgroup_setting_cs()
+        except Exception as e:
+            logger.error(f'ScenarioSubGroupSetting.cs の生成に失敗: {e}')
+            cs_error = f'C#生成に失敗: {e}'
+        return jsonify({'message': 'サブグループ設定を保存しました', 'sync': stats, 'error_detail': cs_error})
+
+    @app.route(base + '/form-schema', methods=['GET'], endpoint='scenario_subgroup_setting_schema')
+    def _sgs_schema():
+        schema = get_subgroup_setting_form_schema()
+        return jsonify({'schema': schema, 'defaults': build_default_subgroup_setting(schema=schema)})
+
+    @app.route(base + '/field-default', methods=['POST', 'DELETE'], endpoint='scenario_subgroup_setting_field_default')
+    def _sgs_field_default():
+        body = request.get_json(silent=True) or {}
+        field_name = body.get('fieldName') or request.args.get('fieldName')
+        if not field_name:
+            return jsonify({'error': 'fieldName is required'}), 400
+        if request.method == 'POST':
+            result = save_subgroup_setting_field_default(field_name, body.get('value'))
+        else:
+            result = clear_subgroup_setting_field_default(field_name)
+        return (jsonify(result), 404) if 'error' in result else jsonify(result)
+
+    @app.route(base + '/defaults', methods=['POST'], endpoint='scenario_subgroup_setting_defaults')
+    def _sgs_defaults():
+        values = (request.get_json(silent=True) or {}).get('values') or {}
+        payload = load_subgroup_setting_json()
+        for f in payload['data']:
+            if f['name'] in values:
+                f['default'] = values[f['name']]
+        save_subgroup_setting_json(payload['data'])
+        return jsonify({'message': 'デフォルト値を保存しました'})
+
+    @app.route(base + '/generate', methods=['POST'], endpoint='scenario_subgroup_setting_generate')
+    def _sgs_generate():
+        try:
+            return jsonify({'message': 'ScenarioSubGroupSetting.cs を生成しました', 'path': generate_subgroup_setting_cs()})
+        except Exception as e:
+            logger.error(f'ScenarioSubGroupSetting.cs の生成に失敗: {e}')
+            return jsonify({'error': str(e)}), 500
+
+    @app.route(base + '/sync', methods=['POST'], endpoint='scenario_subgroup_setting_sync')
+    def _sgs_sync():
+        return jsonify({'message': '全シナリオへ反映しました', 'sync': sync_subgroup_settings_in_scenarios()})
 
 def write_7bit_encoded_int(value: int) -> bytes:
     """7ビットの可変長整数をバイト列として返す"""
@@ -2690,6 +3293,15 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
 
     # bit/color/bezier・CustomClassData・CustomClassDataID を含めたバイナリ書き込みに使う type_info
     type_info = build_scenario_type_info(enum_list, class_list, class_data_id_list)
+
+    # サブグループ設定: C#(ScenarioSubGroupSetting.cs)を最新の定義で再生成し、
+    # バイナリへ書くフィールド一覧(定義順・デフォルト解決済み)を用意する。
+    # C#生成に失敗してもバイナリ生成自体は続行する(既存の .cs が使われる)。
+    try:
+        generate_subgroup_setting_cs()
+    except Exception as e:
+        logger.error(f"ScenarioSubGroupSetting.cs の生成に失敗しました: {e}")
+    subgroup_setting_schema = _subgroup_setting_binary_schema()
 
     # 1. Load event JSON files
     # (旧: event_dir配下を直接globしていたが、新レイアウトではイベントフォルダ名が
@@ -2841,6 +3453,11 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
 
                 if roles:
                     sub_section.extend(struct.pack('i', 0))  # SubGroup ID = 0
+                    # SubGroup ID の直後に、サブグループ設定(is_wait_key など)を書く
+                    # (グループ直下のRole置き場の設定は group.data.subGroupSetting)
+                    write_subgroup_setting_fields(
+                        sub_section, group.get('data', {}).get(SUBGROUP_SETTING_NODE_KEY),
+                        subgroup_setting_schema, type_info)
                     sub_section.extend(struct.pack('i', len(roles)))  # Action count
                     logger.debug(f"Roles for Group {group_id}: {len(roles)}")
                     for role in roles:
@@ -2855,6 +3472,10 @@ def generate_all_event_bin(basic_types, unity_types, enum_list, class_list, clas
                     for inner_node in inner_nodes:
                         inner_sub_group_id = int(inner_node.get('id', '0')) if inner_node.get('id', '0').isdigit() else 0
                         sub_section.extend(struct.pack('i', inner_sub_group_id))  # SubGroup ID
+                        # SubGroup ID の直後に、サブグループ設定(is_wait_key など)を書く
+                        write_subgroup_setting_fields(
+                            sub_section, inner_node.get('data', {}).get(SUBGROUP_SETTING_NODE_KEY),
+                            subgroup_setting_schema, type_info)
                         inner_roles = inner_node.get('data', {}).get('roles', [])
                         sub_section.extend(struct.pack('i', len(inner_roles)))  # Action count
                         logger.debug(f"SubGroup ID: {inner_sub_group_id}, Action count: {len(inner_roles)}")

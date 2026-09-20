@@ -8,6 +8,7 @@ import { indentWithTab } from '@codemirror/commands';
 import {
   tokenizeLine, lintDocument, getCompletionsAt,
   computeNextGroupHeader, computeNextSubgroupHeader,
+  isSubGroupSettingLine,
 } from '../scenario/scenarioTransactionDsl';
 
 // Transactionのロール入力を「1行1コマンド」のテキストDSLとして編集する
@@ -23,12 +24,18 @@ import {
 //   IDをインクリメントして挿入
 // - Ctrl/Cmd+Alt+H: 新しいサブグループ(カーソルが今いるグループの中の見出し)を、
 //   直前のサブグループのIDをインクリメントして挿入
+// - サブグループ設定行('#@ is_wait_key=false ...'): 見出しの直下に書くコメント形式の1行。
+//   ハイライト・リンター・補完の対象。ショートカットで新しいグループ/サブグループを挿入する
+//   ときは、この設定行もデフォルト値(手動デフォルト→自動デフォルト)で一緒に挿入する。
 
 export function buildDslLanguage() {
   return StreamLanguage.define({
     token(stream) {
       if (stream.sol()) {
-        stream._dslTokens = tokenizeLine(stream.string);
+        // '#@ ...' のサブグループ設定行は、同じ桁数の疑似Role呼び出し('@@ ...')として
+        // トークン化し、コメントではなく「フィールド=値」としてハイライトする。
+        const raw = stream.string;
+        stream._dslTokens = tokenizeLine(isSubGroupSettingLine(raw) ? `@@${raw.slice(2)}` : raw);
         stream._dslIndex = 0;
       }
       const tokens = stream._dslTokens || [];
@@ -62,10 +69,10 @@ export function buildDslLanguage() {
   });
 }
 
-export function buildLintSource(roleSchemas, classDataSchemas) {
+export function buildLintSource(roleSchemas, classDataSchemas, settingSchema = null) {
   return (view) => {
     const text = view.state.doc.toString();
-    const issues = lintDocument(text, roleSchemas || {}, classDataSchemas || {});
+    const issues = lintDocument(text, roleSchemas || {}, classDataSchemas || {}, settingSchema);
     const diagnostics = [];
     for (const issue of issues) {
       const line = view.state.doc.line(Math.min(issue.line + 1, view.state.doc.lines));
@@ -82,23 +89,58 @@ export function buildLintSource(roleSchemas, classDataSchemas) {
   };
 }
 
-export function buildLinter(roleSchemas, classDataSchemas) {
+export function buildLinter(roleSchemas, classDataSchemas, settingSchema = null) {
   // delay: ドキュメント変更のたびに即リント(=毎キー入力でcompileDocumentが走る)すると
   // 特に「全体編集(全Sub一括)」のような長いドキュメントで入力がもたつくため、
   // 入力が少し落ち着いてからリントする(デフォルトの750msのままだと重い環境では
   // まだ長く感じるため、体感速度とのバランスで400msに短縮)。
-  return createLinter(buildLintSource(roleSchemas, classDataSchemas), { delay: 400 });
+  return createLinter(buildLintSource(roleSchemas, classDataSchemas, settingSchema), { delay: 400 });
 }
 
-export function buildCompletionSource(roleNames, roleSchemas, classDataSchemas) {
+// 見出し行 ('# ==== SUB:1 NODE:1/2 ... ====')
+const HEADER_LINE_RE = /^#\s*====\s*SUB:\S+\s+NODE:\S+.*?====\s*$/;
+
+export function buildCompletionSource(roleNames, roleSchemas, classDataSchemas, settingSchema = null, settingDefaultLine = '') {
   return (context) => {
     const line = context.state.doc.lineAt(context.pos);
     const cursorCh = context.pos - line.from;
     const cursorLine = line.number - 1;
     const fullText = context.state.doc.toString();
 
-    const items = getCompletionsAt(fullText, cursorLine, cursorCh, roleNames, roleSchemas || {}, classDataSchemas || {});
-    if (items.length === 0) return null;
+    // サブグループ設定行のひな形('#@ is_wait_key=false ...' = デフォルト値入りの1行)の候補:
+    //  ・行頭で '#' / '#@' と打ったとき
+    //  ・見出しの直下の空行で候補を出したとき(Role名の候補と一緒に。まだ設定行が無いセクションのみ)
+    const beforeCursorRaw = line.text.slice(0, cursorCh);
+    if (settingSchema && settingDefaultLine && /^#@?$/.test(beforeCursorRaw)) {
+      return {
+        from: line.from,
+        to: context.pos,
+        filter: false,
+        options: [{
+          label: '#@ サブグループ設定',
+          detail: settingDefaultLine,
+          type: 'keyword',
+          boost: 99,
+          apply: settingDefaultLine,
+        }],
+      };
+    }
+
+    const items = getCompletionsAt(fullText, cursorLine, cursorCh, roleNames, roleSchemas || {}, classDataSchemas || {}, settingSchema);
+    let settingTemplate = null;
+    if (settingSchema && settingDefaultLine && line.text.trim() === '' && cursorLine > 0) {
+      const prev = context.state.doc.line(line.number - 1).text;
+      if (HEADER_LINE_RE.test(prev)) {
+        settingTemplate = {
+          label: '#@ サブグループ設定',
+          detail: settingDefaultLine,
+          type: 'keyword',
+          boost: 99,
+          apply: settingDefaultLine,
+        };
+      }
+    }
+    if (items.length === 0 && !settingTemplate) return null;
 
     // 補完のトリガー開始位置（現在編集中の単語の先頭）を求める。
     // enum/class_data_id は "GuestCharacterID.GuestCharacter_01" のように
@@ -120,16 +162,19 @@ export function buildCompletionSource(roleNames, roleSchemas, classDataSchemas) 
       // 選んだときに置換範囲がずれ、「Character」+「CharacterID.Test」のように
       // 元の入力が消えずに二重挿入される不具合の原因になっていた。
       to: context.pos,
-      options: items.map((it) => ({
-        label: it.label,
-        type: it.type === 'role' ? 'class' : it.type === 'field' ? 'property' : 'text',
-        detail: it.detail,
-        // apply を明示し、候補選択時に挿入されるテキストを完全に制御する
-        // (from/toで指定した範囲を、常にこのテキストで置き換える)。
-        // Role名の場合は it.insertText に「デフォルト値付きの呼び出し」が
-        // 入っていることがあるので、それを優先する。
-        apply: it.insertText || it.label,
-      })),
+      options: [
+        ...(settingTemplate ? [settingTemplate] : []),
+        ...items.map((it) => ({
+          label: it.label,
+          type: it.type === 'role' ? 'class' : it.type === 'field' ? 'property' : 'text',
+          detail: it.detail,
+          // apply を明示し、候補選択時に挿入されるテキストを完全に制御する
+          // (from/toで指定した範囲を、常にこのテキストで置き換える)。
+          // Role名の場合は it.insertText に「デフォルト値付きの呼び出し」が
+          // 入っていることがあるので、それを優先する。
+          apply: it.insertText || it.label,
+        })),
+      ],
       // validForは指定しない: 1文字打つごとにこの関数を再実行させ、常に最新の
       // from/to・候補一覧を計算し直す(上記の二重挿入バグの根本対策)。
       // このDSLの補完計算は1行だけを見て行う軽い処理なので、キー入力毎に
@@ -145,23 +190,30 @@ export function buildCompletionSource(roleNames, roleSchemas, classDataSchemas) 
 // (Web版の場合)全体編集/Sub編集ダイアログの「適用」時、DSLのコンパイルを
 // 経てから。既存の「見出しから新規グループを作る」仕組み・
 // 「新しいグループの追加を許可する」設定はそのまま活きる。
-function insertNewGroupCommand(view) {
+// getSettingLine: サブグループ設定行のデフォルト('#@ is_wait_key=false ...')を返す関数。
+// 見出しと一緒に、デフォルト値の設定行も挿入する(設定が未取得/空なら見出しだけ)。
+const buildHeaderInsertText = (subId, pathKey, getSettingLine) => {
+  const settingLine = getSettingLine ? getSettingLine() : '';
+  return `# ==== SUB:${subId} NODE:${pathKey} ====\n${settingLine ? `${settingLine}\n` : ''}\n`;
+};
+
+const makeInsertNewGroupCommand = (getSettingLine) => (view) => {
   const doc = view.state.doc;
   const text = doc.toString();
   const cursorLine = doc.lineAt(view.state.selection.main.head).number - 1; // 0始まり
   const { subId, newPathKey } = computeNextGroupHeader(text, cursorLine);
 
   const insertLine = doc.lineAt(view.state.selection.main.head);
-  const insertText = `# ==== SUB:${subId} NODE:${newPathKey} ====\n\n`;
+  const insertText = buildHeaderInsertText(subId, newPathKey, getSettingLine);
   view.dispatch({
     changes: { from: insertLine.from, insert: insertText },
     selection: { anchor: insertLine.from + insertText.length },
     scrollIntoView: true,
   });
   return true;
-}
+};
 
-function insertNewSubgroupCommand(view) {
+const makeInsertNewSubgroupCommand = (getSettingLine) => (view) => {
   const doc = view.state.doc;
   const text = doc.toString();
   const cursorLine = doc.lineAt(view.state.selection.main.head).number - 1;
@@ -169,14 +221,14 @@ function insertNewSubgroupCommand(view) {
   if (!next) return false; // カーソルがどのグループの中にいるか判定できない場合は何もしない
 
   const insertLine = doc.lineAt(view.state.selection.main.head);
-  const insertText = `# ==== SUB:${next.subId} NODE:${next.newPathKey} ====\n\n`;
+  const insertText = buildHeaderInsertText(next.subId, next.newPathKey, getSettingLine);
   view.dispatch({
     changes: { from: insertLine.from, insert: insertText },
     selection: { anchor: insertLine.from + insertText.length },
     scrollIntoView: true,
   });
   return true;
-}
+};
 
 // CodeMirrorに渡すbasicSetupは、コンポーネントのレンダーごとに新しいオブジェクト
 // リテラルを作らないよう、モジュールスコープの定数として1つだけ用意しておく
@@ -194,7 +246,12 @@ const BASIC_SETUP = {
   tabSize: 2,
 };
 
-function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas, classDataSchemas, height = '420px' }) {
+function ScenarioTransactionCodeEditor({
+  value, onChange, roleNames, roleSchemas, classDataSchemas, height = '420px',
+  // サブグループ設定(is_wait_key など)の共通スキーマと、新しい見出しに添えるデフォルトの設定行。
+  // どちらも省略可能(省略時は '#@' 行の診断・補完・デフォルト挿入を行わない)。
+  subGroupSettingSchema = null, subGroupSettingDefaultLine = '',
+}) {
   // roleNames/roleSchemas/classDataSchemas は、呼び出し元(GUI側)の state から
   // 毎レンダー新しい参照で渡されてくることが多い。そのままextensionsのuseMemoの
   // 依存配列に入れると、内容が同じでも参照が変わるたびにCodeMirrorの
@@ -209,6 +266,10 @@ function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas
   useEffect(() => { roleNamesRef.current = roleNames; });
   useEffect(() => { roleSchemasRef.current = roleSchemas; });
   useEffect(() => { classDataSchemasRef.current = classDataSchemas; });
+  const settingSchemaRef = useRef(subGroupSettingSchema);
+  const settingDefaultLineRef = useRef(subGroupSettingDefaultLine);
+  useEffect(() => { settingSchemaRef.current = subGroupSettingSchema; });
+  useEffect(() => { settingDefaultLineRef.current = subGroupSettingDefaultLine; });
 
   // 依存配列を「参照」ではなく「中身」で比較するためのキー。
   // これらは1ドキュメント分のスキーマ情報であり、頻繁に変わるものでもないため
@@ -216,26 +277,28 @@ function ScenarioTransactionCodeEditor({ value, onChange, roleNames, roleSchemas
   const roleNamesKey = useMemo(() => (roleNames || []).join(','), [roleNames]);
   const roleSchemasKey = useMemo(() => JSON.stringify(roleSchemas || {}), [roleSchemas]);
   const classDataSchemasKey = useMemo(() => JSON.stringify(classDataSchemas || {}), [classDataSchemas]);
+  const settingSchemaKey = useMemo(() => JSON.stringify(subGroupSettingSchema || null), [subGroupSettingSchema]);
 
   const extensions = useMemo(() => [
     buildDslLanguage(),
     createLinter(
-      (view) => buildLintSource(roleSchemasRef.current, classDataSchemasRef.current)(view),
+      (view) => buildLintSource(roleSchemasRef.current, classDataSchemasRef.current, settingSchemaRef.current)(view),
       { delay: 400 }
     ),
     autocompletion({
       override: [
-        (context) => buildCompletionSource(roleNamesRef.current || [], roleSchemasRef.current || {}, classDataSchemasRef.current || {})(context),
+        (context) => buildCompletionSource(roleNamesRef.current || [], roleSchemasRef.current || {}, classDataSchemasRef.current || {}, settingSchemaRef.current, settingDefaultLineRef.current)(context),
       ],
     }),
     keymap.of([
       indentWithTab,
-      { key: 'Mod-Alt-g', run: insertNewGroupCommand, preventDefault: true },
-      { key: 'Mod-Alt-h', run: insertNewSubgroupCommand, preventDefault: true },
+      // デフォルトの設定行は呼ばれた時点のrefを読む(スキーマ取得後に変わってもextensionsの作り直しは不要)
+      { key: 'Mod-Alt-g', run: makeInsertNewGroupCommand(() => settingDefaultLineRef.current), preventDefault: true },
+      { key: 'Mod-Alt-h', run: makeInsertNewSubgroupCommand(() => settingDefaultLineRef.current), preventDefault: true },
     ]),
     EditorView.lineWrapping,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [roleNamesKey, roleSchemasKey, classDataSchemasKey]);
+  ], [roleNamesKey, roleSchemasKey, classDataSchemasKey, settingSchemaKey]);
 
   return (
     <CodeMirror
