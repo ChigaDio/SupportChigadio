@@ -2033,6 +2033,8 @@ def reload_sound_file(group_name, index):
     save_sound_data(data)
     return entry
 
+def _natural_sort_key(name: str):
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', name)]
 
 def bulk_add_sounds_from_folder(group_name, sound_type, subgroup_name=None, use_folder_name_as_subgroup=True):
     """
@@ -2081,7 +2083,7 @@ def bulk_add_sounds_from_folder(group_name, sound_type, subgroup_name=None, use_
     added = []
     skipped = []
     failed = []
-    for fname in sorted(os.listdir(folder_path)):
+    for fname in sorted(os.listdir(folder_path), key=_natural_sort_key):
         full_path = os.path.join(folder_path, fname)
         if not os.path.isfile(full_path):
             continue

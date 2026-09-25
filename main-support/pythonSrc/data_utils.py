@@ -750,21 +750,16 @@ def _dict_json_key_from_object(target, source_expr, type_str, enum_list, class_l
 def generate_csharp_field(item, enum_list, class_list, unity_types, basic_types,class_id_list, custom_type_info=None):
     type_str = item['type'].replace("[]", "")
 
-    # voice_ref → GameCore.Enums.SoundID（バイナリは int）
-    if type_str == 'voice_ref':
+    # text_list_index → int（ScenarioText Matrix の List インデックス、-1=未選択）
+    # voice_ref      → int（ScenarioVoice Matrix の List<SoundID> インデックス、-1=未選択。同じ方式）
+    #   以前は voice_ref を GameCore.Enums.SoundID の enum として直接持たせていたが、
+    #   text_list_index と同じ「Matrix上のリストの何番目か」という扱いに統一したため、
+    #   ここも int(既定値 -1) として生成する。
+    if type_str in ('text_list_index', 'voice_ref'):
         var_name = item['name']
         description = item.get('description', '')
         desc_line = f"        /// <summary>{description}</summary>\n" if description else ""
-        field = f"{desc_line}        public GameCore.Enums.SoundID {var_name} = GameCore.Enums.SoundID.None;\n"
-        read = f"            {var_name} = (GameCore.Enums.SoundID)Enum.ToObject(typeof(GameCore.Enums.SoundID), reader.ReadInt32());\n"
-        return {'field': field, 'read': read, 'write': '', 'json_read': '', 'json_write': ''}
-
-    # text_list_index → int（ScenarioText Matrix の List インデックス）
-    if type_str == 'text_list_index':
-        var_name = item['name']
-        description = item.get('description', '')
-        desc_line = f"        /// <summary>{description}</summary>\n" if description else ""
-        field = f"{desc_line}        public int {var_name} = 0;\n"
+        field = f"{desc_line}        public int {var_name} = -1;\n"
         read = f"            {var_name} = reader.ReadInt32();\n"
         return {'field': field, 'read': read, 'write': '', 'json_read': '', 'json_write': ''}
 
