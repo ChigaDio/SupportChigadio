@@ -126,6 +126,8 @@ function isParentCandidateType(type, enumNames, classDataIdNames) {
 // options（型ごとの追加設定）を持つ型の一覧。
 // ここに載っている型だけ、行の「オプション」列と追加ダイアログに編集UIが出る。
 const OPTION_EDITABLE_TYPES = ['bit', 'bezier', 'dictionary', 'text_list_index'];
+// voice_ref は options 編集UIこそ出さないが(参照先Matrixは固定のため)、追加した直後から
+// options を空 {} のまま保存しないよう、既定値だけは defaultOptionsForType で持たせる。
 
 // text_list_index: ScenarioText Matrix の List<string> の何番目かを指す特殊型。
 // 実体は int（-1 = 未選択）で、GUI(BaseRoleInputForm.js)側では
@@ -133,12 +135,16 @@ const OPTION_EDITABLE_TYPES = ['bit', 'bezier', 'dictionary', 'text_list_index']
 // 実際のテキストを並べたプルダウンとして描画される。
 const DEFAULT_TEXT_LIST_INDEX_OPTIONS = { matrixName: 'ScenarioText', fieldName: 'texts', previewLanguage: 'Ja' };
 
+// voice_ref: ScenarioVoice Matrix の List<SoundID> の何番目かを指す特殊型(text_list_indexと同じ方式)。
+const DEFAULT_VOICE_REF_OPTIONS = { matrixName: 'ScenarioVoice', fieldName: 'voices', previewLanguage: 'Ja' };
+
 // bit の初期オプション
 function defaultOptionsForType(type) {
   if (type === 'bit') return { sizeMode: 'manual', sizeSourceName: null, size: 8, mode: 'multiple', allowSelectAll: true, flagNames: Array.from({ length: 8 }, (_, i) => `Flag${i}`) };
   if (type === 'bezier') return { valueType: 'float', min: 0, max: 1 };
   if (type === 'dictionary') return { keyType: 'int', valueType: 'int', valueArraySize: 0, valueOptions: {} };
   if (type === 'text_list_index') return { ...DEFAULT_TEXT_LIST_INDEX_OPTIONS };
+  if (type === 'voice_ref') return { ...DEFAULT_VOICE_REF_OPTIONS };
   return {};
 }
 
@@ -530,17 +536,19 @@ function ScenarioRoleDetailGrid({ settingMode = false }) {
       const customClassTypes = customOptions.custom_class_list || [];
       const customClassIdTypes = customOptions.custom_class_id_list || [];
       const customValueTypes = Array.from(new Set([...(customOptions.custom_types || []), 'dictionary'])); // ['bit', 'color', 'bezier', 'dictionary']
-      // text_list_index はバックエンド(/api/custom-class-data-type-options)が
+      // text_list_index / voice_ref はバックエンド(/api/custom-class-data-type-options)が
       // 返す型ではなく、シナリオRole専用の特殊型なのでここで足す。
+      //   text_list_index: ScenarioText Matrix の List<string> の何番目か(int)
+      //   voice_ref      : ScenarioVoice Matrix の List<SoundID> の何番目か(int、同じ方式)
       const allTypes = [
         ...basicTypes, ...unityTypes,
         ...enumTypes, ...classTypes, ...classIdTypes,
         ...customClassTypes, ...customClassIdTypes, ...customValueTypes,
-        'text_list_index'
+        'text_list_index', 'voice_ref'
       ];
-      // text_list_index はシナリオイベント(eventId/subId)の文脈が必要な型なので、
+      // text_list_index / voice_ref はシナリオイベント(eventId/subId)の文脈が必要な型なので、
       // 全イベント共通のサブグループ設定では選べないようにする。
-      setTypeOptions(settingMode ? allTypes.filter(t => t !== 'text_list_index') : allTypes);
+      setTypeOptions(settingMode ? allTypes.filter(t => t !== 'text_list_index' && t !== 'voice_ref') : allTypes);
       setEnumNames(enumTypes);
       setClassDataIdNames(classIdTypes);
       setCustomClassDataIdNames(customClassIdTypes);
