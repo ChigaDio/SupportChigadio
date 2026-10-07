@@ -401,9 +401,16 @@ function StateDetailGrid() {
               arraySize: item.arraySize || 0,
             }))
           : [];
+        const usedEdgeIds = new Set();
         const validEdges = Array.isArray(validData.edges)
-          ? validData.edges.map((edge, index) => ({
-              id: edge.id || `e${index}`,
+          ? validData.edges.map((edge, index) => {
+              // 重複・欠落IDを読み込み時に解消
+              let eid = edge.id || `e${index + 1}`;
+              while (usedEdgeIds.has(eid)) eid = `${eid}_${index}`;
+              usedEdgeIds.add(eid);
+              return { ...edge, id: eid };
+            }).map((edge) => ({
+              id: edge.id,
               source: edge.source,
               target: edge.target,
               type: 'custom',
@@ -790,7 +797,12 @@ function StateDetailGrid() {
 
   const onConnect = useCallback((connection) => {
     setFlowElements((els) => {
-      const newEdge = { ...connection, id: `e${els.edges.length + 1}`, type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } };
+      // 既存IDの最大値+1で採番（削除後にlength+1だと既存IDと衝突するため）
+      const nextEdgeNum = els.edges.reduce((max, e) => {
+        const m = /^e(\d+)$/.exec(String(e.id));
+        return m ? Math.max(max, parseInt(m[1], 10)) : max;
+      }, 0) + 1;
+      const newEdge = { ...connection, id: `e${nextEdgeNum}`, type: 'custom', animated: true, style: { stroke: '#00FF00', strokeWidth: 3 } };
       const updatedEdges = addEdge(newEdge, els.edges);
 
       const updatedNodes = els.nodes.map((node) => {
