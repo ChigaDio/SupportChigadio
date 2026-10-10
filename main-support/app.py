@@ -1857,6 +1857,63 @@ def migrate_legacy_scenario_events():
 
 # Transition管理
 # 既存のエンドポイント（省略された部分は前のコードと同じ）
+# --- Sub(_sub.json)の「読む→書き換える→書く」を直列化するロック ---
+# 保存のたびに read-modify-write するため、複数のリクエストが並行すると
+# 後発が古い内容を読んで先の保存を上書きする(ロストアップデート)。
+# Sub単位のロックで直列化する(同一プロセス内。複数プロセス運用の場合は別途ファイルロックが必要)。
+_SUB_LOCKS = {}
+_SUB_LOCKS_GUARD = threading.Lock()
+
+
+def _sub_lock(eventId, subId):
+    key = (str(eventId), str(subId))
+    with _SUB_LOCKS_GUARD:
+        lock = _SUB_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _SUB_LOCKS[key] = lock
+    return lock  # 使い方: with _sub_lock(eventId, subId): ...
+
+
+def _find_transition_node(nodes, segments):
+    """"親id/子id/孫id" を分解したリストから、該当ノードを1階層ずつ降りて探す。
+    サブグループは「自分自身のidをキーに中身を持つ」規約(add_roleと同じ)。見つからなければNone。"""
+    current = nodes
+    target = None
+    for i, seg in enumerate(segments):
+        found = next((n for n in current if str(n.get('id')) == seg), None)
+        if found is None:
+            return None
+        target = found
+        if i < len(segments) - 1:
+            data = found.setdefault('data', {})
+            sgs = data.setdefault('subgroups', {})
+            sg = sgs.setdefault(str(found.get('id')), {'nodes': [], 'edges': []})
+            if not isinstance(sg.get('nodes'), list):
+                sg['nodes'] = []
+            current = sg['nodes']
+    return target
+
+
+def _apply_role_data(node, unique_id, form_data):
+    """node.data.roles のうち uniqueId が一致するRoleの data を差し替える。更新した件数を返す。
+    以前の save_role_data は role['id'](=Role名)で探していたが、画面が渡すのは uniqueId なので
+    一致せず、何も書き込まないまま成功を返していた。
+    uniqueId を持たない古いデータだけは、従来どおり id 一致で救済する。"""
+    roles = (node.get('data') or {}).get('roles') or []
+    updated = 0
+    for i, r in enumerate(roles):
+        if str(r.get('uniqueId')) == str(unique_id):
+            roles[i] = {**r, 'data': form_data}
+            updated += 1
+    if updated == 0:
+        for i, r in enumerate(roles):
+            if r.get('uniqueId') in (None, '') and str(r.get('id')) == str(unique_id):
+                roles[i] = {**r, 'data': form_data}
+                updated += 1
+    return updated
+
+
 @app.route('/api/scenario-event/<eventId>/sub/<subId>/transition', methods=['GET', 'POST'])
 def handle_transition(eventId, subId):
     app.logger.debug(f"Received eventId: {eventId}, subId: {subId}")
@@ -1866,7 +1923,12 @@ def handle_transition(eventId, subId):
     if request.method == 'GET':
         try:
             # このSub 1件分のファイルだけを読む(他のSubには一切触れない)
-            return jsonify(scenario.read_sub_event_transition(eventId, subId))
+            with _sub_lock(eventId, subId):
+                tree = scenario.read_sub_event_transition(eventId, subId)
+                rev = scenario.get_sub_event_transition_rev(eventId, subId)
+            resp = jsonify(tree)
+            resp.headers['X-Sub-Rev'] = rev
+            return resp
         except Exception as e:
             app.logger.error(f"Error reading transition for {eventId}/{subId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -1877,12 +1939,14 @@ def handle_transition(eventId, subId):
             # キーが既存のSubデータに同居している場合があるため、
             # 丸ごと置き換えず非破壊マージする（このAPIは遷移グラフの
             # 保存専用であり、物語設定を書き潰さないようにするため）。
-            existing_sub = scenario.read_sub_event_transition(eventId, subId)
-            merged_sub = dict(existing_sub)
-            merged_sub.update(data)
-            # このSub 1件分のファイルだけを書く(他のSubには一切触れない)
-            scenario.write_sub_event_transition(eventId, subId, merged_sub)
-            return jsonify({'message': 'Transition saved'})
+            with _sub_lock(eventId, subId):
+                existing_sub = scenario.read_sub_event_transition(eventId, subId)
+                merged_sub = dict(existing_sub)
+                merged_sub.update(data)
+                # このSub 1件分のファイルだけを書く(他のSubには一切触れない)
+                scenario.write_sub_event_transition(eventId, subId, merged_sub)
+                rev = scenario.get_sub_event_transition_rev(eventId, subId)
+            return jsonify({'message': 'Transition saved', 'rev': rev})
         except Exception as e:
             app.logger.error(f"Error saving transition for {eventId}/{subId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -1906,15 +1970,17 @@ def handle_subgroup(eventId, subId, parentId):
     else:  # POST
         try:
             data = request.get_json()
-            sub_data = scenario.read_sub_event_transition(eventId, subId)
-            nodes = sub_data.get('nodes', [])
-            for node in nodes:
-                if node['id'] == parentId:
-                    node['data']['subgroups'] = node['data'].get('subgroups', {})
-                    node['data']['subgroups'][parentId] = data
-            sub_data['nodes'] = nodes
-            scenario.write_sub_event_transition(eventId, subId, sub_data)
-            return jsonify({'message': 'Subgroup saved'})
+            with _sub_lock(eventId, subId):
+                sub_data = scenario.read_sub_event_transition(eventId, subId)
+                nodes = sub_data.get('nodes', [])
+                for node in nodes:
+                    if node['id'] == parentId:
+                        node['data']['subgroups'] = node['data'].get('subgroups', {})
+                        node['data']['subgroups'][parentId] = data
+                sub_data['nodes'] = nodes
+                scenario.write_sub_event_transition(eventId, subId, sub_data)
+                rev = scenario.get_sub_event_transition_rev(eventId, subId)
+            return jsonify({'message': 'Subgroup saved', 'rev': rev})
         except Exception as e:
             app.logger.error(f"Error saving subgroup for {eventId}/{subId}/{parentId}: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -2019,29 +2085,32 @@ def save_role_data(eventId, subId, nodeId, roleId):
     try:
         data = request.get_json()
         formData = data.get('formData', {})
-        # このSub 1件分だけを読み書きする(他のSubには一切触れない)
-        sub_data = scenario.read_sub_event_transition(eventId, subId)
-        nodes = sub_data.get('nodes', [])
-        for node in nodes:
-            if node['id'] == nodeId:
-                node['data']['roles'] = [
-                    role if role['id'] != roleId else { **role, 'data': formData }
-                    for role in node['data'].get('roles', [])
-                ]
-                break
-            if node['data'].get('subgroups', {}).get(nodeId):
-                node['data']['subgroups'][nodeId]['nodes'][0]['data']['roles'] = [
-                    role if role['id'] != roleId else { **role, 'data': formData }
-                    for role in node['data']['subgroups'][nodeId]['nodes'][0]['data'].get('roles', [])
-                ]
-                break
-        sub_data['nodes'] = nodes
-        scenario.write_sub_event_transition(eventId, subId, sub_data)
-        return jsonify({'message': 'Role data saved'})
+        # このSub 1件分だけを読み書きする(他のSubには一切触れない)。
+        # roleId には画面から uniqueId が渡される(_apply_role_data 参照)。
+        with _sub_lock(eventId, subId):
+            sub_data = scenario.read_sub_event_transition(eventId, subId)
+            nodes = sub_data.get('nodes', [])
+            updated = 0
+            for node in nodes:
+                if str(node['id']) == str(nodeId):
+                    updated += _apply_role_data(node, roleId, formData)
+                    break
+                sg = (node.get('data') or {}).get('subgroups', {}).get(nodeId)
+                if sg:
+                    # 旧仕様: サブグループ内ノードは「そのサブグループの先頭ノード」だけを見ていた。
+                    # 先頭に無ければ、同じサブグループ内の全ノードから uniqueId で探す。
+                    for child in sg.get('nodes', []):
+                        updated += _apply_role_data(child, roleId, formData)
+                    break
+            if updated:
+                sub_data['nodes'] = nodes
+                scenario.write_sub_event_transition(eventId, subId, sub_data)
+            rev = scenario.get_sub_event_transition_rev(eventId, subId)
+        return jsonify({'message': 'Role data saved', 'saved': updated, 'rev': rev})
     except Exception as e:
         app.logger.error(f"Error saving role data: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    
+
 # エンドポイント
 @app.route('/api/fix-all-events', methods=['POST'])
 def fix_all_events_endpoint():
@@ -2066,75 +2135,88 @@ def generate_all_event_bin_endpoint():
 @app.route('/api/scenario-event/<eventId>/sub/<int:subId>/transition/<path:nodeId>/role', methods=['POST'])
 def add_role(eventId, subId, nodeId):
     """指定したノード(nodeId)にRoleを1つ追加する。
-    nodeId は "親id/子id/孫id..." のようなパス形式を受け付ける(トップレベルの
-    ノードを指す場合は単に "id" のみ)。
-    以前は各階層でidが1から振り直される(例: トップレベル"1"の最初の子ノードも
-    やはり"1")ことを考慮せず、常にトップレベルのnodesリストと「1階層分だけの
-    subgroups」しか見ていなかったため、
-      - サブグループの子ノードに追加したはずのRoleが、同じidを持つ
-        トップレベルノード(またはたまたま同じidの別ノード)に追加されてしまう
-      - subgroups側のマッチ条件(node['data']['subgroups'].get(nodeId))が
-        「自分自身のidをキーとする自分のsubgroups」を見ていて、実質的に
-        親ノード自身を指す場合としか一致せず、本来の「深い階層の子ノードを探す」
-        という目的を果たせていなかった
-    という不具合があった。ここでは nodeId をパスとして分解し、
-    ensureAllEditNodePath(JS側)と同じ考え方で、1階層ずつ確実に降りて対象ノードを
-    特定する。
-    """
+    nodeId は "親id/子id/孫id..." のようなパス形式を受け付ける(トップレベルのノードを指す場合は単に "id" のみ)。
+    各階層でidが1から振り直されるため、1階層ずつ確実に降りて対象ノードを特定する(_find_transition_node)。"""
     try:
         data = request.get_json()
-        sub_data = scenario.read_sub_event_transition(eventId, subId)
-        nodes = sub_data.get('nodes', [])
-        if not isinstance(nodes, list):
-            nodes = []
-            sub_data['nodes'] = nodes
-
         path_segments = [seg for seg in nodeId.split('/') if seg != '']
         if not path_segments:
             return jsonify({'error': 'Invalid nodeId'}), 400
 
-        target_node = None
-        current_list = nodes
-        for i, seg in enumerate(path_segments):
-            found = next((n for n in current_list if str(n.get('id')) == seg), None)
-            if found is None:
-                return jsonify({'error': f'Node not found: {"/".join(path_segments[:i + 1])}'}), 404
-            target_node = found
-            if i < len(path_segments) - 1:
-                # さらに深い階層へ降りる(サブグループは自分自身のidをキーに、
-                # 自分の中身を持つ、という既存の規約に合わせる)
-                found.setdefault('data', {})
-                found['data'].setdefault('subgroups', {})
-                sg_key = str(found.get('id'))
-                found['data']['subgroups'].setdefault(sg_key, {'nodes': [], 'edges': []})
-                if not isinstance(found['data']['subgroups'][sg_key].get('nodes'), list):
-                    found['data']['subgroups'][sg_key]['nodes'] = []
-                current_list = found['data']['subgroups'][sg_key]['nodes']
-
-        # 新しく追加するRoleのdataは、そのRoleの現在のフィールド定義「全件」を
-        # 埋めて初期化する(scenario.build_default_role_data: 保存済みdefault →
-        # subFields再構築 → 候補一覧の先頭 → 型ごとの汎用初期値、の優先順位)。
-        # 以前は保存済みdefaultを持つフィールドだけを入れていたため、
-        # デフォルト未保存のフィールドが丸ごと欠落し、「データ編集」を一度開いて
-        # 保存し直すまでDSL上そのフィールドが存在しない扱いになる不具合があった。
+        # 新しく追加するRoleのdataは、そのRoleの現在のフィールド定義「全件」を埋めて初期化する
+        # (scenario.build_default_role_data: 保存済みdefault → subFields再構築 → 候補一覧の先頭 → 型ごとの汎用初期値)。
         default_field_data = scenario.build_default_role_data(data.get('name'), DATA_DIR)
 
-        target_node.setdefault('data', {})
-        target_node['data']['roles'] = target_node['data'].get('roles', []) + [{
-            'id': data['roleId'],
-            'name': data['name'],
-            'branchType': data['branchType'],
-            'uniqueId': data.get('uniqueId'),
-            'data': default_field_data,
-        }]
+        with _sub_lock(eventId, subId):
+            sub_data = scenario.read_sub_event_transition(eventId, subId)
+            nodes = sub_data.get('nodes', [])
+            if not isinstance(nodes, list):
+                nodes = []
+                sub_data['nodes'] = nodes
 
-        sub_data['nodes'] = nodes
-        scenario.write_sub_event_transition(eventId, subId, sub_data)
-        return jsonify({'message': 'Role added', 'data': default_field_data})
+            target_node = _find_transition_node(nodes, path_segments)
+            if target_node is None:
+                return jsonify({'error': f'Node not found: {nodeId}'}), 404
+
+            target_node.setdefault('data', {})
+            target_node['data']['roles'] = target_node['data'].get('roles', []) + [{
+                'id': data['roleId'],
+                'name': data['name'],
+                'branchType': data['branchType'],
+                'uniqueId': data.get('uniqueId'),
+                'data': default_field_data,
+            }]
+
+            sub_data['nodes'] = nodes
+            scenario.write_sub_event_transition(eventId, subId, sub_data)
+            rev = scenario.get_sub_event_transition_rev(eventId, subId)
+        return jsonify({'message': 'Role added', 'data': default_field_data, 'rev': rev})
     except Exception as e:
         app.logger.error(f"Error adding role: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    
+
+
+@app.route('/api/scenario-event/<eventId>/sub/<subId>/role-data-batch', methods=['POST'])
+def save_role_data_batch(eventId, subId):
+    """複数Role分のフィールド値を「1リクエスト・1回の読み書き」でまとめて保存する。
+    body: {"updates": [{"nodePath": "親id/子id", "uniqueId": "...", "formData": [...]}, ...]}
+    nodePath はトップレベルなら "id"、サブグループ内なら "親id/子id"(画面のnodePathと同じ)。
+    戻り値: {"saved": 件数, "missed": [{nodePath, uniqueId}, ...], "rev": 新リビジョン}
+      missed = サーバー上のファイルに該当Roleが無かったもの(まだ構造が保存されていない新規Role等)。
+               画面側は、その分を通常のツリー保存で書き込む。"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        updates = payload.get('updates') or []
+        saved = 0
+        missed = []
+        with _sub_lock(eventId, subId):
+            sub_data = scenario.read_sub_event_transition(eventId, subId)
+            nodes = sub_data.get('nodes', [])
+            for u in updates:
+                segments = [s for s in str(u.get('nodePath', '')).split('/') if s != '']
+                target = _find_transition_node(nodes, segments) if segments else None
+                if target is not None and _apply_role_data(target, u.get('uniqueId'), u.get('formData')) > 0:
+                    saved += 1
+                else:
+                    missed.append({'nodePath': u.get('nodePath'), 'uniqueId': u.get('uniqueId')})
+            if saved:
+                sub_data['nodes'] = nodes
+                scenario.write_sub_event_transition(eventId, subId, sub_data)
+            rev = scenario.get_sub_event_transition_rev(eventId, subId)
+        return jsonify({'message': 'Role data saved', 'saved': saved, 'missed': missed, 'rev': rev})
+    except Exception as e:
+        app.logger.error(f"Error saving role data batch: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenario-event/<eventId>/sub/<subId>/rev', methods=['GET'])
+def get_sub_rev(eventId, subId):
+    """Sub 1件分のリビジョンだけを返す軽量API(他のタブ/ユーザーによる更新の検知用)。"""
+    try:
+        return jsonify({'rev': scenario.get_sub_event_transition_rev(eventId, subId)})
+    except Exception as e:
+        app.logger.error(f"Error reading sub rev: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 #===============================================================================
 #Assets

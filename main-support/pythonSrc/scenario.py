@@ -2302,6 +2302,18 @@ def write_event_data(eventId, data):
                 logger.error(f"不要になったSubフォルダの削除に失敗しました({eventId}/{sub_id}): {e}")
 
 
+def _write_json_atomic(path, obj):
+    """JSONを一時ファイルへ書いてから os.replace で差し替える。
+    書き込み途中でプロセスが落ちても _sub.json が壊れた半端な状態で残らない
+    (以前は直接 'w' で開いていたので、保存中の中断=ファイル破損だった)。"""
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
 def read_sub_event_transition(eventId, subId):
     """1つのSubのツリー({nodes, edges, storySetting}等)だけを読み込む。
     他のSubのファイルには一切触れないため、Sub単位での読み込みが軽量になる
@@ -2354,9 +2366,24 @@ def write_sub_event_transition(eventId, subId, tree):
 
     sub_payload = dict(tree) if isinstance(tree, dict) else {}
     sub_payload['subId'] = str(subId)
-    with open(os.path.join(sub_dir, '_sub.json'), 'w', encoding='utf-8') as f:
-        json.dump(sub_payload, f, ensure_ascii=False, indent=2)
+    _write_json_atomic(os.path.join(sub_dir, '_sub.json'), sub_payload)
     return {"message": f"Sub {subId} を保存しました"}
+
+
+def get_sub_event_transition_rev(eventId, subId):
+    """Sub 1件分のファイル(_sub.json)の更新リビジョン。「更新時刻(ns)-サイズ」。
+    ファイルが無ければ '0'。他のタブ/ユーザーの更新検知(画面側の警告バナー)に使う。"""
+    event_dir = _resolve_event_dir(eventId)
+    if not event_dir or not os.path.isdir(event_dir):
+        return '0'
+    sub_dir = _find_sub_dir_by_id(event_dir, subId)
+    if not sub_dir:
+        return '0'
+    try:
+        st = os.stat(os.path.join(sub_dir, '_sub.json'))
+    except OSError:
+        return '0'
+    return f"{st.st_mtime_ns}-{st.st_size}"
 
 
 def delete_event_storage(eventId):

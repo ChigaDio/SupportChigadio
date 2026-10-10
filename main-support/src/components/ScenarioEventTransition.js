@@ -35,6 +35,12 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import TuneIcon from '@mui/icons-material/Tune';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
+import BookmarksIcon from '@mui/icons-material/Bookmarks';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import RoleInputFactory from '../scenario/RoleInputFactory';
 import ScenarioTransactionCodeEditor from '../scenario/ScenarioTransactionCodeEditor';
 import {
@@ -48,6 +54,11 @@ import {
 import {
   SubGroupWaitKeyToggle, SubGroupSettingIconButton, SubGroupWaitKeyChip, SubGroupSettingDrawer,
 } from '../scenario/SubGroupSettingControls';
+import {
+  listPresets, savePreset, deletePreset, getPresetData, getRoleClipboard, setRoleClipboard, makeUniqueIds,
+} from '../scenario/scenarioRolePresets';
+import { diffRoles, formatValue } from '../scenario/scenarioDiff';
+import { validateGraph, worstLevel } from '../scenario/scenarioValidation';
 import { debounce } from 'lodash';
 
 // ============================================================
@@ -58,6 +69,74 @@ const useSnack = () => {
   const show = (msg, severity = 'success') => setSnack({ open: true, msg, severity });
   const hide = () => setSnack(s => ({ ...s, open: false }));
   return { snack, show, hide };
+};
+
+// ============================================================
+// サブグループの背景色(目印)
+// ============================================================
+// 100件超のサブグループが羅列されても「いまどれを編集しているか」が分かるよう、
+// カードとデータ入力Drawerをサブグループごとに色分けする。
+//  ・既定は「自動」: nodePathから色相を決める(同じIDなら常に同じ色)
+//  ・メニューから手動で色を選ぶ / 色なしにもできる
+// 色の指定はUI専用の情報なので、サーバーへは送らずブラウザ(localStorage)に保存する。
+const NODE_COLOR_PRESETS = [
+  { key: 'red', label: '赤', hue: 0 },
+  { key: 'orange', label: 'オレンジ', hue: 28 },
+  { key: 'yellow', label: '黄', hue: 50 },
+  { key: 'green', label: '緑', hue: 130 },
+  { key: 'teal', label: '青緑', hue: 175 },
+  { key: 'blue', label: '青', hue: 210 },
+  { key: 'purple', label: '紫', hue: 270 },
+  { key: 'pink', label: 'ピンク', hue: 320 },
+];
+const hashHue = (s) => {
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return (h * 47) % 360;
+};
+// colorKey: undefined=自動 / 'none'=色なし / プリセットのkey
+const getNodeTint = (nodePath, colorKey) => {
+  if (colorKey === 'none') return null;
+  const preset = NODE_COLOR_PRESETS.find((p) => p.key === colorKey);
+  const hue = preset ? preset.hue : hashHue(String(nodePath));
+  return {
+    hue,
+    bg: `hsl(${hue}, 75%, 96%)`,
+    bgStrong: `hsl(${hue}, 65%, 92%)`,
+    accent: `hsl(${hue}, 60%, 50%)`,
+  };
+};
+const hueSwatch = (hue) => `hsl(${hue}, 60%, 55%)`;
+
+// ============================================================
+// パフォーマンス用ヘルパー
+// ============================================================
+// 毎レンダー作り直される関数群を「参照は不変・中身は常に最新」に包む。
+// BlockCard を React.memo で守り、100件超のサブグループでも
+// 1カードの変更が全カードの再描画にならないようにするために使う。
+const useStableHandlers = (handlers) => {
+  const ref = useRef(handlers);
+  ref.current = handlers;
+  return useMemo(() => {
+    const stable = {};
+    Object.keys(handlers).forEach((k) => {
+      stable[k] = (...args) => (ref.current[k] ? ref.current[k](...args) : undefined);
+    });
+    return stable;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+};
+
+// open の間と、閉じるアニメーション終了までだけ true を返す。
+// 閉じているDrawer/Dialogをカード数ぶん常時マウントしないために使う。
+const useMountWhileOpen = (open, exitMs = 400) => {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) { setMounted(true); return undefined; }
+    const t = setTimeout(() => setMounted(false), exitMs);
+    return () => clearTimeout(t);
+  }, [open, exitMs]);
+  return open || mounted;
 };
 
 // ============================================================
@@ -338,18 +417,86 @@ const ConnectionBadge = ({ nodeId, edges, onRemove }) => {
   );
 };
 
+// 各Roleのフォームを包むメモ化スロット。props(Form/uid/onFormChange)が不変なら、
+// 他Roleの入力・親のstate更新では再描画されない。
+// initialData は「プリセット適用」で値を差し替える時だけ渡す(未指定ならフォーム作成時の初期値のまま)。
+const RoleFormSlot = React.memo(function RoleFormSlot({ Form, uid, onFormChange, initialData }) {
+  const handle = useCallback((formData) => onFormChange(uid, formData), [onFormChange, uid]);
+  return <Form onChange={handle} initialData={initialData} />;
+});
+
+// 差分(diffRoles の結果)の表示。DSL適用前の確認ダイアログで共用する。
+const DiffSummary = ({ diff, settingChanges }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    {diff.removed.length > 0 && (
+      <Box>
+        <Chip size="small" color="error" label={`削除 ${diff.removed.length}件`} sx={{ mb: 0.5 }} />
+        {diff.removed.map((r) => (
+          <Typography key={r.uniqueId} variant="body2" sx={{ pl: 1 }}>− {r.name}（この行がテキストから消えたため、Roleごと削除されます）</Typography>
+        ))}
+      </Box>
+    )}
+    {diff.added.length > 0 && (
+      <Box>
+        <Chip size="small" color="success" label={`追加 ${diff.added.length}件`} sx={{ mb: 0.5 }} />
+        {diff.added.map((r) => (
+          <Typography key={r.uniqueId} variant="body2" sx={{ pl: 1, fontFamily: 'monospace' }}>
+            ＋ {r.name}{r.fields.slice(0, 4).map((f) => ` ${f.name}=${formatValue(f.value, 24)}`).join('')}{r.fields.length > 4 ? ' …' : ''}
+          </Typography>
+        ))}
+      </Box>
+    )}
+    {diff.changed.length > 0 && (
+      <Box>
+        <Chip size="small" color="warning" label={`変更 ${diff.changed.length}件`} sx={{ mb: 0.5 }} />
+        {diff.changed.map((r) => (
+          <Box key={r.uniqueId} sx={{ pl: 1, mb: 0.5 }}>
+            <Typography variant="body2" fontWeight="bold">
+              {r.name}{r.renamedFrom ? `（旧: ${r.renamedFrom}）` : ''}
+            </Typography>
+            {r.fields.map((f) => (
+              <Typography key={f.name} variant="caption" sx={{ display: 'block', pl: 1, fontFamily: 'monospace' }}>
+                {f.name}: {formatValue(f.from)} → {formatValue(f.to)}
+              </Typography>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    )}
+    {settingChanges && settingChanges.length > 0 && (
+      <Box>
+        <Chip size="small" color="info" label={`サブグループ設定 ${settingChanges.length}件`} sx={{ mb: 0.5 }} />
+        {settingChanges.map((c) => (
+          <Typography key={c.name} variant="caption" sx={{ display: 'block', pl: 1, fontFamily: 'monospace' }}>
+            {c.name}: {formatValue(c.from)} → {formatValue(c.to)}
+          </Typography>
+        ))}
+      </Box>
+    )}
+    {diff.reordered && (
+      <Typography variant="body2" color="text.secondary">Roleの並び順が変わります</Typography>
+    )}
+    <Typography variant="caption" color="text.secondary">変更のないRole: {diff.unchangedCount}件</Typography>
+  </Box>
+);
+
 // ============================================================
 // RoleDataDrawer（データ入力専用Drawer）
 // ============================================================
 const RoleDataDrawer = ({
   open, onClose, nodeId, roles, formDataState, setFormDataState,
-  roleFormSchemas, classDataSchemas, eventId, subId, onSave, onDeleteRole, onAddRole, flushStructureSave
+  roleFormSchemas, classDataSchemas, eventId, subId, onSave, onDeleteRole, onAddRole, flushStructureSave,
+  tint, description, hasPrev, hasNext, onNavigate, onSaveMany, onPasteRoles,
 }) => {
   const [roleForms, setRoleForms] = useState({});
   const [formErrors, setFormErrors] = useState({});
   const [loadingForms, setLoadingForms] = useState({});
   const { snack, show: showSnack, hide: hideSnack } = useSnack();
   const loadedRef = useRef({});
+  // 「開いた時点(または最後に保存した時点)」の各Roleの値(JSON)。閉じる時の自動保存で、
+  // 実際に変更があったRoleだけをサーバーへ送るために使う(100件超のサブグループを
+  // 次々に開閉しても、変更のないRole分のPOSTが毎回走らないようにする)。
+  const baselineRef = useRef({});
 
   // ── テキスト(DSL)モード ──
   // 「上から順にRoleを追加していく」GUI入力は残しつつ、迅速な入力向けに
@@ -381,7 +528,12 @@ const RoleDataDrawer = ({
     setInputMode('gui');
   };
 
-  const handleApplyDsl = async () => {
+  // 適用前の確認(差分プレビュー)。「削除される行」「値が変わるフィールド」を見せてから適用する。
+  // 以前はボタンを押した瞬間にRoleの削除・追加・上書きが走り、DSLの書き間違いで
+  // 既存のRoleや値が黙って消えても気付けなかった。
+  const [dslPreview, setDslPreview] = useState(null); // { compiledRoles, diff }
+
+  const handleApplyDsl = () => {
     const { roles: compiledRoles, diagnostics } = compileDocument(dslText, effectiveSchemas, roles, classDataSchemas);
     setDslDiagnostics(diagnostics);
     const hasError = diagnostics.some((d) => d.severity === 'error');
@@ -389,7 +541,17 @@ const RoleDataDrawer = ({
       showSnack('エラーがあるため適用できません。赤波線の箇所を確認してください。', 'error');
       return;
     }
+    const before = roles.map((r) => ({ uniqueId: r.uniqueId, name: r.name, data: formDataState[r.uniqueId] || r.data || [] }));
+    const diff = diffRoles(before, compiledRoles);
+    if (diff.totalChanges === 0) {
+      showSnack('変更はありません');
+      setInputMode('gui');
+      return;
+    }
+    setDslPreview({ compiledRoles, diff });
+  };
 
+  const commitDsl = async (compiledRoles) => {
     setApplying(true);
     try {
       const existingIds = new Set(roles.map((r) => r.uniqueId));
@@ -430,7 +592,10 @@ const RoleDataDrawer = ({
         if (!existingIds.has(r.uniqueId)) delete loadedRef.current[r.uniqueId]; // 新規分はフォームを再読み込みさせる
       });
       setFormDataState(nextFormDataState);
-      compiledRoles.forEach((r) => onSave(r.uniqueId, r.data));
+      const saveItems = compiledRoles.map((r) => ({ uniqueId: r.uniqueId, formData: r.data }));
+      Promise.resolve(onSaveMany ? onSaveMany(saveItems) : Promise.all(saveItems.map((it) => onSave(it.uniqueId, it.formData))))
+        .then(() => { compiledRoles.forEach((r) => { baselineRef.current[r.uniqueId] = JSON.stringify(r.data); }); })
+        .catch(() => {});
 
       showSnack(`テキストの内容を適用しました（${compiledRoles.length}件）`);
       setInputMode('gui');
@@ -498,6 +663,7 @@ const RoleDataDrawer = ({
         // 確実に反映されるよう、ここではキャッシュを使わない。
         const schema = await fetchSchemaOnce(role.name, true);
         setFreshSchemas(prev => ({ ...prev, [role.name]: schema }));
+        baselineRef.current[uid] = JSON.stringify(formDataState[uid] || role.data || []);
         const FormComp = await RoleInputFactory.getForm(
           role.name,
           formDataState[uid] || role.data || [],
@@ -521,16 +687,27 @@ const RoleDataDrawer = ({
   // 閉じる際、初期化済み(formReady)のRoleについては未保存の変更を自動保存してから閉じる
   // （「モーダルを閉じたら保存されているはず」という期待に応えるため）。
   const handleClose = async () => {
-    const toSave = roles.filter((r) => formReady[r.uniqueId] && formDataState[r.uniqueId] !== undefined);
+    // 初期化済みで、かつ開いた時点/前回保存時から値が変わったRoleだけ保存する
+    const toSave = roles.filter((r) => (
+      formReady[r.uniqueId]
+      && formDataState[r.uniqueId] !== undefined
+      && JSON.stringify(formDataState[r.uniqueId]) !== baselineRef.current[r.uniqueId]
+    ));
     if (toSave.length > 0) {
       setBatchSaving(true);
       try {
         // 同じSubのファイルへread-modify-writeするサーバー処理が複数Role分
         // 並行に走ると、後発のリクエストが古いデータを読んで先の保存を
         // 上書きしてしまうため、必ず1件ずつ順番にawaitする。
-        for (const r of toSave) {
-          // eslint-disable-next-line no-await-in-loop
-          await onSave(r.uniqueId, formDataState[r.uniqueId]);
+        // 複数Role分を「1リクエスト・サーバー側1回の読み書き」でまとめて保存する
+        // (以前は1件ずつ順番にPOSTしていたので、Role数に比例して遅く、途中で閉じると中途半端になった)。
+        if (onSaveMany) {
+          await onSaveMany(toSave.map((r) => ({ uniqueId: r.uniqueId, formData: formDataState[r.uniqueId] })));
+        } else {
+          for (const r of toSave) {
+            // eslint-disable-next-line no-await-in-loop
+            await onSave(r.uniqueId, formDataState[r.uniqueId]);
+          }
         }
       } catch (e) {
         // 個別のエラーはonSave(handleSaveRole)側で表示済み。ここでは
@@ -546,12 +723,82 @@ const RoleDataDrawer = ({
     onClose();
   };
 
+  // ── Roleのコピー&貼り付け / 名前付きプリセット ──
+  // クリップボードとプリセットはブラウザ(localStorage)に保存される(scenarioRolePresets.js)。
+  const [presetOverride, setPresetOverride] = useState({}); // uid -> プリセットから適用した値(フォームを再初期化させる)
+  const [presetMenu, setPresetMenu] = useState(null); // { anchorEl, role }
+  const [, bumpPresetView] = useState(0);
+  const clip = getRoleClipboard();
+  const currentRoleData = (role) => formDataState[role.uniqueId] || role.data || [];
+  const toClipItem = (role) => ({ id: role.id, name: role.name, branchType: role.branchType, data: currentRoleData(role) });
+
+  const handleCopyRole = (role) => {
+    setRoleClipboard([toClipItem(role)]);
+    bumpPresetView((n) => n + 1);
+    showSnack(`${role.name} をコピーしました`);
+  };
+  const handleCopyAllRoles = () => {
+    setRoleClipboard(roles.map(toClipItem));
+    bumpPresetView((n) => n + 1);
+    showSnack(`${roles.length}件のRoleをコピーしました`);
+  };
+  const handlePasteRoles = async () => {
+    if (!onPasteRoles) return;
+    await onPasteRoles(getRoleClipboard());
+  };
+  const handleSavePreset = (role) => {
+    const name = window.prompt(`「${role.name}」の現在の値を、プリセットとして保存します。プリセット名:`, '');
+    if (name === null) return;
+    if (!savePreset(role.name, name, currentRoleData(role))) {
+      showSnack('プリセットを保存できませんでした（名前が空、または保存領域がいっぱいです）', 'error');
+      return;
+    }
+    bumpPresetView((n) => n + 1);
+    showSnack(`プリセット「${name.trim()}」を保存しました`);
+  };
+  const handleApplyPreset = (role, presetName) => {
+    const data = getPresetData(role.name, presetName);
+    if (!data) return;
+    setPresetOverride((prev) => ({ ...prev, [role.uniqueId]: data }));
+    setPresetMenu(null);
+    showSnack(`プリセット「${presetName}」を適用しました（保存で確定）`);
+  };
+
+  // ── 前/次のサブグループへ移動 ──
+  // 変更を保存して閉じてから、隣のサブグループのデータ入力を開く(Alt+↑ / Alt+↓ でも可)。
+  const handleNavigate = async (dir) => {
+    if (batchSaving || !onNavigate) return;
+    await handleClose();
+    onNavigate(dir);
+  };
+  const navRef = useRef(null);
+  navRef.current = { go: handleNavigate, enabled: inputMode === 'gui', hasPrev, hasNext };
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      const nav = navRef.current;
+      if (!nav || !nav.enabled || !e.altKey) return;
+      if (e.key === 'ArrowUp' && nav.hasPrev) { e.preventDefault(); nav.go('prev'); }
+      else if (e.key === 'ArrowDown' && nav.hasNext) { e.preventDefault(); nav.go('next'); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  const handleFormChange = useCallback((uid, formData) => {
+    setFormDataState(prev => ({ ...prev, [uid]: formData }));
+    setFormReady(prev => (prev[uid] ? prev : { ...prev, [uid]: true }));
+  }, [setFormDataState]);
+
   const handleSave = (uniqueId) => {
     if (!formReady[uniqueId]) {
       showSnack('フォームの読み込み中です。少し待ってから保存してください', 'warning');
       return;
     }
-    onSave(uniqueId, formDataState[uniqueId]);
+    const savedJson = JSON.stringify(formDataState[uniqueId]);
+    Promise.resolve(onSave(uniqueId, formDataState[uniqueId]))
+      .then(() => { baselineRef.current[uniqueId] = savedJson; })
+      .catch(() => {});
     showSnack('保存しました');
   };
   const handleBatchSave = async () => {
@@ -570,9 +817,18 @@ const RoleDataDrawer = ({
       // 1件ずつ順番にawaitする。
       // 保存対象は「今画面に出ている最新の formDataState」をスナップショットして使う。
       const snapshot = { ...formDataState };
-      for (const r of roles) {
-        // eslint-disable-next-line no-await-in-loop
-        await onSave(r.uniqueId, snapshot[r.uniqueId]);
+      if (onSaveMany) {
+        const items = roles
+          .filter((r) => snapshot[r.uniqueId] !== undefined)
+          .map((r) => ({ uniqueId: r.uniqueId, formData: snapshot[r.uniqueId] }));
+        await onSaveMany(items);
+        items.forEach((it) => { baselineRef.current[it.uniqueId] = JSON.stringify(it.formData); });
+      } else {
+        for (const r of roles) {
+          // eslint-disable-next-line no-await-in-loop
+          await onSave(r.uniqueId, snapshot[r.uniqueId]);
+          baselineRef.current[r.uniqueId] = JSON.stringify(snapshot[r.uniqueId]);
+        }
       }
       // 一括保存後も formDataState を保存した内容で確定させておく
       // (親側の roles/roleDataCache 更新で古い値に戻されないようにする)。
@@ -593,18 +849,41 @@ const RoleDataDrawer = ({
   };
 
   return (
-    <Drawer anchor="right" open={open} onClose={handleClose}>
+    <Drawer anchor="right" open={open} onClose={handleClose} PaperProps={{ sx: { bgcolor: tint ? tint.bg : undefined } }}>
       <Box sx={{ width: 660, p: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
         {/* ヘッダー */}
         <Box sx={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          px: 2, py: 1.5, bgcolor: 'primary.dark', color: 'white'
+          px: 2, py: 1.5, bgcolor: 'primary.dark', color: 'white',
+          borderBottom: tint ? `6px solid ${tint.accent}` : undefined,
         }}>
-          <Box>
+          <Box sx={{ minWidth: 0, flex: 1, mr: 1 }}>
             <Typography variant="subtitle1" fontWeight="bold">データ入力</Typography>
-            <Typography variant="caption" sx={{ opacity: 0.8 }}>ノード {nodeId} / {roles.length} Role</Typography>
+            <Typography variant="caption" sx={{ opacity: 0.8, display: 'block' }} noWrap>
+              ノード {nodeId} / {roles.length} Role{description ? ` — ${String(description).split('\n')[0]}` : ''}
+            </Typography>
           </Box>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            {onNavigate && inputMode === 'gui' && (
+              <>
+                <Tooltip title="前のサブグループ（保存して移動 / Alt+↑）">
+                  <span>
+                    <IconButton size="small" sx={{ color: 'white', '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' } }}
+                      disabled={!hasPrev || batchSaving} onClick={() => handleNavigate('prev')}>
+                      <ArrowUpwardIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="次のサブグループ（保存して移動 / Alt+↓）">
+                  <span>
+                    <IconButton size="small" sx={{ color: 'white', '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' } }}
+                      disabled={!hasNext || batchSaving} onClick={() => handleNavigate('next')}>
+                      <ArrowDownwardIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </>
+            )}
             {inputMode === 'gui' ? (
               <Button variant="outlined" size="small" color="inherit"
                 onClick={switchToTextMode}>
@@ -653,7 +932,20 @@ const RoleDataDrawer = ({
             )}
           </Box>
         ) : (
-        <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
+        <Box sx={{ flex: 1, overflow: 'auto', p: 1.5, bgcolor: tint ? tint.bgStrong : undefined }}>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+            <Button size="small" variant="outlined" startIcon={<ContentCopyIcon />} onClick={handleCopyAllRoles} disabled={roles.length === 0}>
+              全Roleをコピー
+            </Button>
+            <Tooltip title={clip.length > 0 ? clip.map((c) => c.name).join(', ') : 'コピーしたRoleがありません'}>
+              <span>
+                <Button size="small" variant="outlined" startIcon={<ContentPasteIcon />} onClick={handlePasteRoles}
+                  disabled={clip.length === 0 || !onPasteRoles}>
+                  貼り付け{clip.length > 0 ? `（${clip.length}件）` : ''}
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
           {roles.length === 0 ? (
             <Alert severity="info">Roleがありません</Alert>
           ) : roles.map((role, index) => (
@@ -666,6 +958,16 @@ const RoleDataDrawer = ({
                     <Chip label={role.branchType} size="small" color="secondary" sx={{ height: 18, fontSize: '0.65rem' }} />
                   )}
                   <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5 }}>
+                    <Tooltip title="このRoleをコピー（値ごと。別のサブグループへ貼り付けできます）">
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleCopyRole(role); }}>
+                        <ContentCopyIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="プリセット（保存 / 呼び出し）">
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); setPresetMenu({ anchorEl: e.currentTarget, role }); }}>
+                        <BookmarksIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                     <Tooltip title="保存">
                       <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); handleSave(role.uniqueId); }}>
                         <SaveIcon fontSize="small" />
@@ -688,20 +990,7 @@ const RoleDataDrawer = ({
                     <Typography variant="caption" color="text.secondary">フォームを読み込み中...</Typography>
                   </Box>
                 ) : roleForms[role.uniqueId] ? (
-                  (() => {
-                    const F = roleForms[role.uniqueId];
-                    // onChange は常に最新の setFormDataState を使う。
-                    // initialData はフォーム生成時のものを維持し、キー入力のたびに
-                    // BaseRoleInputForm が再初期化されないようにする(propsで上書きしない)。
-                    return (
-                      <F
-                        onChange={(formData) => {
-                          setFormDataState(prev => ({ ...prev, [role.uniqueId]: formData }));
-                          setFormReady(prev => ({ ...prev, [role.uniqueId]: true }));
-                        }}
-                      />
-                    );
-                  })()
+                  <RoleFormSlot Form={roleForms[role.uniqueId]} uid={role.uniqueId} onFormChange={handleFormChange} initialData={presetOverride[role.uniqueId]} />
                 ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5 }}>
                     <CircularProgress size={16} />
@@ -713,6 +1002,44 @@ const RoleDataDrawer = ({
           ))}
         </Box>
         )}
+
+        <Menu anchorEl={presetMenu ? presetMenu.anchorEl : null} open={Boolean(presetMenu)} onClose={() => setPresetMenu(null)}>
+          {presetMenu && (
+            <MenuItem onClick={() => { const r = presetMenu.role; setPresetMenu(null); handleSavePreset(r); }}>
+              <BookmarksIcon fontSize="small" sx={{ mr: 1 }} />現在の値をプリセットとして保存…
+            </MenuItem>
+          )}
+          {presetMenu && listPresets(presetMenu.role.name).length === 0 && (
+            <MenuItem disabled>「{presetMenu.role.name}」のプリセットはまだありません</MenuItem>
+          )}
+          {presetMenu && listPresets(presetMenu.role.name).map((p) => (
+            <MenuItem key={p.name} onClick={() => handleApplyPreset(presetMenu.role, p.name)}>
+              <ListItemText primary={p.name} secondary={new Date(p.savedAt).toLocaleString('ja-JP')} />
+              <IconButton
+                size="small" sx={{ ml: 2 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm(`プリセット「${p.name}」を削除しますか？`)) { deletePreset(presetMenu.role.name, p.name); bumpPresetView((n) => n + 1); }
+                }}
+              >
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </MenuItem>
+          ))}
+        </Menu>
+
+        <Dialog open={Boolean(dslPreview)} onClose={() => setDslPreview(null)} maxWidth="sm" fullWidth>
+          <DialogTitle>適用内容の確認（{dslPreview ? dslPreview.diff.totalChanges : 0}件の変更）</DialogTitle>
+          <DialogContent dividers sx={{ maxHeight: '60vh' }}>
+            {dslPreview && <DiffSummary diff={dslPreview.diff} />}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDslPreview(null)}>キャンセル</Button>
+            <Button variant="contained" color="success" onClick={() => { const p = dslPreview; setDslPreview(null); commitDsl(p.compiledRoles); }}>
+              適用して保存
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         <Snackbar open={snack.open} autoHideDuration={2000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
           <Alert onClose={hideSnack} severity={snack.severity} variant="filled">{snack.msg}</Alert>
@@ -798,15 +1125,24 @@ const RoleSelectDrawer = ({ open, onClose, roles, nodeId, onAdd }) => {
 // ============================================================
 // BlockCard（スクラッチ/ティラノビルダー風ブロックカード）
 // ============================================================
-const BlockCard = ({
+const BlockCardInner = ({
   node, nodePath, index, totalNodes, isSub, edges, allNodeIds,
-  globalRoles, roleDataCache, roleFormSchemas, classDataSchemas, eventId, subId, flushStructureSave, onRefreshRoles,
-  onMoveUp, onMoveDown, onDelete, onCopy, onEditId, onSubGroupOpen,
+  globalRoles, nodeRoleCache, roleFormSchemas, classDataSchemas, eventId, subId, flushStructureSave, onRefreshRoles,
+  onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
-  onUpdateFormData, onMoveToGroup,
+  onUpdateFormData, onFlushFormData, onMoveToGroup,
   subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
+  colorKey, onSetColor, selected, onToggleSelect, collapseCmd, openTick, hasPrev, hasNext, onNavigate,
+  onSaveRoles, onServerRev, issues,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const cardRef = useRef(null);
+  const tint = useMemo(() => getNodeTint(nodePath, colorKey), [nodePath, colorKey]);
+
+  // 「全て折り畳み/展開」の指示を受け取る
+  useEffect(() => {
+    if (collapseCmd && collapseCmd.tick > 0) setCollapsed(collapseCmd.value);
+  }, [collapseCmd]);
   const [showSettingDrawer, setShowSettingDrawer] = useState(false);
   const [showRoleSelect, setShowRoleSelect] = useState(false);
   const [showDataInput, setShowDataInput] = useState(false);
@@ -832,28 +1168,63 @@ const BlockCard = ({
   // サブグループ設定（全イベント共通のフィールド定義。組み込みの is_wait_key=入力待ち + 追加フィールド）。
   // スキーマを取得できなかった場合(旧サーバー等)は、設定UIを出さず従来どおり動く。
   const settingEnabled = !!subGroupSettingSchema;
-  const nodeSetting = getNodeSetting(node, subGroupSettingSchema, subGroupSettingDefaults);
+  const nodeSetting = useMemo(
+    () => getNodeSetting(node, subGroupSettingSchema, subGroupSettingDefaults),
+    [node, subGroupSettingSchema, subGroupSettingDefaults]
+  );
   const waitKey = settingEnabled && !!getSettingValue(nodeSetting, IS_WAIT_KEY_FIELD, false);
   const hasExtraSettingFields = (subGroupSettingSchema?.fields || []).length > 1;
 
-  // roleData初期化
-  // データ入力Drawerを開いている最中は、ユーザーがGUIで編集中の formDataStateを
-  // roles/roleDataCacheの更新(一括保存の結果など)で上書きしない。
-  // 上書きすると、画面上は新しい値なのに formDataState だけ古い値に戻り、
-  // 「一括保存→テキスト入力へ」でDSLに古い内容が出る原因になる。
-  useEffect(() => {
-    if (showDataInput) return;
+  // ── データ入力Drawer用のフォーム値 ──
+  // 以前は「全カードが roleDataCache を購読し、変更のたびに全カードが setFormDataState」
+  // していたため、100件超のサブグループでは1文字入力するたびに全カードが2回ずつ
+  // 再描画されていた。現在は
+  //  ・Drawerを開く瞬間にだけ、そのカード分のスライス(nodeRoleCache)から初期化する
+  //  ・入力中は親へはstateでなくrefへ書き(onUpdateFormData)、閉じたときに1回だけ反映する(onFlushFormData)
+  // ようにして、編集中のカード以外は一切再描画されないようにしている。
+  const formDataStateRef = useRef({});
+  const onUpdateFormDataRef = useRef(onUpdateFormData);
+  onUpdateFormDataRef.current = onUpdateFormData;
+
+  const openDataInput = () => {
+    // node.id は階層ごとに振り直される(親も子も "1" がありうる)ため、
+    // キャッシュは nodePath 単位のスライスを使う。
     const init = {};
     roles.forEach(r => {
-      // node.id は階層ごとに振り直される(親も子も "1" がありうる)ため、
-      // キャッシュキーは nodePath(親/子まで含む)を使う。id だけだと子の編集が親に混ざる。
-      init[r.uniqueId] = roleDataCache?.[nodePath]?.[r.uniqueId] || r.data || [];
+      init[r.uniqueId] = nodeRoleCache?.[r.uniqueId] || r.data || [];
     });
+    formDataStateRef.current = init;
     setFormDataState(init);
-  }, [roles, roleDataCache, nodePath, showDataInput]);
+    setShowDataInput(true);
+  };
 
-  const handleAddRole = (role) => {
-    const uniqueId = Date.now().toString();
+  // RoleDataDrawer に渡す setFormDataState。参照は常に同一。
+  // 以前は setState の updater の中で親の setState(onUpdateFormData)を呼んでいた
+  // (副作用をupdaterに入れるのはStrictModeで二重実行される)ので、refで最新値を持って外で呼ぶ。
+  const syncFormDataState = useCallback((updater) => {
+    const next = typeof updater === 'function' ? updater(formDataStateRef.current) : updater;
+    formDataStateRef.current = next;
+    setFormDataState(next);
+    onUpdateFormDataRef.current(nodePath, next);
+  }, [nodePath]);
+
+  // 「前へ/次へ」で自分が次の対象になったら、データ入力を開いて画面内へスクロールする
+  const handledOpenTickRef = useRef(0);
+  useEffect(() => {
+    if (!openTick || openTick <= handledOpenTickRef.current) return;
+    handledOpenTickRef.current = openTick;
+    if (cardRef.current && cardRef.current.scrollIntoView) cardRef.current.scrollIntoView({ block: 'center' });
+    openDataInput();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTick]);
+
+  const roleSelectMounted = useMountWhileOpen(showRoleSelect);
+  const dataInputMounted = useMountWhileOpen(showDataInput);
+  const settingDrawerMounted = useMountWhileOpen(showSettingDrawer);
+
+  // Roleをこのノードへ追加する(サーバーへの追加 → 画面への反映)。
+  // data を渡した場合(貼り付け)は、サーバーが返すデフォルト値の代わりにその値で初期化し、保存まで行う。
+  const addRoleToNode = (role, { uniqueId = Date.now().toString(), data } = {}) => (
     // nodePath: サブグループ内なら "親id/自分のid"、トップレベルなら自分のidそのまま。
     // 各階層でidが1から振り直される(例: トップレベル"1"の最初の子も"1")ため、
     // node.id(自分の階層内でのローカルなid)だけをURLに渡すと、別の階層にある
@@ -865,14 +1236,44 @@ const BlockCard = ({
     })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then((result) => {
+        // サーバーの更新リビジョンを親へ通知(他タブ/他ユーザーの更新検知で、自分の更新を誤検知しないため)
+        if (onServerRev && result && result.rev) onServerRev(result.rev);
         // サーバー側(add_role)が、そのRoleのフィールド定義に設定されている
-        // デフォルト値で初期化したdataを返すので、それをそのまま使う
+        // デフォルト値で初期化したdataを返すので、通常はそれをそのまま使う
         // (以前はここで常に data: [] を渡していたため、GUIでRoleを追加した
         // 直後にDSLを開いてもデフォルト値が入っていない不具合があった)。
-        onAddRole(node.id, { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: result.data || [] });
-        showSnack(`${role.name} を追加`);
+        const finalData = data !== undefined ? data : (result.data || []);
+        onAddRole(node.id, { uniqueId, id: role.id, name: role.name, branchType: role.branchType, data: finalData });
+        if (data !== undefined) onSaveRoles(nodePath, node.id, [{ uniqueId, formData: data }]).catch(() => {});
+        return uniqueId;
       })
+  );
+
+  const handleAddRole = (role) => {
+    addRoleToNode(role)
+      .then(() => showSnack(`${role.name} を追加`))
       .catch(e => showSnack('追加エラー: ' + e.message, 'error'));
+  };
+
+  // クリップボードのRole(値ごと)を、このノードの末尾へ順に追加する。
+  const handlePasteRoles = async (clipItems) => {
+    const items = clipItems && clipItems.length > 0 ? clipItems : getRoleClipboard();
+    if (items.length === 0) { showSnack('貼り付けるRoleがありません', 'warning'); return; }
+    // uniqueId は Date.now() だと連続追加で衝突しうるので、重複しないよう一括採番する
+    const ids = makeUniqueIds(items.length, roles.map(r => r.uniqueId));
+    try {
+      for (let i = 0; i < items.length; i += 1) {
+        // 順番を保つため1件ずつ(サーバー側もロックで直列化される)
+        // eslint-disable-next-line no-await-in-loop
+        await addRoleToNode(
+          { id: items[i].id, name: items[i].name, branchType: items[i].branchType },
+          { uniqueId: ids[i], data: items[i].data },
+        );
+      }
+      showSnack(`${items.length}件のRoleを貼り付けました`);
+    } catch (e) {
+      showSnack('貼り付けエラー: ' + e.message, 'error');
+    }
   };
 
   const handleConnect = () => {
@@ -915,6 +1316,7 @@ const BlockCard = ({
 
   return (
     <Paper
+      ref={cardRef}
       draggable
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
@@ -927,8 +1329,17 @@ const BlockCard = ({
         borderColor: isSub ? 'secondary.light' : 'primary.light',
         overflow: 'hidden',
         transition: 'box-shadow 0.2s, border-color 0.2s',
-        '&:hover': { boxShadow: 6, borderColor: isSub ? 'secondary.main' : 'primary.main' },
+        ...(tint ? { bgcolor: tint.bg, borderLeftWidth: 8, borderLeftColor: tint.accent } : {}),
+        ...(selected ? { outline: '3px solid', outlineColor: 'primary.main', outlineOffset: 1 } : {}),
+        '&:hover': {
+          boxShadow: 6,
+          borderColor: isSub ? 'secondary.main' : 'primary.main',
+          ...(tint ? { borderLeftColor: tint.accent } : {}),
+        },
         position: 'relative',
+        // 画面外のカードはレイアウト/描画をスキップする(100件超でもスクロール・再描画が軽い)
+        contentVisibility: 'auto',
+        containIntrinsicSize: 'auto 140px',
       }}
     >
       {/* ── ヘッダー ── */}
@@ -937,6 +1348,13 @@ const BlockCard = ({
         display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'grab',
         '&:active': { cursor: 'grabbing' },
       }}>
+        <Checkbox
+          size="small"
+          checked={!!selected}
+          onChange={() => onToggleSelect(node.id)}
+          onMouseDown={(e) => e.stopPropagation()}
+          sx={{ p: 0, flexShrink: 0, color: 'rgba(255,255,255,0.7)', '&.Mui-checked': { color: '#fff' } }}
+        />
         <DragIndicatorIcon sx={{ color: 'rgba(255,255,255,0.6)', fontSize: 16, flexShrink: 0 }} />
 
         {/* ID バッジ */}
@@ -970,6 +1388,30 @@ const BlockCard = ({
 
         {/* 入力待ち(is_wait_key)がONのときは、折り畳んでいても分かるようにヘッダーに表示 */}
         <SubGroupWaitKeyChip waitKey={waitKey} />
+        {issues && issues.length > 0 && (() => {
+          const lv = worstLevel(issues);
+          const Icon = lv === 'error' ? ErrorOutlineIcon : lv === 'warn' ? WarningAmberIcon : InfoOutlinedIcon;
+          const bg = lv === 'error' ? 'error.main' : lv === 'warn' ? 'warning.main' : 'info.main';
+          return (
+            <Tooltip
+              title={(
+                <Box>
+                  {issues.map((i, k) => (
+                    <Typography key={k} variant="caption" sx={{ display: 'block' }}>
+                      {i.level === 'error' ? '✖' : i.level === 'warn' ? '▲' : 'ℹ'} {i.message}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+            >
+              <Chip
+                icon={<Icon sx={{ fontSize: '12px !important', color: '#fff !important' }} />}
+                label={issues.length} size="small"
+                sx={{ height: 18, fontSize: '0.6rem', fontWeight: 'bold', flexShrink: 0, bgcolor: bg, color: 'white' }}
+              />
+            </Tooltip>
+          );
+        })()}
 
         {/* アクションボタン群 */}
         <Box sx={{ display: 'flex', gap: 0, flexShrink: 0 }} onMouseDown={e => e.stopPropagation()}>
@@ -982,7 +1424,7 @@ const BlockCard = ({
           )}
           <Tooltip title="上へ">
             <span>
-              <IconButton size="small" disabled={index === 0} onClick={onMoveUp}
+              <IconButton size="small" disabled={index === 0} onClick={() => onReorder(index, index - 1)}
                 sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)', '&:disabled': { color: 'rgba(255,255,255,0.3)' } }}>
                 <ArrowUpwardIcon sx={{ fontSize: 14 }} />
               </IconButton>
@@ -990,7 +1432,7 @@ const BlockCard = ({
           </Tooltip>
           <Tooltip title="下へ">
             <span>
-              <IconButton size="small" disabled={index === totalNodes - 1} onClick={onMoveDown}
+              <IconButton size="small" disabled={index === totalNodes - 1} onClick={() => onReorder(index, index + 1)}
                 sx={{ p: 0.25, color: 'rgba(255,255,255,0.8)', '&:disabled': { color: 'rgba(255,255,255,0.3)' } }}>
                 <ArrowDownwardIcon sx={{ fontSize: 14 }} />
               </IconButton>
@@ -1024,6 +1466,35 @@ const BlockCard = ({
         <MenuItem onClick={() => { setShowMoveDialog(true); setAnchorEl(null); }}>
           <ArrowForwardIcon fontSize="small" sx={{ mr: 1 }} />別グループへ移動
         </MenuItem>
+        <MenuItem
+          disabled={getRoleClipboard().length === 0}
+          onClick={() => { setAnchorEl(null); handlePasteRoles(); }}
+        >
+          <ContentPasteIcon fontSize="small" sx={{ mr: 1 }} />
+          Roleを貼り付け{getRoleClipboard().length > 0 ? `（${getRoleClipboard().length}件）` : ''}
+        </MenuItem>
+        <Divider />
+        <Box sx={{ px: 2, py: 1 }}>
+          <Typography variant="caption" color="text.secondary">背景色（この画面のみ・ブラウザに保存）</Typography>
+          <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap', maxWidth: 220 }}>
+            <Tooltip title="自動">
+              <Box onClick={() => { onSetColor([nodePath], null); setAnchorEl(null); }}
+                sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', border: '2px solid', borderColor: !colorKey ? 'text.primary' : 'divider',
+                  background: 'conic-gradient(hsl(0,70%,60%), hsl(60,70%,60%), hsl(120,70%,60%), hsl(180,70%,60%), hsl(240,70%,60%), hsl(300,70%,60%), hsl(0,70%,60%))' }} />
+            </Tooltip>
+            {NODE_COLOR_PRESETS.map((p) => (
+              <Tooltip key={p.key} title={p.label}>
+                <Box onClick={() => { onSetColor([nodePath], p.key); setAnchorEl(null); }}
+                  sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', bgcolor: hueSwatch(p.hue),
+                    border: '2px solid', borderColor: colorKey === p.key ? 'text.primary' : 'transparent' }} />
+              </Tooltip>
+            ))}
+            <Tooltip title="色なし">
+              <Box onClick={() => { onSetColor([nodePath], 'none'); setAnchorEl(null); }}
+                sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', bgcolor: '#fff', border: '2px solid', borderColor: colorKey === 'none' ? 'text.primary' : 'divider' }} />
+            </Tooltip>
+          </Box>
+        </Box>
         <Divider />
         <MenuItem onClick={() => { onDelete(node.id); setAnchorEl(null); }} sx={{ color: 'error.main' }}>
           <DeleteIcon fontSize="small" sx={{ mr: 1 }} />削除
@@ -1115,7 +1586,7 @@ const BlockCard = ({
                 </Button>
                 {roles.length > 0 && (
                   <Button variant="contained" size="small" color="secondary"
-                    onClick={() => setShowDataInput(true)}
+                    onClick={openDataInput}
                     sx={{ fontSize: '0.68rem', py: 0.3, px: 1, minWidth: 0, flex: 1 }}>
                     データ入力
                   </Button>
@@ -1133,32 +1604,22 @@ const BlockCard = ({
       )}
 
       {/* ── Role選択Drawer ── */}
-      <RoleSelectDrawer
+      {roleSelectMounted && <RoleSelectDrawer
         open={showRoleSelect}
         onClose={() => setShowRoleSelect(false)}
         roles={globalRoles}
         nodeId={node.id}
         onAdd={handleAddRole}
-      />
+      />}
 
       {/* ── データ入力Drawer ── */}
-      <RoleDataDrawer
+      {dataInputMounted && <RoleDataDrawer
         open={showDataInput}
-        onClose={() => setShowDataInput(false)}
+        onClose={() => { setShowDataInput(false); onFlushFormData(nodePath); }}
         nodeId={node.id}
         roles={roles}
         formDataState={formDataState}
-        setFormDataState={(updater) => {
-          // 関数updaterを「その時点の最新state」に対して適用する。
-          // 以前は描画時の formDataState クロージャを渡していたため、複数Roleや
-          // 連続入力で後勝ちになり、一括保存時点の formDataStateが古い値のまま
-          // 残る不具合があった。
-          setFormDataState((prev) => {
-            const newState = typeof updater === 'function' ? updater(prev) : updater;
-            onUpdateFormData(nodePath, newState);
-            return newState;
-          });
-        }}
+        setFormDataState={syncFormDataState}
         roleFormSchemas={roleFormSchemas}
         classDataSchemas={classDataSchemas}
         eventId={eventId}
@@ -1167,10 +1628,17 @@ const BlockCard = ({
         onDeleteRole={(uid) => onDeleteRole(node.id, uid)}
         onAddRole={(newRole) => onAddRole(node.id, newRole)}
         flushStructureSave={flushStructureSave}
-      />
+        tint={tint}
+        description={node.data.description}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        onNavigate={(dir) => onNavigate(node.id, dir)}
+        onSaveMany={(items) => onSaveRoles(nodePath, node.id, items)}
+        onPasteRoles={handlePasteRoles}
+      />}
 
       {/* ── サブグループ設定Drawer(is_wait_key + 追加した共通フィールドの入力) ── */}
-      {settingEnabled && (
+      {settingEnabled && settingDrawerMounted && (
         <SubGroupSettingDrawer
           open={showSettingDrawer}
           onClose={() => setShowSettingDrawer(false)}
@@ -1240,6 +1708,9 @@ const BlockCard = ({
   );
 };
 
+// 親(ScenarioEventTransition)の再描画では、props が実際に変わったカードだけが再描画される。
+const BlockCard = React.memo(BlockCardInner);
+
 // ============================================================
 // BlockCanvas（ブロック一覧ビュー）
 // ============================================================
@@ -1248,10 +1719,142 @@ const BlockCanvas = ({
   eventId, subId, flushStructureSave, onRefreshRoles,
   onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
-  onUpdateFormData, onMoveToGroup,
+  onUpdateFormData, onFlushFormData, onMoveToGroup,
   subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
+  nodeColors, onSetNodeColors, onSaveRoles, onServerRev,
 }) => {
-  const allNodeIds = nodes.map(n => n.id);
+  // ノード内容が変わっても、ID一覧が同じなら同じ配列参照を使う(memo化したカードを再描画させない)
+  const idsKey = nodes.map(n => n.id).join('\u0000');
+  const allNodeIds = useMemo(() => (idsKey ? idsKey.split('\u0000') : []), [idsKey]);
+
+  // ── 整合性チェック(scenarioValidation.js) ──
+  // ノードごとの結果は「内容が同じなら同じ配列参照」に揃える。毎回新しい配列を渡すと、
+  // どれか1つ編集しただけで全カードの React.memo が外れて全再描画になってしまう。
+  const roleNames = useMemo(
+    () => (globalRoles && globalRoles.length > 0 ? new Set(globalRoles.map((r) => r.name)) : null),
+    [globalRoles]
+  );
+  const validation = useMemo(
+    () => validateGraph(nodes, edges, { isSub, roleNames, roleSchemas: roleFormSchemas }),
+    [nodes, edges, isSub, roleNames, roleFormSchemas]
+  );
+  const issueCacheRef = useRef(new Map());
+  const stableIssues = useMemo(() => {
+    const out = {};
+    const next = new Map();
+    Object.keys(validation.byNode).forEach((id) => {
+      const list = validation.byNode[id];
+      const key = JSON.stringify(list);
+      const prev = issueCacheRef.current.get(id);
+      const arr = prev && prev.key === key ? prev.arr : list;
+      next.set(id, { key, arr });
+      out[id] = arr;
+    });
+    issueCacheRef.current = next;
+    return out;
+  }, [validation]);
+  const [onlyIssues, setOnlyIssues] = useState(false);
+
+  // ── 検索・フィルタ ──
+  const [query, setQuery] = useState('');
+  const [onlyWait, setOnlyWait] = useState(false);
+  const [onlyRoles, setOnlyRoles] = useState(false);
+  const [autoTint, setAutoTint] = useState(() => {
+    try { return localStorage.getItem('scn-auto-tint') !== '0'; } catch (e) { return true; }
+  });
+  const toggleAutoTint = () => {
+    setAutoTint((v) => {
+      try { localStorage.setItem('scn-auto-tint', v ? '0' : '1'); } catch (e) { /* ignore */ }
+      return !v;
+    });
+  };
+
+  const settingEnabled = !!subGroupSettingSchema;
+  const isWaitNode = (n) => settingEnabled
+    && !!getSettingValue(getNodeSetting(n, subGroupSettingSchema, subGroupSettingDefaults), IS_WAIT_KEY_FIELD, false);
+
+  const visible = useMemo(() => {
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return nodes
+      .map((node, index) => ({ node, index }))
+      .filter(({ node }) => {
+        const nodeRoles = node.data.roles || [];
+        if (onlyRoles && nodeRoles.length === 0) return false;
+        if (onlyIssues && !(stableIssues[String(node.id)] || []).some((i) => i.level !== 'info')) return false;
+        if (onlyWait && !isWaitNode(node)) return false;
+        if (terms.length === 0) return true;
+        const hay = [
+          String(node.id), node.data.description || '', ...nodeRoles.map(r => r.name),
+        ].join('\n').toLowerCase();
+        return terms.every(t => hay.includes(t));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, query, onlyWait, onlyRoles, onlyIssues, stableIssues, subGroupSettingSchema, subGroupSettingDefaults]);
+
+  // ── 複数選択 ──
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkAnchor, setBulkAnchor] = useState(null);
+  useEffect(() => { setSelected(new Set()); }, [parentId, isSub]);
+  useEffect(() => {
+    // 削除などで存在しなくなったIDは選択から外す
+    setSelected((prev) => {
+      const ids = new Set(allNodeIds);
+      const next = new Set([...prev].filter(id => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [allNodeIds]);
+
+  const toggleSelect = (id) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const nodePathOf = (id) => (isSub ? `${parentId}/${id}` : id);
+
+  const bulkWait = (val) => {
+    if (!settingEnabled) return;
+    selected.forEach((id) => {
+      const node = nodes.find(n => n.id === id);
+      if (!node) return;
+      const cur = getNodeSetting(node, subGroupSettingSchema, subGroupSettingDefaults);
+      onSaveSubGroupSetting(id, setSettingValue(cur, IS_WAIT_KEY_FIELD, val, subGroupSettingSchema, subGroupSettingDefaults));
+    });
+  };
+  const bulkDelete = () => {
+    if (!window.confirm(`選択中の ${selected.size} 件のノードを削除します。よろしいですか？`)) return;
+    [...selected].forEach((id) => onDelete(id));
+    setSelected(new Set());
+  };
+  const bulkColor = (colorKey) => {
+    onSetNodeColors([...selected].map(nodePathOf), colorKey);
+    setBulkAnchor(null);
+  };
+
+  // ── 全て折り畳み/展開 ──
+  const [collapseCmd, setCollapseCmd] = useState({ value: false, tick: 0 });
+
+  // ── データ入力の前へ/次へ ──
+  const [openReq, setOpenReq] = useState({ id: null, tick: 0 });
+  // データ入力ボタンが出るのはサブグループ内でRoleがあるノードだけ。表示中の順で前後を決める。
+  const navList = useMemo(
+    () => (isSub ? visible.filter(({ node }) => (node.data.roles || []).length > 0).map(({ node }) => node.id) : []),
+    [visible, isSub]
+  );
+  const navIndex = useMemo(() => new Map(navList.map((id, i) => [id, i])), [navList]);
+  const handleNavigate = (nodeId, dir) => {
+    const i = navList.indexOf(nodeId);
+    if (i < 0) return;
+    const target = navList[i + (dir === 'next' ? 1 : -1)];
+    if (target !== undefined) setOpenReq((p) => ({ id: target, tick: p.tick + 1 }));
+  };
+
+  const h = useStableHandlers({
+    flushStructureSave, onRefreshRoles, onReorder, onDelete, onCopy, onEditId, onSubGroupOpen,
+    onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
+    onUpdateFormData, onFlushFormData, onMoveToGroup, onSaveSubGroupSetting,
+    onSetColor: onSetNodeColors, onToggleSelect: toggleSelect, onNavigate: handleNavigate,
+    onSaveRoles, onServerRev,
+  });
 
   if (nodes.length === 0) {
     return (
@@ -1266,44 +1869,159 @@ const BlockCanvas = ({
     );
   }
 
+  const filtering = query.trim() !== '' || onlyWait || onlyRoles || onlyIssues;
+
   return (
     <Box sx={{ p: 2 }}>
-      {nodes.map((node, index) => (
-        <BlockCard
-          key={node.id}
-          node={node}
-          nodePath={isSub ? `${parentId}/${node.id}` : node.id}
-          index={index}
-          totalNodes={nodes.length}
-          isSub={isSub}
-          edges={edges}
-          allNodeIds={allNodeIds}
-          globalRoles={globalRoles}
-          roleDataCache={roleDataCache}
-          roleFormSchemas={roleFormSchemas}
-          classDataSchemas={classDataSchemas}
-          eventId={eventId}
-          subId={subId}
-          flushStructureSave={flushStructureSave}
-          onRefreshRoles={onRefreshRoles}
-          onMoveUp={() => onReorder(index, index - 1)}
-          onMoveDown={() => onReorder(index, index + 1)}
-          onDelete={onDelete}
-          onCopy={onCopy}
-          onEditId={onEditId}
-          onSubGroupOpen={onSubGroupOpen}
-          onAddRole={onAddRole}
-          onDeleteRole={onDeleteRole}
-          onSaveRole={onSaveRole}
-          onAddEdge={onAddEdge}
-          onRemoveEdge={onRemoveEdge}
-          onUpdateFormData={onUpdateFormData}
-          onMoveToGroup={onMoveToGroup}
-          subGroupSettingSchema={subGroupSettingSchema}
-          subGroupSettingDefaults={subGroupSettingDefaults}
-          onSaveSubGroupSetting={onSaveSubGroupSetting}
-        />
-      ))}
+      {/* ── 検索・フィルタ・一括操作ツールバー ── */}
+      <Paper elevation={3} sx={{ position: 'sticky', top: 0, zIndex: 5, mb: 1.5, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <TextField
+            size="small" placeholder="ID・説明・Role名で検索（スペース区切りでAND）"
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            sx={{ flex: 1, minWidth: 220 }}
+            InputProps={{
+              startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
+              endAdornment: query ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={() => setQuery('')}><CloseIcon fontSize="small" /></IconButton>
+                </InputAdornment>
+              ) : null,
+            }}
+          />
+          {settingEnabled && (
+            <Chip size="small" label="入力待ちのみ" clickable color={onlyWait ? 'warning' : 'default'}
+              variant={onlyWait ? 'filled' : 'outlined'} onClick={() => setOnlyWait(v => !v)} />
+          )}
+          <Chip size="small" label="Roleありのみ" clickable color={onlyRoles ? 'primary' : 'default'}
+            variant={onlyRoles ? 'filled' : 'outlined'} onClick={() => setOnlyRoles(v => !v)} />
+          {(validation.counts.error + validation.counts.warn) > 0 ? (
+            <Tooltip
+              title={(
+                <Box>
+                  {Object.entries(stableIssues)
+                    .flatMap(([id, list]) => list.filter((i) => i.level !== 'info').map((i) => `ノード${id}: ${i.message}`))
+                    .concat(validation.edgeIssues.map((i) => i.message))
+                    .slice(0, 12)
+                    .map((m, k) => <Typography key={k} variant="caption" sx={{ display: 'block' }}>{m}</Typography>)}
+                  <Typography variant="caption" sx={{ display: 'block', opacity: 0.7 }}>クリックで「問題ありのみ」表示</Typography>
+                </Box>
+              )}
+            >
+              <Chip
+                size="small" clickable
+                color={validation.counts.error > 0 ? 'error' : 'warning'}
+                variant={onlyIssues ? 'filled' : 'outlined'}
+                icon={validation.counts.error > 0 ? <ErrorOutlineIcon /> : <WarningAmberIcon />}
+                label={`問題 ${validation.counts.error + validation.counts.warn}件`}
+                onClick={() => setOnlyIssues((v) => !v)}
+              />
+            </Tooltip>
+          ) : (
+            <Chip size="small" variant="outlined" color="success" label="問題なし" />
+          )}
+          <Chip size="small" label="自動色分け" clickable color={autoTint ? 'secondary' : 'default'}
+            variant={autoTint ? 'filled' : 'outlined'} onClick={toggleAutoTint} />
+          <Button size="small" onClick={() => setCollapseCmd((p) => ({ value: true, tick: p.tick + 1 }))}>全て折畳</Button>
+          <Button size="small" onClick={() => setCollapseCmd((p) => ({ value: false, tick: p.tick + 1 }))}>全て展開</Button>
+          <Typography variant="caption" color="text.secondary">
+            {filtering ? `${visible.length} / ${nodes.length} 件` : `${nodes.length} 件`}
+          </Typography>
+        </Box>
+
+        {selected.size > 0 && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.5 }}>
+            <Typography variant="caption" fontWeight="bold">{selected.size} 件選択中</Typography>
+            {settingEnabled && (
+              <>
+                <Button size="small" color="warning" onClick={() => bulkWait(true)}>入力待ち ON</Button>
+                <Button size="small" onClick={() => bulkWait(false)}>入力待ち OFF</Button>
+              </>
+            )}
+            <Button size="small" onClick={(e) => setBulkAnchor(e.currentTarget)}>背景色</Button>
+            <Menu anchorEl={bulkAnchor} open={Boolean(bulkAnchor)} onClose={() => setBulkAnchor(null)}>
+              <Box sx={{ px: 2, py: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap', maxWidth: 220 }}>
+                <Tooltip title="自動">
+                  <Box onClick={() => bulkColor(null)} sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', border: '2px solid', borderColor: 'divider',
+                    background: 'conic-gradient(hsl(0,70%,60%), hsl(60,70%,60%), hsl(120,70%,60%), hsl(180,70%,60%), hsl(240,70%,60%), hsl(300,70%,60%), hsl(0,70%,60%))' }} />
+                </Tooltip>
+                {NODE_COLOR_PRESETS.map((p) => (
+                  <Tooltip key={p.key} title={p.label}>
+                    <Box onClick={() => bulkColor(p.key)} sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', bgcolor: hueSwatch(p.hue) }} />
+                  </Tooltip>
+                ))}
+                <Tooltip title="色なし">
+                  <Box onClick={() => bulkColor('none')} sx={{ width: 22, height: 22, borderRadius: '50%', cursor: 'pointer', bgcolor: '#fff', border: '2px solid', borderColor: 'divider' }} />
+                </Tooltip>
+              </Box>
+            </Menu>
+            <Button size="small" color="error" onClick={bulkDelete}>削除</Button>
+            <Box sx={{ flex: 1 }} />
+            <Button size="small" onClick={() => setSelected(new Set(visible.map(({ node }) => node.id)))}>表示中を全選択</Button>
+            <Button size="small" onClick={() => setSelected(new Set())}>選択解除</Button>
+          </Box>
+        )}
+      </Paper>
+
+      {visible.length === 0 && (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+          条件に一致するノードがありません
+        </Typography>
+      )}
+
+      {visible.map(({ node, index }) => {
+        const nodePath = nodePathOf(node.id);
+        const navPos = navIndex.get(node.id);
+        const colorKey = nodeColors?.[nodePath] ?? (autoTint ? undefined : 'none');
+        return (
+          <BlockCard
+            key={node.id}
+            node={node}
+            nodePath={nodePath}
+            index={index}
+            totalNodes={nodes.length}
+            isSub={isSub}
+            edges={edges}
+            allNodeIds={allNodeIds}
+            globalRoles={globalRoles}
+            nodeRoleCache={roleDataCache?.[nodePath]}
+            roleFormSchemas={roleFormSchemas}
+            classDataSchemas={classDataSchemas}
+            eventId={eventId}
+            subId={subId}
+            flushStructureSave={h.flushStructureSave}
+            onRefreshRoles={h.onRefreshRoles}
+            onReorder={h.onReorder}
+            onDelete={h.onDelete}
+            onCopy={h.onCopy}
+            onEditId={h.onEditId}
+            onSubGroupOpen={h.onSubGroupOpen}
+            onAddRole={h.onAddRole}
+            onDeleteRole={h.onDeleteRole}
+            onSaveRole={h.onSaveRole}
+            onAddEdge={h.onAddEdge}
+            onRemoveEdge={h.onRemoveEdge}
+            onUpdateFormData={h.onUpdateFormData}
+            onFlushFormData={h.onFlushFormData}
+            onMoveToGroup={h.onMoveToGroup}
+            subGroupSettingSchema={subGroupSettingSchema}
+            subGroupSettingDefaults={subGroupSettingDefaults}
+            onSaveSubGroupSetting={h.onSaveSubGroupSetting}
+            colorKey={colorKey}
+            onSetColor={h.onSetColor}
+            selected={selected.has(node.id)}
+            onToggleSelect={h.onToggleSelect}
+            collapseCmd={collapseCmd}
+            openTick={openReq.id === node.id ? openReq.tick : 0}
+            hasPrev={navPos !== undefined && navPos > 0}
+            hasNext={navPos !== undefined && navPos < navList.length - 1}
+            onNavigate={h.onNavigate}
+            onSaveRoles={h.onSaveRoles}
+            onServerRev={h.onServerRev}
+            issues={stableIssues[String(node.id)]}
+          />
+        );
+      })}
     </Box>
   );
 };
@@ -1317,6 +2035,15 @@ function ScenarioEventTransition() {
   const subId = params.subId;
 
   const [isLoading, setIsLoading] = useState(true);
+  // 保存状態の表示用。以前は保存のたびに isLoading を立てて全画面スピナー(Backdrop)で
+  // 画面全体をブロックしていたため、100件超のサブグループでは編集のたびに操作が止まっていた。
+  // 保存中も操作を続けられるよう、isLoading(読み込み専用)とは分けて持つ。
+  const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'dirty' | 'saving' | 'error'
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const dirtyRef = useRef(false);
+  // サーバー上の _sub.json のリビジョン(自分が最後に読んだ/書いたもの)。他タブ/他ユーザーの更新検知に使う。
+  const knownRevRef = useRef(null);
+  const [externalRev, setExternalRev] = useState(null);
   const [tabs, setTabs] = useState([{ id: 'main', label: 'Group遷移', type: 'group' }]);
   const [activeTab, setActiveTab] = useState('main');
   const [tabData, setTabData] = useState({ main: { nodes: [], edges: [] } });
@@ -1640,13 +2367,17 @@ function ScenarioEventTransition() {
   // 新しいグループは作成せず、警告としてdiagnosticsに積むだけに留める
   // (案内コメントの消し忘れや見出しの書き間違いだけで、意図せずグループが
   //  増えてしまう事故を防ぐため)。
-  const applyEditSections = (sections, subTreesRef, targetsRef, allowNewGroups) => {
+  // dryRun=true のときはツリー(subTreesRef)を一切変更せず、セクションごとの差分(changes)だけを返す
+  // (適用前の確認ダイアログ用)。診断(diagnostics)は通常の適用と同じ内容になる。
+  const applyEditSections = (sections, subTreesRef, targetsRef, allowNewGroups, dryRun = false) => {
     const diagnostics = [];
     const touchedSubIds = new Set();
+    const changes = [];
 
     for (const section of sections) {
       const key = `${section.subId}::${section.pathKey}`;
       let targetNode = targetsRef.current[key];
+      let isNew = false;
       if (!targetNode) {
         const tree = subTreesRef.current[section.subId];
         if (!tree) {
@@ -1665,15 +2396,22 @@ function ScenarioEventTransition() {
         }
         // 見出しに対応する既存ノードが無く、かつ新規グループ作成が許可されている
         // 場合のみ、新しいグループ(または新しいサブグループ)として作成する。
-        targetNode = ensureAllEditNodePath(tree, section.pathKey.split('/'));
-        targetsRef.current[key] = targetNode;
+        if (dryRun) {
+          isNew = true; // 確認用: 実際のツリーはまだ変更しない
+        } else {
+          targetNode = ensureAllEditNodePath(tree, section.pathKey.split('/'));
+          targetsRef.current[key] = targetNode;
+        }
       }
+      const baseNode = targetNode || { data: {} };
       // サブグループ設定行('#@ ...')。書かれたフィールドだけ既存値(無ければデフォルト)を上書きし、
       // 省略したフィールドは既存の値のまま。エラーがあればこのセクションは適用しない(Roleと同じ)。
       let nextSetting = null;
+      let baseSetting = null;
       let settingHasError = false;
       if (subGroupSettingSchema) {
-        nextSetting = getNodeSetting(targetNode, subGroupSettingSchema, subGroupSettingDefaults);
+        nextSetting = getNodeSetting(baseNode, subGroupSettingSchema, subGroupSettingDefaults);
+        baseSetting = nextSetting;
         extractSubGroupSettingLines(section.bodyLines).forEach((lineText) => {
           const { data: written, diagnostics: settingDiagnostics } = compileSubGroupSetting(
             lineText, subGroupSettingSchema, classDataSchemas
@@ -1694,7 +2432,7 @@ function ScenarioEventTransition() {
         });
       }
 
-      const existingRoles = (targetNode.data && targetNode.data.roles) || [];
+      const existingRoles = (baseNode.data && baseNode.data.roles) || [];
       const { roles: compiledRoles, diagnostics: sectionDiagnostics } = compileDocument(
         section.bodyLines.join('\n'), roleFormSchemas, existingRoles, classDataSchemas
       );
@@ -1706,13 +2444,26 @@ function ScenarioEventTransition() {
         }));
       if (sectionDiagnostics.some((d) => d.severity === 'error') || settingHasError) continue;
 
+      if (dryRun) {
+        const settingChanges = nextSetting
+          ? nextSetting
+            .map((n, i) => ({ name: n.name, from: baseSetting[i] ? baseSetting[i].value : undefined, to: n.value }))
+            .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to))
+          : [];
+        changes.push({
+          subId: section.subId, pathKey: section.pathKey, isNew,
+          diff: diffRoles(existingRoles, compiledRoles), settingChanges,
+        });
+        continue;
+      }
+
       targetNode.data = targetNode.data || {};
       targetNode.data.roles = compiledRoles;
       if (nextSetting) targetNode.data[SUBGROUP_SETTING_NODE_KEY] = nextSetting;
       touchedSubIds.add(section.subId);
     }
 
-    return { diagnostics, touchedSubIds };
+    return { diagnostics, touchedSubIds, changes };
   };
 
   const handleOpenAllEditDialog = async () => {
@@ -1749,6 +2500,52 @@ function ScenarioEventTransition() {
     } finally {
       setAllEditLoading(false);
     }
+  };
+
+  // ── 適用前の確認(差分プレビュー) ──
+  // 全体編集/Sub編集は、押した瞬間に複数のSubのRoleを丸ごと書き換えてサーバーへ保存し、
+  // さらに画面を再読み込みする。見出しの書き間違いやコピペのミスで意図しない変更が
+  // 入っても気付けなかったため、dry-runで差分を出して確認してから実際に適用する。
+  const [editPreview, setEditPreview] = useState(null); // { kind: 'all'|'sub', changes, total }
+  const summarizeChanges = (changes) => changes.reduce(
+    (n, c) => n + c.diff.totalChanges + c.settingChanges.length + (c.isNew ? 1 : 0), 0
+  );
+
+  const requestApplyAllEdit = () => {
+    const sections = parseEditSections(allEditText);
+    const { diagnostics, changes } = applyEditSections(
+      sections, allEditSubTreesRef, allEditTargetsRef, allEditAllowNewGroups, true
+    );
+    setAllEditDiagnostics(diagnostics);
+    if (diagnostics.length > 0) {
+      showSnack('エラーがあるため一部(またはすべて)適用できませんでした。内容を確認してください。', 'error');
+      return;
+    }
+    const total = summarizeChanges(changes);
+    if (total === 0) { showSnack('変更はありません'); return; }
+    setEditPreview({ kind: 'all', changes, total });
+  };
+
+  const requestApplySubEdit = () => {
+    if (!eventId || !subId) return;
+    const allSections = parseEditSections(subEditText);
+    const sections = allSections.filter((s) => String(s.subId) === String(subId));
+    const foreignSections = allSections.filter((s) => String(s.subId) !== String(subId));
+    const { diagnostics, changes } = applyEditSections(
+      sections, subEditSubTreesRef, subEditTargetsRef, subEditAllowNewGroups, true
+    );
+    foreignSections.forEach((s) => diagnostics.push({
+      message: `このSub編集では別Subの見出しは扱えません（SUB:${s.subId} NODE:${s.pathKey}）。複数Subをまたいで編集する場合は「全体編集(全Sub一括)」を使ってください`,
+      subId: s.subId, path: s.pathKey,
+    }));
+    setSubEditDiagnostics(diagnostics);
+    if (diagnostics.length > 0) {
+      showSnack('エラーがあるため適用できませんでした。内容を確認してください。', 'error');
+      return;
+    }
+    const total = summarizeChanges(changes);
+    if (total === 0) { showSnack('変更はありません'); return; }
+    setEditPreview({ kind: 'sub', changes, total });
   };
 
   const handleApplyAllEdit = async () => {
@@ -2063,7 +2860,11 @@ function ScenarioEventTransition() {
     // （読み込みが完了するまでmainタブへの保存を禁止するため）。
     loadedTabsRef.current.main = false;
     fetch(`/api/scenario-event/${eventId}/sub/${subId}/transition`, { signal: ctrl.signal })
-      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        knownRevRef.current = res.headers.get('X-Sub-Rev');
+        return res.json();
+      })
       .then(result => {
         const nodes = result.nodes || [];
         const edges = (result.edges || []).filter(e =>
@@ -2109,6 +2910,38 @@ function ScenarioEventTransition() {
     return () => window.removeEventListener('reorderNode', handler);
   }, [activeTab]);
 
+  // サブグループタブ(subgroup-<pid>)の現在の内容を、メインタブ側の node.data.subgroups[pid] へ反映する。
+  // 保存時にサーバーへ送る形(id/type/position/data{...})へ揃えてから入れる。
+  const syncMainSubgroup = (pid) => {
+    const subTabId = `subgroup-${pid}`;
+    const sub = tabDataRef.current[subTabId];
+    const main = tabDataRef.current.main;
+    if (!sub || !main) return;
+    const sgData = {
+      nodes: sub.nodes.map(n => ({
+        id: n.id, type: n.type || 'subGroupNode',
+        position: n.position || { x: 0, y: 0 },
+        data: {
+          label: n.data.label, description: n.data.description || '', roles: n.data.roles || [], subgroups: n.data.subgroups || {}, isSubGroup: n.data.isSubGroup,
+          ...(n.data[SUBGROUP_SETTING_NODE_KEY] !== undefined ? { [SUBGROUP_SETTING_NODE_KEY]: n.data[SUBGROUP_SETTING_NODE_KEY] } : {}),
+        },
+        draggable: true,
+      })),
+      edges: sub.edges,
+    };
+    const next = {
+      ...tabDataRef.current,
+      main: {
+        ...main,
+        nodes: main.nodes.map(n => (n.id === String(pid)
+          ? { ...n, data: { ...n.data, subgroups: { ...(n.data.subgroups || {}), [String(pid)]: sgData } } }
+          : n)),
+      },
+    };
+    tabDataRef.current = next;
+    setTabData(next);
+  };
+
   // ── 保存処理本体 ──
   // 常に tabDataRef.current / eventIdRef.current / subIdRef.current という
   // 「最新値」だけを参照する。呼び出し元から値を引数で受け取らないことで、
@@ -2132,7 +2965,8 @@ function ScenarioEventTransition() {
     }
 
     savingRef.current = true;
-    setIsLoading(true);
+    dirtyRef.current = false; // この保存は「今の」データを送る。以後に編集があれば再びdirtyになる
+    setSaveStatus('saving');
 
     const pid = tabId.startsWith('subgroup-') ? tabId.replace('subgroup-', '') : null;
     const saveData = {
@@ -2156,15 +2990,29 @@ function ScenarioEventTransition() {
     // サーバー側に反映されたことを保証してから、続けてRoleのフィールド値を
     // 保存したい」呼び出し元(handleApplyDsl)のために公開している。
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveData) })
-      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+      .then(async res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        try {
+          const j = await res.json();
+          if (j && j.rev) knownRevRef.current = j.rev;
+        } catch (e) { /* 旧サーバー(revなし)は無視 */ }
+        // ── メインタブの node.data.subgroups[pid] を、いま保存した内容に揃える ──
+        // メインタブは「起動時に読み込んだ subgroups のコピー」を持っており、保存時にそれを
+        // node.data.subgroups として丸ごと送る。サブグループタブで編集・保存した内容が
+        // メイン側のコピーに反映されないままだと、次にメインタブを保存した時点で
+        // 古い内容がサーバーへ上書きされ、サブグループ側の編集が巻き戻ってしまう。
+        if (pid) syncMainSubgroup(pid);
+        setSaveStatus(dirtyRef.current ? 'dirty' : 'saved');
+        setLastSavedAt(Date.now());
+      })
       .catch(e => {
         console.error('保存エラー:', e);
         showSnack('保存に失敗しました。再度お試しください', 'error');
+        setSaveStatus('error');
         throw e;
       })
       .finally(() => {
         savingRef.current = false;
-        setIsLoading(false);
         // 保存中に来た最新の保存要求があれば、ここで1回だけ実行する
         if (pendingSaveRef.current) {
           const nextTabId = pendingSaveRef.current;
@@ -2186,6 +3034,8 @@ function ScenarioEventTransition() {
 
   // ノード編集などの操作後に呼ぶ自動保存（デバウンスされる）
   const scheduleSave = useCallback(() => {
+    dirtyRef.current = true;
+    setSaveStatus((s) => (s === 'saving' ? s : 'dirty'));
     debouncedAutoSaveRef.current();
   }, []);
 
@@ -2245,6 +3095,7 @@ function ScenarioEventTransition() {
 
   // ── ノード操作 ──
   const updateTabData = (updater) => {
+    pushHistory();
     setTabData(prev => {
       const updated = typeof updater === 'function' ? updater(prev) : updater;
       // setState自体は非同期でも、参照(tabDataRef)はここで同期的に
@@ -2429,6 +3280,54 @@ function ScenarioEventTransition() {
     scheduleSave();
   };
 
+  // 複数Role分のフィールド値を、サーバーへ「1リクエスト」でまとめて保存する(role-data-batch)。
+  // サーバー側も1回の読み書きで済むため、Role数に比例して遅くならず、並行保存による取りこぼしも起きない。
+  // items: [{ uniqueId, formData }]
+  const handleSaveRoles = (nodePath, nodeId, items) => {
+    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return Promise.resolve(); }
+    if (!items || items.length === 0) return Promise.resolve();
+    setSaveStatus('saving');
+    return fetch(`/api/scenario-event/${eventId}/sub/${subId}/role-data-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: items.map(it => ({ nodePath, uniqueId: it.uniqueId, formData: it.formData })) }),
+    })
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+      .then((result) => {
+        if (result && result.rev) knownRevRef.current = result.rev;
+        const byUid = {};
+        items.forEach(it => { byUid[it.uniqueId] = it.formData; });
+        // キャッシュキーは nodePath (例: "1" と "1/1" を区別)。node.id だけだと親子で同IDのとき混線する。
+        setRoleDataCache(prev => ({ ...prev, [nodePath]: { ...(prev[nodePath] || {}), ...byUid } }));
+        updateTabData(prev => ({
+          ...prev,
+          [activeTab]: {
+            ...prev[activeTab],
+            nodes: prev[activeTab].nodes.map(n =>
+              n.id === nodeId
+                ? { ...n, data: { ...n.data, roles: n.data.roles.map(r => (byUid[r.uniqueId] !== undefined ? { ...r, data: byUid[r.uniqueId] } : r)) } }
+                : n
+            )
+          }
+        }));
+        // サブグループタブで保存した場合、メインタブ側の古いコピーも揃える
+        if (activeTab.startsWith('subgroup-')) syncMainSubgroup(activeTab.replace('subgroup-', ''));
+        // サーバー上のファイルにまだ無いRole(構造が未保存の新規Role等)は、通常のツリー保存で書き込む
+        const missed = (result && result.missed) || [];
+        if (missed.length > 0) {
+          scheduleSave();
+        } else {
+          setSaveStatus(dirtyRef.current ? 'dirty' : 'saved');
+          setLastSavedAt(Date.now());
+        }
+      })
+      .catch(e => {
+        showSnack('保存エラー: ' + e.message, 'error');
+        setSaveStatus('error');
+        throw e; // 呼び出し側(Drawerを閉じる処理など)が失敗を検知できるようにする
+      });
+  };
+
   const handleSaveRole = (nodePathOrId, nodeIdMaybe, uniqueIdMaybe, formDataMaybe) => {
     // 後方互換: (nodeId, uniqueId, formData) でも (nodePath, nodeId, uniqueId, formData) でも呼べる
     let nodePath, nodeId, uniqueId, formData;
@@ -2443,55 +3342,140 @@ function ScenarioEventTransition() {
       uniqueId = nodeIdMaybe;
       formData = uniqueIdMaybe;
     }
-    if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return Promise.resolve(); }
-    // このPromiseを返すようにしているのは、一括保存(handleBatchSave)や
-    // Drawerを閉じる際の自動保存(RoleDataDrawer.handleClose)が、同じSubの
-    // JSONファイルに対してread-modify-writeするサーバー側処理
-    // (/api/save-role-data → write_sub_event_transition)を、複数Role分
-    // "同時に(並行して)"叩いてしまわないようにするため。並行に投げると、
-    // 後から到着したリクエストが前の書き込み結果を読む前の古いデータを
-    // 読み込んでしまい、先に保存したはずのRoleの変更が上書きで消える
-    // (＝画面上は保存済みに見えるのにサーバー側には反映されない)不具合があった。
-    // 呼び出し側でこのPromiseをawaitし、1件ずつ順番に保存することで解消する。
-    return fetch(`/api/save-role-data/${eventId}/${subId}/${nodeId}/${uniqueId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ formData }),
-    })
-      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
-      .then(() => {
-        // キャッシュキーは nodePath (例: "1" と "1/1" を区別)。node.id だけだと
-        // 親ノードとサブグループ内の同IDノードでデータが混線する。
-        setRoleDataCache(prev => ({
-          ...prev,
-          [nodePath]: { ...(prev[nodePath] || {}), [uniqueId]: formData }
-        }));
-        updateTabData(prev => ({
-          ...prev,
-          [activeTab]: {
-            ...prev[activeTab],
-            nodes: prev[activeTab].nodes.map(n =>
-              n.id === nodeId
-                ? { ...n, data: { ...n.data, roles: n.data.roles.map(r => r.uniqueId === uniqueId ? { ...r, data: formData } : r) } }
-                : n
-            )
-          }
-        }));
-      })
-      .catch(e => {
-        showSnack('保存エラー: ' + e.message, 'error');
-        throw e; // 呼び出し側(一括保存など)が失敗を検知して後続を止められるようにする
-      });
+    return handleSaveRoles(nodePath, nodeId, [{ uniqueId, formData }]);
   };
 
-  const handleUpdateFormData = (nodePath, newState) => {
-    // フォームデータをキャッシュに反映（保存はhandleSaveRoleで行う）
-    // キーは nodePath (階層込み)。node.id だけだと親子で同IDのとき混線する。
-    setRoleDataCache(prev => {
-      const nodeCache = prev[nodePath] || {};
-      const updated = { ...nodeCache, ...newState };
-      return { ...prev, [nodePath]: updated };
+  // 入力中のフォーム値は「stateではなくref」に溜める。
+  // 以前は1文字(Colorなら1イベント)ごとに setRoleDataCache していたため、
+  // このコンポーネント全体と全BlockCardが再描画されて100件超で激重になっていた。
+  // Drawerを閉じたとき(handleFlushFormData)に、そのノード分だけ1回stateへ反映する。
+  // キーは nodePath (階層込み)。node.id だけだと親子で同IDのとき混線する。
+  const roleDataDraftRef = useRef({});
+
+  // ── Undo / Redo ──
+  // 遷移グラフ(nodes/edges。Roleの値も含む)の変更を、タブごとに最大50件まで遡れる。
+  // スナップショットは不変更新で共有構造のため、件数が多くても重くならない。
+  const historyRef = useRef({}); // tabId -> { undo: [], redo: [], at }
+  const [histInfo, setHistInfo] = useState({ undo: 0, redo: 0 });
+  const refreshHistInfo = () => {
+    const h = historyRef.current[activeTabRef.current];
+    setHistInfo({ undo: h ? h.undo.length : 0, redo: h ? h.redo.length : 0 });
+  };
+  const pushHistory = () => {
+    const tabId = activeTabRef.current;
+    const snap = tabDataRef.current[tabId];
+    if (!snap) return;
+    let h = historyRef.current[tabId];
+    if (!h) { h = { undo: [], redo: [], at: 0 }; historyRef.current[tabId] = h; }
+    const now = Date.now();
+    // 連続した変更(Drawerを閉じた時の複数Role保存など)は、最初の状態だけを1件として残す
+    if (h.undo.length > 0 && now - h.at < 400) { h.at = now; return; }
+    if (h.undo[h.undo.length - 1] === snap) return;
+    h.undo.push(snap);
+    if (h.undo.length > 50) h.undo.shift();
+    h.redo = [];
+    h.at = now;
+    refreshHistInfo();
+  };
+  const applyHistory = (dir) => {
+    const tabId = activeTabRef.current;
+    const h = historyRef.current[tabId];
+    if (!h) return;
+    const from = dir === 'undo' ? h.undo : h.redo;
+    const to = dir === 'undo' ? h.redo : h.undo;
+    const target = from.pop();
+    if (!target) return;
+    const cur = tabDataRef.current[tabId];
+    if (cur) to.push(cur);
+    h.at = 0;
+    const next = { ...tabDataRef.current, [tabId]: target };
+    tabDataRef.current = next;
+    setTabData(next);
+    // Drawer用のキャッシュ/入力途中の値は、戻す前の内容なので破棄する(開く時にRole側のdataから再構築される)
+    roleDataDraftRef.current = {};
+    setRoleDataCache({});
+    if (tabId.startsWith('subgroup-')) syncMainSubgroup(tabId.replace('subgroup-', ''));
+    scheduleSave();
+    refreshHistInfo();
+    showSnack(dir === 'undo' ? '元に戻しました' : 'やり直しました');
+  };
+  const applyHistoryRef = useRef(null);
+  applyHistoryRef.current = applyHistory;
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== 'z' && key !== 'y') return;
+      // 入力欄・CodeMirror・開いているDrawer/Dialogの中では、それぞれの取り消しを優先する
+      const t = e.target;
+      if (t && (t.closest && t.closest('input, textarea, [contenteditable="true"], .cm-editor'))) return;
+      if (document.querySelector('.MuiModal-root')) return;
+      e.preventDefault();
+      applyHistoryRef.current(key === 'y' || e.shiftKey ? 'redo' : 'undo');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  useEffect(() => { refreshHistInfo(); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 他のタブ/ユーザーによる更新の検知 ──
+  // サーバーのリビジョンが「自分が最後に読んだ/書いたもの」と違っていたら警告を出す。
+  // 保存をブロックはしない(このままなら自分の内容で上書きされることを、気付けるようにするのが目的)。
+  const noteRev = useCallback((rev) => { if (rev) knownRevRef.current = rev; }, []);
+  useEffect(() => {
+    if (!eventId || !subId) return undefined;
+    let stopped = false;
+    const check = async () => {
+      if (stopped || document.hidden || !knownRevRef.current || savingRef.current) return;
+      try {
+        const res = await fetch(`/api/scenario-event/${eventId}/sub/${subId}/rev`);
+        if (!res.ok) return;
+        const { rev } = await res.json();
+        if (!stopped && rev && rev !== knownRevRef.current && !savingRef.current) setExternalRev(rev);
+      } catch (e) { /* ネットワークエラーは無視 */ }
+    };
+    const onVisible = () => { if (!document.hidden) check(); };
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = setInterval(check, 30000);
+    return () => {
+      stopped = true;
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(timer);
+    };
+  }, [eventId, subId]);
+
+  // 未保存/保存中/保存失敗のままページを閉じようとしたら確認する
+  useEffect(() => {
+    if (saveStatus === 'saved') return undefined;
+    const h = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [saveStatus]);
+
+  // ── サブグループの背景色(UI専用。サーバーへは送らずブラウザに保存) ──
+  const colorStoreKey = `scn-node-colors:${eventId}:${subId}`;
+  const [nodeColors, setNodeColors] = useState({});
+  useEffect(() => {
+    try { setNodeColors(JSON.parse(localStorage.getItem(colorStoreKey) || '{}')); } catch (e) { setNodeColors({}); }
+  }, [colorStoreKey]);
+  const handleSetNodeColors = (paths, colorKey) => {
+    setNodeColors((prev) => {
+      const next = { ...prev };
+      paths.forEach((p) => { if (!colorKey) delete next[p]; else next[p] = colorKey; });
+      try { localStorage.setItem(colorStoreKey, JSON.stringify(next)); } catch (e) { /* ignore */ }
+      return next;
     });
+  };
+  const handleUpdateFormData = (nodePath, newState) => {
+    roleDataDraftRef.current[nodePath] = { ...(roleDataDraftRef.current[nodePath] || {}), ...newState };
+  };
+  const handleFlushFormData = (nodePath) => {
+    const draft = roleDataDraftRef.current[nodePath];
+    if (!draft) return;
+    delete roleDataDraftRef.current[nodePath];
+    setRoleDataCache(prev => ({ ...prev, [nodePath]: { ...(prev[nodePath] || {}), ...draft } }));
   };
 
   // ── 接続操作 ──
@@ -2729,6 +3713,40 @@ function ScenarioEventTransition() {
             </Button>
           </Tooltip>
 
+          <Tooltip title="元に戻す (Ctrl+Z)">
+            <span>
+              <IconButton size="small" disabled={histInfo.undo === 0} onClick={() => applyHistory('undo')}
+                sx={{ color: 'white', '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' } }}>
+                <UndoIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="やり直す (Ctrl+Shift+Z / Ctrl+Y)">
+            <span>
+              <IconButton size="small" disabled={histInfo.redo === 0} onClick={() => applyHistory('redo')}
+                sx={{ color: 'white', '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' } }}>
+                <RedoIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={saveStatus === 'error' ? 'クリックで再保存' : saveStatus === 'dirty' ? '自動保存待ち（クリックで今すぐ保存）' : ''}>
+            <Chip
+              size="small"
+              clickable={saveStatus === 'error' || saveStatus === 'dirty'}
+              onClick={saveStatus === 'error' || saveStatus === 'dirty' ? saveCurrentTab : undefined}
+              icon={saveStatus === 'saving' ? <CircularProgress size={12} sx={{ color: '#fff !important' }} /> : undefined}
+              label={
+                saveStatus === 'saving' ? '保存中…'
+                  : saveStatus === 'dirty' ? '未保存の変更'
+                    : saveStatus === 'error' ? '保存失敗（再試行）'
+                      : `保存済み${lastSavedAt ? ' ' + new Date(lastSavedAt).toLocaleTimeString('ja-JP') : ''}`
+              }
+              sx={{
+                color: '#fff', fontSize: '0.7rem',
+                bgcolor: saveStatus === 'error' ? 'error.main' : saveStatus === 'dirty' ? 'warning.main' : saveStatus === 'saving' ? 'info.main' : 'rgba(255,255,255,0.18)',
+              }}
+            />
+          </Tooltip>
           <Button variant="contained" size="small" color="success"
             startIcon={<SaveIcon />}
             onClick={saveCurrentTab}
@@ -2741,6 +3759,24 @@ function ScenarioEventTransition() {
 
       {/* ── メインコンテンツ ── */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
+        {externalRev && (
+          <Alert
+            severity="warning" sx={{ m: 2, mb: 0 }}
+            action={(
+              <>
+                <Button color="inherit" size="small" onClick={() => {
+                  if (saveStatus !== 'saved' && !window.confirm('未保存の変更があります。再読み込みすると失われます。よろしいですか？')) return;
+                  window.location.reload();
+                }}>再読み込み</Button>
+                <Button color="inherit" size="small" onClick={() => { knownRevRef.current = externalRev; setExternalRev(null); }}>
+                  無視（自分の内容で上書き）
+                </Button>
+              </>
+            )}
+          >
+            別のタブまたは別のユーザーが、このSubを更新した可能性があります。このまま保存すると、相手の変更を上書きすることがあります。
+          </Alert>
+        )}
         {/* 接続サマリー */}
         {renderConnectionSummary()}
 
@@ -2771,7 +3807,12 @@ function ScenarioEventTransition() {
           onAddEdge={handleAddEdge}
           onRemoveEdge={handleRemoveEdge}
           onUpdateFormData={handleUpdateFormData}
+          onFlushFormData={handleFlushFormData}
           onMoveToGroup={handleMoveToGroup}
+          nodeColors={nodeColors}
+          onSetNodeColors={handleSetNodeColors}
+          onSaveRoles={handleSaveRoles}
+          onServerRev={noteRev}
         />
       </Box>
 
@@ -2847,7 +3888,7 @@ function ScenarioEventTransition() {
           <Button onClick={handleOpenAllEditDialog} disabled={allEditLoading || allEditApplying}>再取得</Button>
           <Button
             variant="contained"
-            onClick={handleApplyAllEdit}
+            onClick={requestApplyAllEdit}
             disabled={allEditLoading || allEditApplying}
           >
             {allEditApplying ? '適用中...' : '適用'}
@@ -2933,7 +3974,7 @@ function ScenarioEventTransition() {
           </Tooltip>
           <Button
             variant="contained"
-            onClick={handleApplySubEdit}
+            onClick={requestApplySubEdit}
             disabled={subEditLoading || subEditApplying}
           >
             {subEditApplying ? '適用中...' : '適用'}
@@ -3006,6 +4047,44 @@ function ScenarioEventTransition() {
       </Dialog>
 
       {/* ── Snackbar ── */}
+      <Dialog open={Boolean(editPreview)} onClose={() => setEditPreview(null)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          適用内容の確認（{editPreview ? editPreview.total : 0}件の変更 / {editPreview ? editPreview.changes.filter((c) => summarizeChanges([c]) > 0).length : 0}グループ）
+        </DialogTitle>
+        <DialogContent dividers sx={{ maxHeight: '65vh' }}>
+          {editPreview && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {editPreview.changes.filter((c) => summarizeChanges([c]) > 0).map((c) => (
+                <Paper key={`${c.subId}::${c.pathKey}`} variant="outlined" sx={{ p: 1.25 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Typography variant="subtitle2" sx={{ fontFamily: 'monospace' }}>SUB:{c.subId} NODE:{c.pathKey}</Typography>
+                    {c.isNew && <Chip size="small" color="success" label="新規グループ" />}
+                  </Box>
+                  <DiffSummary diff={c.diff} settingChanges={c.settingChanges} />
+                </Paper>
+              ))}
+              <Typography variant="caption" color="text.secondary">
+                変更のないグループ: {editPreview.changes.filter((c) => summarizeChanges([c]) === 0).length}件（保存されません）
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditPreview(null)}>キャンセル</Button>
+          <Button
+            variant="contained" color="success"
+            disabled={allEditApplying || subEditApplying}
+            onClick={() => {
+              const kind = editPreview && editPreview.kind;
+              setEditPreview(null);
+              if (kind === 'all') handleApplyAllEdit(); else if (kind === 'sub') handleApplySubEdit();
+            }}
+          >
+            適用して保存
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar open={snack.open} autoHideDuration={3000} onClose={hideSnack} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
         <Alert onClose={hideSnack} severity={snack.severity} variant="filled" sx={{ minWidth: 220 }}>
           {snack.msg}

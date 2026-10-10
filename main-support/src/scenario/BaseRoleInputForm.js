@@ -22,6 +22,7 @@ import RemoveIcon from '@mui/icons-material/Remove';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
+import ColorizeIcon from '@mui/icons-material/Colorize';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
@@ -36,6 +37,22 @@ import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 // 最上位のインスタンスだけがフェッチを行い、結果をこのContext経由でネストした
 // 子インスタンスへ配る(子は自分ではフェッチしない)ことで、通信を1回に減らす。
 const RoleFormTypeOptionsContext = createContext(null);
+
+// ── 同一URLの「進行中」リクエストを1本にまとめる ──
+// データ入力Drawerには複数Roleのフォームが並ぶ。各フォームが最上位インスタンスとして
+// 同じ /api/enum-id などを同時に叩いていたため、開くたびにリクエストがRole数倍に
+// 膨らんでいた。完了したら破棄する(キャッシュはしない)ので古い値が残ることはない。
+const inFlightJson = new Map();
+const fetchJsonDeduped = (url, fallback) => {
+  if (inFlightJson.has(url)) return inFlightJson.get(url);
+  const p = fetch(url)
+    .then((res) => (res.ok ? res.json() : fallback))
+    .catch(() => fallback)
+    .finally(() => { inFlightJson.delete(url); });
+  inFlightJson.set(url, p);
+  return p;
+};
+
 
 // Vector のラベル定義
 const VECTOR_AXIS_LABELS = {
@@ -624,33 +641,195 @@ function BitValueEditor({ value, options, onChange }) {
 function toHex(v) {
   return Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0');
 }
-function ColorValueEditor({ value, onChange }) {
-  const v = value && typeof value === 'object' ? value : { r: 1, g: 1, b: 1, a: 1 };
-  const hex = `#${toHex(v.r)}${toHex(v.g)}${toHex(v.b)}`;
+const COLOR_DEFAULT = { r: 1, g: 1, b: 1, a: 1 };
+
+// ── Color入力の補助 ──
+// 16進数の直接入力 / スポイト / 最近使った色。最近使った色はブラウザ(localStorage)に保存する。
+const RECENT_COLORS_KEY = 'scn-recent-colors-v1';
+const RECENT_COLORS_MAX = 10;
+let recentColorsCache = null;
+const colorKey = (c) => `${toHex(c.r)}${toHex(c.g)}${toHex(c.b)}${Math.round((c.a ?? 1) * 100)}`;
+function getRecentColors() {
+  if (recentColorsCache === null) {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(RECENT_COLORS_KEY) || '[]');
+      recentColorsCache = Array.isArray(raw) ? raw.filter((c) => c && typeof c.r === 'number') : [];
+    } catch (e) {
+      recentColorsCache = [];
+    }
+  }
+  return recentColorsCache;
+}
+function pushRecentColor(c) {
+  const next = [{ r: c.r, g: c.g, b: c.b, a: c.a ?? 1 }, ...getRecentColors().filter((x) => colorKey(x) !== colorKey(c))]
+    .slice(0, RECENT_COLORS_MAX);
+  recentColorsCache = next;
+  try { window.localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next)); } catch (e) { /* 容量超過などは無視 */ }
+}
+// "#RGB" / "#RRGGBB" / "#RRGGBBAA"(#は省略可)を {r,g,b,a?} へ。不正ならnull。
+function parseHexColor(text) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(text).trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map((ch) => ch + ch).join('');
+  return {
+    r: parseInt(h.slice(0, 2), 16) / 255,
+    g: parseInt(h.slice(2, 4), 16) / 255,
+    b: parseInt(h.slice(4, 6), 16) / 255,
+    a: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : undefined,
+  };
+}
+
+// カラーピッカーのドラッグ中は input イベントが毎フレーム飛んでくる。
+// 以前は1イベントごとに「フォーム全体の再描画 → 親(BlockCard)のstate更新 →
+// roleDataCache更新 → 全サブグループの再描画」まで連鎖しており、これが
+// 「カラー編集がクソ重い」原因だった。
+// → 見た目(スウォッチ・hex・スライダー)はこのコンポーネント内のdraftだけで即時更新し、
+//   フォームへの確定(onChange)は「操作が止まって COLOR_COMMIT_MS 経過」
+//   「ピッカーを閉じた(native change)」「フォーカスが外れた」「アンマウント」のいずれかで1回だけ行う。
+const COLOR_COMMIT_MS = 150;
+const ColorValueEditor = React.memo(function ColorValueEditor({ value, onChange }) {
+  const external = value && typeof value === 'object' ? value : COLOR_DEFAULT;
+  const [draft, setDraft] = useState(external);
+  const draftRef = useRef(external);
+  const dirtyRef = useRef(false);
+  const timerRef = useRef(null);
+  const inputRef = useRef(null);
+  const mountedRef = useRef(true);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const [recents, setRecents] = useState(getRecentColors);
+  const [hexText, setHexText] = useState('');
+  const [hexFocused, setHexFocused] = useState(false);
+
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // 外部からの値変更(DSL適用・デフォルト反映・配列の並べ替え等)は、編集中でなければ取り込む
+  useEffect(() => {
+    if (dirtyRef.current) return;
+    const cur = draftRef.current;
+    if (cur.r === external.r && cur.g === external.g && cur.b === external.b && cur.a === external.a) return;
+    draftRef.current = external;
+    setDraft(external);
+  }, [external.r, external.g, external.b, external.a]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const flush = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
+    onChangeRef.current(draftRef.current);
+    pushRecentColor(draftRef.current);
+    if (mountedRef.current) setRecents(getRecentColors());
+  }, []);
+
+  const update = useCallback((next) => {
+    draftRef.current = next;
+    dirtyRef.current = true;
+    setDraft(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(flush, COLOR_COMMIT_MS);
+  }, [flush]);
+
+  // ピッカーを閉じたときに発火する native の change で確実に確定する
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return undefined;
+    el.addEventListener('change', flush);
+    return () => el.removeEventListener('change', flush);
+  }, [flush]);
+
+  // アンマウント時に未確定の値があれば確定(Drawerを閉じる直前の取りこぼし防止)
+  useEffect(() => () => flush(), [flush]);
+
+  const hex = `#${toHex(draft.r)}${toHex(draft.g)}${toHex(draft.b)}`;
+  const alpha = draft.a ?? 1;
+
+  // 16進入力欄は、入力中でなければ現在の色に追従させる
+  useEffect(() => { if (!hexFocused) setHexText(hex); }, [hex, hexFocused]);
+  const hexValid = hexText === '' || parseHexColor(hexText) !== null;
+
+  const applyColor = (c, { keepAlpha = true, commit = false } = {}) => {
+    update({ r: c.r, g: c.g, b: c.b, a: c.a !== undefined && !keepAlpha ? c.a : (c.a !== undefined ? c.a : draftRef.current.a) });
+    if (commit) flush();
+  };
+
+  const pickFromScreen = async () => {
+    try {
+      const result = await new window.EyeDropper().open(); // ユーザーがキャンセルすると例外
+      const c = parseHexColor(result.sRGBHex);
+      if (c) applyColor({ r: c.r, g: c.g, b: c.b }, { commit: true });
+    } catch (e) { /* キャンセル */ }
+  };
+
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      <input
-        type="color"
-        value={hex}
-        onChange={(e) => {
-          const h = e.target.value;
-          onChange({
-            r: parseInt(h.slice(1, 3), 16) / 255,
-            g: parseInt(h.slice(3, 5), 16) / 255,
-            b: parseInt(h.slice(5, 7), 16) / 255,
-            a: v.a,
-          });
-        }}
-        style={{ width: 44, height: 32, border: 'none', background: 'none', cursor: 'pointer' }}
-      />
-      <Box sx={{ width: 160 }}>
-        <Typography variant="caption">アルファ: {(v.a ?? 1).toFixed(2)}</Typography>
-        <Slider size="small" min={0} max={1} step={0.01} value={v.a ?? 1} onChange={(e, nv) => onChange({ ...v, a: nv })} />
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        <input
+          ref={inputRef}
+          type="color"
+          value={hex}
+          onChange={(e) => {
+            const c = parseHexColor(e.target.value);
+            if (c) update({ r: c.r, g: c.g, b: c.b, a: draftRef.current.a });
+          }}
+          onBlur={flush}
+          style={{ width: 44, height: 32, border: 'none', background: 'none', cursor: 'pointer' }}
+        />
+        <TextField
+          size="small"
+          value={hexText}
+          placeholder="#RRGGBB"
+          error={!hexValid}
+          onFocus={() => setHexFocused(true)}
+          onChange={(e) => {
+            const t = e.target.value;
+            setHexText(t);
+            const c = parseHexColor(t);
+            if (c) update({ r: c.r, g: c.g, b: c.b, a: c.a !== undefined ? c.a : draftRef.current.a });
+          }}
+          onBlur={() => { setHexFocused(false); flush(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); flush(); } }}
+          inputProps={{ maxLength: 9, style: { fontFamily: 'monospace', width: 92 } }}
+          title="#RGB / #RRGGBB / #RRGGBBAA（AAを付けるとアルファも設定）"
+        />
+        {typeof window !== 'undefined' && window.EyeDropper && (
+          <Tooltip title="スポイト（画面上の色を取得）">
+            <IconButton size="small" onClick={pickFromScreen}><ColorizeIcon fontSize="small" /></IconButton>
+          </Tooltip>
+        )}
+        <Box sx={{ width: 160 }}>
+          <Typography variant="caption">アルファ: {alpha.toFixed(2)}</Typography>
+          <Slider
+            size="small" min={0} max={1} step={0.01} value={alpha}
+            onChange={(e, nv) => update({ ...draftRef.current, a: nv })}
+            onChangeCommitted={flush}
+          />
+        </Box>
+        <Box sx={{
+          width: 28, height: 28, borderRadius: 1, border: '1px solid #ccc',
+          background: `rgba(${Math.round(draft.r * 255)},${Math.round(draft.g * 255)},${Math.round(draft.b * 255)},${alpha})`,
+        }} />
       </Box>
-      <Box sx={{ width: 28, height: 28, borderRadius: 1, border: '1px solid #ccc', background: `rgba(${v.r * 255},${v.g * 255},${v.b * 255},${v.a})` }} />
+      {recents.length > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+          <Typography variant="caption" color="text.secondary">最近:</Typography>
+          {recents.map((c) => (
+            <Tooltip key={colorKey(c)} title={`#${toHex(c.r)}${toHex(c.g)}${toHex(c.b)}  α${(c.a ?? 1).toFixed(2)}`}>
+              <Box
+                onClick={() => applyColor(c, { commit: true })}
+                sx={{
+                  width: 20, height: 20, borderRadius: '50%', cursor: 'pointer', border: '1px solid #ccc',
+                  background: `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},${c.a ?? 1})`,
+                  '&:hover': { outline: '2px solid', outlineColor: 'primary.main' },
+                }}
+              />
+            </Tooltip>
+          ))}
+        </Box>
+      )}
     </Box>
   );
-}
+});
 
 function hermite(p0, p1, t) {
   const dt = p1.time - p0.time || 1;
@@ -1268,16 +1447,12 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
 
     const loadData = async () => {
       try {
-        const [enumListRes, classIdListRes, classDataListRes, customOptionsRes] = await Promise.all([
-          fetch('/api/enum-id'),
-          fetch('/api/class-data-id'),
-          fetch('/api/class-data'),
-          fetch('/api/custom-class-data-type-options'),
+        const [enumList, classIdList, classDataList, customOptions] = await Promise.all([
+          fetchJsonDeduped('/api/enum-id', []),
+          fetchJsonDeduped('/api/class-data-id', []),
+          fetchJsonDeduped('/api/class-data', []),
+          fetchJsonDeduped('/api/custom-class-data-type-options', {}),
         ]);
-        const enumList = enumListRes.ok ? await enumListRes.json() : [];
-        const classIdList = classIdListRes.ok ? await classIdListRes.json() : [];
-        const classDataList = classDataListRes.ok ? await classDataListRes.json() : [];
-        const customOptions = customOptionsRes.ok ? await customOptionsRes.json() : {};
         const customClassIdList = customOptions.custom_class_id_list || [];
         // custom_class_schemas はすでにフィールド一覧(bit/color/bezierのoptions込み)が
         // まとまって返ってくるので、CustomClassData型は個別フェッチ不要でそのまま使える。
@@ -1286,24 +1461,21 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
         const enumPromises = enumList
           .filter(e => types.includes(e.name))
           .map(async e => {
-            const res = await fetch(`/api/enum/${encodeURIComponent(e.name)}`);
-            const data = res.ok ? await res.json() : [];
+            const data = await fetchJsonDeduped(`/api/enum/${encodeURIComponent(e.name)}`, []);
             return { [e.name]: data || [] };
           });
 
         const classIdPromises = classIdList
           .filter(c => types.includes(c.name))
           .map(async c => {
-            const res = await fetch(`/api/class-data-id/${encodeURIComponent(c.name)}`);
-            const data = res.ok ? await res.json() : { rows: [] };
+            const data = await fetchJsonDeduped(`/api/class-data-id/${encodeURIComponent(c.name)}`, { rows: [] });
             return { [c.name]: (data.rows || []).map(r => r.enum_property) };
           });
 
         const classDataPromises = classDataList
           .filter(c => types.includes(c.name))
           .map(async c => {
-            const res = await fetch(`/api/class-data/${encodeURIComponent(c.name)}`);
-            const data = res.ok ? await res.json() : [];
+            const data = await fetchJsonDeduped(`/api/class-data/${encodeURIComponent(c.name)}`, []);
             return { [c.name]: data || [] };
           });
 
@@ -1311,8 +1483,7 @@ const BaseRoleInputForm = ({ schema, initialData, onChange, eventId, subId, role
         const customClassIdPromises = customClassIdList
           .filter(name => types.includes(name))
           .map(async name => {
-            const res = await fetch(`/api/custom-class-data-id/${encodeURIComponent(name)}`);
-            const data = res.ok ? await res.json() : { rows: [] };
+            const data = await fetchJsonDeduped(`/api/custom-class-data-id/${encodeURIComponent(name)}`, { rows: [] });
             return { [name]: (data.rows || []).map(r => r.enum_property) };
           });
 
