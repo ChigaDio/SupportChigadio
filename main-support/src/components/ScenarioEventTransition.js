@@ -38,6 +38,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import BookmarksIcon from '@mui/icons-material/Bookmarks';
+import BuildIcon from '@mui/icons-material/Build';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -56,7 +57,11 @@ import {
 } from '../scenario/SubGroupSettingControls';
 import {
   listPresets, savePreset, deletePreset, getPresetData, getRoleClipboard, setRoleClipboard, makeUniqueIds,
+  refreshPresets, subscribePresets, getLocalOnlyCount, migrateLocalPresets,
 } from '../scenario/scenarioRolePresets';
+import { collectIndexFields, planIndexAdjust, applyIndexChanges } from '../scenario/scenarioIndexTools';
+import { renumberDuplicateNodes } from '../scenario/scenarioNodeUtils';
+import ScenarioIndexToolsDialog from '../scenario/ScenarioIndexToolsDialog';
 import { diffRoles, formatValue } from '../scenario/scenarioDiff';
 import { validateGraph, worstLevel } from '../scenario/scenarioValidation';
 import { debounce } from 'lodash';
@@ -107,6 +112,29 @@ const getNodeTint = (nodePath, colorKey) => {
   };
 };
 const hueSwatch = (hue) => `hsl(${hue}, 60%, 55%)`;
+
+// ============================================================
+// フィールドの type 補完
+// ============================================================
+// フォーム(BaseRoleInputForm)の出力は [{name, value, arraySize}] で type を持たないが、
+// サーバーの初期値やDSLが作るデータは [{name, type, value}] の形。保存データの形をそろえるため、
+// Roleのスキーマ(マスター定義)の type を補う。既に type があるものは変更しない。
+// キー順は {name, type, value, ...} にする。画面の状態にも入れておくことで、
+// 自動保存(ツリー全体の保存)でも type が消えないようにする。
+const withFieldTypes = (formData, schema) => {
+  if (!Array.isArray(formData) || !schema || !Array.isArray(schema.fields)) return formData;
+  const types = {};
+  schema.fields.forEach((f) => { if (f && f.name && f.type) types[f.name] = f.type; });
+  return formData.map((d) => {
+    if (!d || typeof d !== 'object' || d.type || !types[d.name]) return d;
+    const out = {};
+    Object.keys(d).forEach((k) => {
+      out[k] = d[k];
+      if (k === 'name') out.type = types[d.name];
+    });
+    return out;
+  });
+};
 
 // ============================================================
 // パフォーマンス用ヘルパー
@@ -728,6 +756,9 @@ const RoleDataDrawer = ({
   const [presetOverride, setPresetOverride] = useState({}); // uid -> プリセットから適用した値(フォームを再初期化させる)
   const [presetMenu, setPresetMenu] = useState(null); // { anchorEl, role }
   const [, bumpPresetView] = useState(0);
+  // プリセットはサーバーで共有される。開いた時に最新を取得し、変更(自分/取得)があれば再描画する。
+  useEffect(() => subscribePresets(() => bumpPresetView((n) => n + 1)), []);
+  useEffect(() => { if (open) refreshPresets(); }, [open]);
   const clip = getRoleClipboard();
   const currentRoleData = (role) => formDataState[role.uniqueId] || role.data || [];
   const toClipItem = (role) => ({ id: role.id, name: role.name, branchType: role.branchType, data: currentRoleData(role) });
@@ -746,15 +777,23 @@ const RoleDataDrawer = ({
     if (!onPasteRoles) return;
     await onPasteRoles(getRoleClipboard());
   };
-  const handleSavePreset = (role) => {
-    const name = window.prompt(`「${role.name}」の現在の値を、プリセットとして保存します。プリセット名:`, '');
+  const handleSavePreset = async (role) => {
+    const name = window.prompt(`「${role.name}」の現在の値を、プリセットとして保存します（チームで共有されます）。プリセット名:`, '');
     if (name === null) return;
-    if (!savePreset(role.name, name, currentRoleData(role))) {
-      showSnack('プリセットを保存できませんでした（名前が空、または保存領域がいっぱいです）', 'error');
+    const r = await savePreset(role.name, name, currentRoleData(role));
+    if (!r.ok) {
+      showSnack(r.error || 'プリセットを保存できませんでした（名前が空、または保存領域がいっぱいです）', 'error');
       return;
     }
-    bumpPresetView((n) => n + 1);
-    showSnack(`プリセット「${name.trim()}」を保存しました`);
+    showSnack(r.shared
+      ? `プリセット「${name.trim()}」を共有プリセットとして保存しました`
+      : `サーバーに接続できなかったため、「${name.trim()}」はこのブラウザにだけ保存しました（後でサーバーへ移行できます）`,
+    r.shared ? 'success' : 'warning');
+  };
+  const handleMigratePresets = async () => {
+    const r = await migrateLocalPresets();
+    if (!r.ok) { showSnack('サーバーへ移行できませんでした。接続を確認してください', 'error'); return; }
+    showSnack(`ブラウザ内のプリセットを共有しました（取り込み ${r.imported}件${r.skipped ? ` / 同名のためスキップ ${r.skipped}件` : ''}）`);
   };
   const handleApplyPreset = (role, presetName) => {
     const data = getPresetData(role.name, presetName);
@@ -964,7 +1003,7 @@ const RoleDataDrawer = ({
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="プリセット（保存 / 呼び出し）">
-                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); setPresetMenu({ anchorEl: e.currentTarget, role }); }}>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); setPresetMenu({ anchorEl: e.currentTarget, role }); refreshPresets(); }}>
                         <BookmarksIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -1014,18 +1053,31 @@ const RoleDataDrawer = ({
           )}
           {presetMenu && listPresets(presetMenu.role.name).map((p) => (
             <MenuItem key={p.name} onClick={() => handleApplyPreset(presetMenu.role, p.name)}>
-              <ListItemText primary={p.name} secondary={new Date(p.savedAt).toLocaleString('ja-JP')} />
+              <ListItemText
+                primary={p.name}
+                secondary={`${p.local ? 'このブラウザのみ（未共有）' : '共有'} ・ ${new Date(p.savedAt).toLocaleString('ja-JP')}`}
+              />
               <IconButton
                 size="small" sx={{ ml: 2 }}
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.stopPropagation();
-                  if (window.confirm(`プリセット「${p.name}」を削除しますか？`)) { deletePreset(presetMenu.role.name, p.name); bumpPresetView((n) => n + 1); }
+                  if (!window.confirm(`プリセット「${p.name}」を削除しますか？${p.local ? '' : '（チーム全員から消えます）'}`)) return;
+                  const ok = await deletePreset(presetMenu.role.name, p.name);
+                  if (!ok) showSnack('削除できませんでした。サーバーとの接続を確認してください', 'error');
                 }}
               >
                 <DeleteIcon fontSize="small" />
               </IconButton>
             </MenuItem>
           ))}
+          {presetMenu && getLocalOnlyCount() > 0 && (
+            <MenuItem onClick={() => { setPresetMenu(null); handleMigratePresets(); }}>
+              <ListItemText
+                primary={`ブラウザ内のプリセット ${getLocalOnlyCount()}件をサーバーへ移行`}
+                secondary="チームで共有できるようになります（同名が既にあれば上書きしません）"
+              />
+            </MenuItem>
+          )}
         </Menu>
 
         <Dialog open={Boolean(dslPreview)} onClose={() => setDslPreview(null)} maxWidth="sm" fullWidth>
@@ -1133,7 +1185,7 @@ const BlockCardInner = ({
   onUpdateFormData, onFlushFormData, onMoveToGroup,
   subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
   colorKey, onSetColor, selected, onToggleSelect, collapseCmd, openTick, hasPrev, hasNext, onNavigate,
-  onSaveRoles, onServerRev, issues,
+  onSaveRoles, onServerRev, issues, onOpenIndexTools,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const cardRef = useRef(null);
@@ -1466,6 +1518,10 @@ const BlockCardInner = ({
         <MenuItem onClick={() => { setShowMoveDialog(true); setAnchorEl(null); }}>
           <ArrowForwardIcon fontSize="small" sx={{ mr: 1 }} />別グループへ移動
         </MenuItem>
+        <MenuItem onClick={() => { setAnchorEl(null); onOpenIndexTools(node.id); }}>
+          <BuildIcon fontSize="small" sx={{ mr: 1 }} />
+          ここから以降のインデックスを調整…
+        </MenuItem>
         <MenuItem
           disabled={getRoleClipboard().length === 0}
           onClick={() => { setAnchorEl(null); handlePasteRoles(); }}
@@ -1721,7 +1777,7 @@ const BlockCanvas = ({
   onAddRole, onDeleteRole, onSaveRole, onAddEdge, onRemoveEdge,
   onUpdateFormData, onFlushFormData, onMoveToGroup,
   subGroupSettingSchema, subGroupSettingDefaults, onSaveSubGroupSetting,
-  nodeColors, onSetNodeColors, onSaveRoles, onServerRev,
+  nodeColors, onSetNodeColors, onSaveRoles, onServerRev, onApplyIndexChanges, onRenumberDuplicates,
 }) => {
   // ノード内容が変わっても、ID一覧が同じなら同じ配列参照を使う(memo化したカードを再描画させない)
   const idsKey = nodes.map(n => n.id).join('\u0000');
@@ -1754,6 +1810,12 @@ const BlockCanvas = ({
     return out;
   }, [validation]);
   const [onlyIssues, setOnlyIssues] = useState(false);
+
+  // ── Utils(インデックス一括調整 / 重複IDの振り直し) ──
+  const [toolsAnchor, setToolsAnchor] = useState(null);
+  const [indexDlg, setIndexDlg] = useState(null); // { start }
+  // 重複IDの件数(2番目以降の件数)。バッジで見つかった問題を、1クリックで解消するために使う。
+  const dupPlan = useMemo(() => renumberDuplicateNodes(nodes), [nodes]);
 
   // ── 検索・フィルタ ──
   const [query, setQuery] = useState('');
@@ -1854,6 +1916,7 @@ const BlockCanvas = ({
     onUpdateFormData, onFlushFormData, onMoveToGroup, onSaveSubGroupSetting,
     onSetColor: onSetNodeColors, onToggleSelect: toggleSelect, onNavigate: handleNavigate,
     onSaveRoles, onServerRev,
+    onOpenIndexTools: (startId) => setIndexDlg({ start: String(startId) }),
   });
 
   if (nodes.length === 0) {
@@ -1920,6 +1983,30 @@ const BlockCanvas = ({
           ) : (
             <Chip size="small" variant="outlined" color="success" label="問題なし" />
           )}
+          {dupPlan.renamed.length > 0 && (
+            <Tooltip title={`同じ階層で重複しているIDを、重複した2番目以降だけ未使用のIDへ振り直します（${dupPlan.renamed.map((r) => `${r.from}→${r.to}`).join(', ')}）`}>
+              <Button size="small" color="error" variant="outlined" startIcon={<BuildIcon />} onClick={onRenumberDuplicates}>
+                重複IDを振り直す（{dupPlan.renamed.length}件）
+              </Button>
+            </Tooltip>
+          )}
+          <Button size="small" startIcon={<BuildIcon />} onClick={(e) => setToolsAnchor(e.currentTarget)}>Utils</Button>
+          <Menu anchorEl={toolsAnchor} open={Boolean(toolsAnchor)} onClose={() => setToolsAnchor(null)}>
+            <MenuItem onClick={() => {
+              setToolsAnchor(null);
+              const firstSelected = nodes.find((n) => selected.has(n.id));
+              const first = firstSelected || (visible[0] && visible[0].node);
+              if (first) setIndexDlg({ start: String(first.id) });
+            }}>
+              <ListItemText primary="インデックスを一括調整…" secondary="選択中(なければ先頭)のサブグループ以降の text_list_index / voice_ref をずらす・連番にする" />
+            </MenuItem>
+            <MenuItem disabled={dupPlan.renamed.length === 0} onClick={() => { setToolsAnchor(null); onRenumberDuplicates(); }}>
+              <ListItemText
+                primary={`重複しているIDを振り直す${dupPlan.renamed.length > 0 ? `（${dupPlan.renamed.length}件）` : ''}`}
+                secondary="同じ階層で重複したIDの2番目以降を、未使用のIDへ"
+              />
+            </MenuItem>
+          </Menu>
           <Chip size="small" label="自動色分け" clickable color={autoTint ? 'secondary' : 'default'}
             variant={autoTint ? 'filled' : 'outlined'} onClick={toggleAutoTint} />
           <Button size="small" onClick={() => setCollapseCmd((p) => ({ value: true, tick: p.tick + 1 }))}>全て折畳</Button>
@@ -1962,6 +2049,29 @@ const BlockCanvas = ({
           </Box>
         )}
       </Paper>
+
+      {indexDlg && (
+        <ScenarioIndexToolsDialog
+          open
+          onClose={() => setIndexDlg(null)}
+          title={`インデックス一括調整（${isSub ? 'このグループ内のサブグループ' : 'グループ'}）`}
+          startOptions={nodes.map((n) => ({
+            value: String(n.id),
+            label: `ノード ${n.id}${n.data.description ? ` — ${String(n.data.description).split('\n')[0].slice(0, 24)}` : ''}`,
+          }))}
+          initialStart={indexDlg.start}
+          getFields={(includeInt) => collectIndexFields(nodes, roleFormSchemas, { includeInt })}
+          makePlan={(o) => planIndexAdjust(nodes, roleFormSchemas, {
+            startNodeId: o.start, endNodeId: o.end, mode: o.mode, delta: o.delta, step: o.step, base: o.base,
+            includeStart: o.includeStart, includeInt: o.includeInt, target: o.target,
+          })}
+          describeChange={(c) => ({
+            where: `ノード ${c.nodeId}`,
+            field: `${c.roleName}.${c.fieldName}${c.arrayIndex !== null && c.arrayIndex !== undefined ? `[${c.arrayIndex}]` : ''}`,
+          })}
+          onApply={(plan) => { setIndexDlg(null); onApplyIndexChanges(plan.changes); }}
+        />
+      )}
 
       {visible.length === 0 && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
@@ -2019,6 +2129,7 @@ const BlockCanvas = ({
             onSaveRoles={h.onSaveRoles}
             onServerRev={h.onServerRev}
             issues={stableIssues[String(node.id)]}
+            onOpenIndexTools={h.onOpenIndexTools}
           />
         );
       })}
@@ -3074,7 +3185,12 @@ function ScenarioEventTransition() {
           const edges = (result.edges || []).filter(e =>
             nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target)
           );
-          setTabData(prev => ({ ...prev, [tabId]: { nodes, edges } }));
+          // tabDataRef も同期的に更新する。以前は state だけ更新していたため、サブグループタブを
+          // 開いてから最初の updateTabData までの間、保存処理・Undo履歴・保存時の型補完が参照する
+          // tabDataRef.current にそのタブが存在せず、最初の1回の操作が履歴に残らなかった。
+          const nextAll = { ...tabDataRef.current, [tabId]: { nodes, edges } };
+          tabDataRef.current = nextAll;
+          setTabData(nextAll);
           // 読み込みが正常に完了した場合のみ、このサブグループタブへの保存を許可する
           loadedTabsRef.current[tabId] = true;
           setActiveTab(tabId);
@@ -3287,18 +3403,35 @@ function ScenarioEventTransition() {
     if (!eventId || !subId) { showSnack('Event/Sub IDが未定義', 'error'); return Promise.resolve(); }
     if (!items || items.length === 0) return Promise.resolve();
     setSaveStatus('saving');
+    // type の無いフィールドに、Roleのスキーマの type を補ってから送る/状態へ入れる
+    const curNode = ((tabDataRef.current[activeTab] || {}).nodes || []).find(n => n.id === nodeId);
+    const curRoles = (curNode && curNode.data && curNode.data.roles) || [];
+    const typedItems = items.map((it) => {
+      const role = curRoles.find(r => String(r.uniqueId) === String(it.uniqueId));
+      return { uniqueId: it.uniqueId, formData: role ? withFieldTypes(it.formData, roleFormSchemas[role.name]) : it.formData };
+    });
     return fetch(`/api/scenario-event/${eventId}/sub/${subId}/role-data-batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates: items.map(it => ({ nodePath, uniqueId: it.uniqueId, formData: it.formData })) }),
+      body: JSON.stringify({ updates: typedItems.map(it => ({ nodePath, uniqueId: it.uniqueId, formData: it.formData })) }),
     })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then((result) => {
         if (result && result.rev) knownRevRef.current = result.rev;
         const byUid = {};
-        items.forEach(it => { byUid[it.uniqueId] = it.formData; });
+        typedItems.forEach(it => { byUid[it.uniqueId] = it.formData; });
         // キャッシュキーは nodePath (例: "1" と "1/1" を区別)。node.id だけだと親子で同IDのとき混線する。
         setRoleDataCache(prev => ({ ...prev, [nodePath]: { ...(prev[nodePath] || {}), ...byUid } }));
+        // 保存した内容と同じ「入力中の値(draft)」は破棄する。残すと、Drawerを閉じた時の反映で
+        // 型補完前の値がキャッシュを上書きしてしまう(保存後にさらに編集された分は残す)。
+        const draftForNode = roleDataDraftRef.current[nodePath];
+        if (draftForNode) {
+          items.forEach((it) => {
+            if (draftForNode[it.uniqueId] !== undefined && JSON.stringify(draftForNode[it.uniqueId]) === JSON.stringify(it.formData)) {
+              delete draftForNode[it.uniqueId];
+            }
+          });
+        }
         updateTabData(prev => ({
           ...prev,
           [activeTab]: {
@@ -3351,6 +3484,45 @@ function ScenarioEventTransition() {
   // Drawerを閉じたとき(handleFlushFormData)に、そのノード分だけ1回stateへ反映する。
   // キーは nodePath (階層込み)。node.id だけだと親子で同IDのとき混線する。
   const roleDataDraftRef = useRef({});
+
+  // ── Utils: インデックス一括調整 / 重複IDの振り直し ──
+  // どちらも updateTabData を通すので、Ctrl+Z で元に戻せる。変更後は自動保存される。
+  const handleApplyIndexChanges = (changes) => {
+    if (!changes || changes.length === 0) return;
+    const tabId = activeTab;
+    updateTabData(prev => ({
+      ...prev,
+      [tabId]: { ...prev[tabId], nodes: applyIndexChanges(prev[tabId].nodes, changes) },
+    }));
+    // Drawer用のキャッシュ/入力途中の値は変更前の内容なので破棄する(開く時にRole側のdataから再構築される)
+    roleDataDraftRef.current = {};
+    setRoleDataCache({});
+    scheduleSave();
+    showSnack(`${changes.length}件のインデックスを更新しました（Ctrl+Zで元に戻せます）`);
+  };
+
+  const handleRenumberDuplicateIds = () => {
+    const tabId = activeTab;
+    const cur = tabDataRef.current[tabId];
+    if (!cur) return;
+    const isMain = tabId === 'main';
+    // メインタブのノードIDを変えると、そのノードの子(サブグループ)の保存先キーも変わる。
+    // 開いているサブグループのタブが古いIDのまま残ると食い違うので、先に閉じてもらう。
+    if (isMain && tabs.some((t) => String(t.id).startsWith('subgroup-'))) {
+      showSnack('グループのIDを振り直す前に、開いているサブグループのタブをすべて閉じてください', 'warning');
+      return;
+    }
+    const { nodes, renamed, skipped } = renumberDuplicateNodes(cur.nodes, { rekeySubgroups: isMain });
+    if (renamed.length === 0) {
+      showSnack(skipped.length > 0 ? `数値でないIDの重複は自動では振り直せません: ${skipped.join(', ')}` : '重複しているIDは見つかりませんでした');
+      return;
+    }
+    updateTabData(prev => ({ ...prev, [tabId]: { ...prev[tabId], nodes } }));
+    roleDataDraftRef.current = {};
+    setRoleDataCache({});
+    scheduleSave();
+    showSnack(`ID重複を解消しました: ${renamed.map((r) => `${r.from} → ${r.to}`).join(', ')}（Ctrl+Zで元に戻せます）`);
+  };
 
   // ── Undo / Redo ──
   // 遷移グラフ(nodes/edges。Roleの値も含む)の変更を、タブごとに最大50件まで遡れる。
@@ -3813,6 +3985,8 @@ function ScenarioEventTransition() {
           onSetNodeColors={handleSetNodeColors}
           onSaveRoles={handleSaveRoles}
           onServerRev={noteRev}
+          onApplyIndexChanges={handleApplyIndexChanges}
+          onRenumberDuplicates={handleRenumberDuplicateIds}
         />
       </Box>
 

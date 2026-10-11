@@ -1,4 +1,8 @@
-import React, { useMemo, useEffect, useRef } from 'react';
+import React, { useMemo, useEffect, useRef, useState } from 'react';
+import {
+  Box, Button, Divider, ListItemText, Menu, MenuItem, Tooltip, Typography,
+} from '@mui/material';
+import BuildIcon from '@mui/icons-material/Build';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { linter as createLinter } from '@codemirror/lint';
@@ -8,8 +12,12 @@ import { indentWithTab } from '@codemirror/commands';
 import {
   tokenizeLine, lintDocument, getCompletionsAt,
   computeNextGroupHeader, computeNextSubgroupHeader,
-  isSubGroupSettingLine,
+  isSubGroupSettingLine, renumberDuplicateNodeIds,
 } from '../scenario/scenarioTransactionDsl';
+import {
+  findSiblingSections, planIndexAdjustInDsl, collectIndexFieldsInDsl,
+} from '../scenario/scenarioIndexTools';
+import ScenarioIndexToolsDialog from '../scenario/ScenarioIndexToolsDialog';
 
 // Transactionのロール入力を「1行1コマンド」のテキストDSLとして編集する
 // CodeMirror 6ベースのコードエディタ。
@@ -24,6 +32,11 @@ import {
 //   IDをインクリメントして挿入
 // - Ctrl/Cmd+Alt+H: 新しいサブグループ(カーソルが今いるグループの中の見出し)を、
 //   直前のサブグループのIDをインクリメントして挿入
+// - 「Utils」メニュー(エディタ右上のボタン): 上記ショートカットと同じ操作をメニューから選べる。
+//   ・新しいグループ/サブグループの見出しを挿入(Ctrl/Cmd+Alt+G / H と同じ)
+//   ・重複しているIDを振り直す(コピー&ペースト直後など)
+//   ・インデックス(text_list_index / voice_ref)の一括調整: カーソルのあるサブグループ以降を
+//     「+N/-Nずらす」「連番にする」(適用前にプレビュー)。Ctrl+Z で元に戻せる。
 // - サブグループ設定行('#@ is_wait_key=false ...'): 見出しの直下に書くコメント形式の1行。
 //   ハイライト・リンター・補完の対象。ショートカットで新しいグループ/サブグループを挿入する
 //   ときは、この設定行もデフォルト値(手動デフォルト→自動デフォルト)で一緒に挿入する。
@@ -251,6 +264,8 @@ function ScenarioTransactionCodeEditor({
   // サブグループ設定(is_wait_key など)の共通スキーマと、新しい見出しに添えるデフォルトの設定行。
   // どちらも省略可能(省略時は '#@' 行の診断・補完・デフォルト挿入を行わない)。
   subGroupSettingSchema = null, subGroupSettingDefaultLine = '',
+  // 右上の「Utils」メニューを出すか(既定: 出す)
+  showUtils = true,
 }) {
   // roleNames/roleSchemas/classDataSchemas は、呼び出し元(GUI側)の state から
   // 毎レンダー新しい参照で渡されてくることが多い。そのままextensionsのuseMemoの
@@ -279,6 +294,82 @@ function ScenarioTransactionCodeEditor({
   const classDataSchemasKey = useMemo(() => JSON.stringify(classDataSchemas || {}), [classDataSchemas]);
   const settingSchemaKey = useMemo(() => JSON.stringify(subGroupSettingSchema || null), [subGroupSettingSchema]);
 
+  // ── Utils メニュー ──
+  // CodeMirror の view は onCreateEditor で受け取って ref に持つ(メニュー操作から直接編集するため)。
+  const viewRef = useRef(null);
+  const [utilsAnchor, setUtilsAnchor] = useState(null);
+  const [utilsInfo, setUtilsInfo] = useState(null); // メニューを開いた時点の { hasHeaders, current }
+  const [utilsMsg, setUtilsMsg] = useState('');
+  const [indexDlg, setIndexDlg] = useState(null); // { text, siblings, current }
+  const msgTimerRef = useRef(null);
+  const flashMsg = (m) => {
+    setUtilsMsg(m);
+    if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    msgTimerRef.current = setTimeout(() => setUtilsMsg(''), 5000);
+  };
+  useEffect(() => () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }, []);
+
+  const openUtils = (e) => {
+    const view = viewRef.current;
+    let info = { hasHeaders: false, current: null };
+    if (view) {
+      const text = view.state.doc.toString();
+      const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+      const { current, sections } = findSiblingSections(text, cursorLine);
+      info = { hasHeaders: sections.length > 0, current };
+    }
+    setUtilsInfo(info);
+    setUtilsAnchor(e.currentTarget);
+  };
+  const closeUtils = () => setUtilsAnchor(null);
+
+  const runInsert = (makeCommand) => {
+    closeUtils();
+    const view = viewRef.current;
+    if (!view) return;
+    const ok = makeCommand(() => settingDefaultLineRef.current)(view);
+    if (ok === false) flashMsg('カーソルがどのグループの中にもありません(見出しの下で実行してください)');
+    view.focus();
+  };
+
+  const runRenumberDuplicates = () => {
+    closeUtils();
+    const view = viewRef.current;
+    if (!view) return;
+    const { text: newText, renamed } = renumberDuplicateNodeIds(view.state.doc.toString());
+    if (renamed.length === 0) { flashMsg('重複しているIDは見つかりませんでした'); return; }
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: newText } });
+    flashMsg(`ID重複を解消しました: ${renamed.map((r) => `${r.oldPath} → ${r.newPath}`).join(', ')}`);
+    view.focus();
+  };
+
+  const openIndexTools = () => {
+    closeUtils();
+    const view = viewRef.current;
+    if (!view) return;
+    const text = view.state.doc.toString();
+    const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
+    const { current, siblings } = findSiblingSections(text, cursorLine);
+    if (!current) { flashMsg('カーソルを見出し(# ==== SUB:… NODE:… ====)の下に置いてから実行してください'); return; }
+    setIndexDlg({ text, siblings, current });
+  };
+
+  const applyIndexPlan = (plan) => {
+    const view = viewRef.current;
+    setIndexDlg(null);
+    if (!view || !plan || plan.changes.length === 0) return;
+    // 全文を置き換えず、変更のあった数値だけを書き換える(Ctrl+Zで1操作として戻せる・カーソルも保たれる)
+    const doc = view.state.doc;
+    view.dispatch({
+      changes: plan.changes.map((c) => {
+        const ln = doc.line(c.line + 1);
+        return { from: ln.from + c.from, to: ln.from + c.to, insert: String(c.toValue) };
+      }),
+    });
+    flashMsg(`${plan.changes.length}件のインデックスを書き換えました(Ctrl+Zで元に戻せます)`);
+    view.focus();
+  };
+
   const extensions = useMemo(() => [
     buildDslLanguage(),
     createLinter(
@@ -301,13 +392,65 @@ function ScenarioTransactionCodeEditor({
   ], [roleNamesKey, roleSchemasKey, classDataSchemasKey, settingSchemaKey]);
 
   return (
-    <CodeMirror
-      value={value}
-      height={height}
-      extensions={extensions}
-      onChange={onChange}
-      basicSetup={BASIC_SETUP}
-    />
+    <Box>
+      {showUtils && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+          <Button size="small" variant="outlined" startIcon={<BuildIcon fontSize="small" />} onClick={openUtils}>
+            Utils
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }} noWrap>
+            {utilsMsg || '見出しの挿入・ID振り直し・インデックス一括調整など'}
+          </Typography>
+        </Box>
+      )}
+      <CodeMirror
+        value={value}
+        height={height}
+        extensions={extensions}
+        onChange={onChange}
+        basicSetup={BASIC_SETUP}
+        onCreateEditor={(view) => { viewRef.current = view; }}
+      />
+      <Menu anchorEl={utilsAnchor} open={Boolean(utilsAnchor)} onClose={closeUtils}>
+        <MenuItem onClick={() => runInsert(makeInsertNewGroupCommand)}>
+          <ListItemText primary="新しいグループの見出しを挿入" secondary="直前のグループのIDに+1（Ctrl/Cmd+Alt+G）" />
+        </MenuItem>
+        <MenuItem onClick={() => runInsert(makeInsertNewSubgroupCommand)}>
+          <ListItemText primary="新しいサブグループの見出しを挿入" secondary="今いるグループ内の直前のサブグループのIDに+1（Ctrl/Cmd+Alt+H）" />
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={runRenumberDuplicates} disabled={!utilsInfo || !utilsInfo.hasHeaders}>
+          <ListItemText primary="重複しているIDを振り直す" secondary="コピー&ペースト直後などで、同じ親の中でIDが重複した見出しを解消" />
+        </MenuItem>
+        <Tooltip title={utilsInfo && !utilsInfo.current ? 'カーソルを見出しの下に置いてください' : ''} placement="left">
+          <span>
+            <MenuItem onClick={openIndexTools} disabled={!utilsInfo || !utilsInfo.current}>
+              <ListItemText primary="インデックスを一括調整…" secondary="カーソルのサブグループ以降の text_list_index / voice_ref をずらす・連番にする" />
+            </MenuItem>
+          </span>
+        </Tooltip>
+      </Menu>
+      {indexDlg && (
+        <ScenarioIndexToolsDialog
+          open
+          onClose={() => setIndexDlg(null)}
+          title="インデックス一括調整（DSL）"
+          startOptions={indexDlg.siblings.map((s) => ({ value: s.pathKey, label: `SUB:${s.subId} NODE:${s.pathKey}` }))}
+          initialStart={indexDlg.current.pathKey}
+          getFields={(includeInt) => collectIndexFieldsInDsl(indexDlg.text, roleSchemas || {}, { includeInt })}
+          makePlan={(o) => {
+            const sec = indexDlg.siblings.find((s) => s.pathKey === o.start);
+            return planIndexAdjustInDsl(indexDlg.text, roleSchemas || {}, {
+              cursorLine: sec ? sec.headerLine : indexDlg.current.headerLine, endPathKey: o.end,
+              mode: o.mode, delta: o.delta, step: o.step, base: o.base, includeStart: o.includeStart,
+              includeInt: o.includeInt, target: o.target,
+            });
+          }}
+          describeChange={(c) => ({ where: `NODE:${c.pathKey}`, field: `${c.roleName}.${c.fieldName}（${c.line + 1}行目）` })}
+          onApply={applyIndexPlan}
+        />
+      )}
+    </Box>
   );
 }
 

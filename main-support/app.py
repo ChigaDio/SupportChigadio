@@ -1895,21 +1895,66 @@ def _find_transition_node(nodes, segments):
     return target
 
 
-def _apply_role_data(node, unique_id, form_data):
+def _role_field_types(role_name, type_cache):
+    """Role名 -> {フィールド名: 型}。Roleのスキーマ(マスター定義)から引く。
+    1回のリクエスト内ではRole名ごとに1回だけスキーマを生成する(type_cache)。
+    スキーマが見つからない/生成に失敗した場合は空(型の補完はスキップするだけで、保存は続行する)。"""
+    if role_name in type_cache:
+        return type_cache[role_name]
+    types = {}
+    try:
+        schema = scenario.generate_role_form_schema(role_name, DATA_DIR)
+        if schema and not schema.get('error'):
+            types = {f['name']: f.get('type') for f in schema.get('fields', []) if f.get('name') and f.get('type')}
+    except Exception as e:
+        app.logger.warning(f"Role schema type lookup failed for {role_name}: {e}")
+    type_cache[role_name] = types
+    return types
+
+
+def _with_field_types(form_data, field_types):
+    """フォームが返す [{name, value, arraySize}] に、スキーマの type を補う。
+    既に type があるエントリは変更しない。キー順は {name, type, value, ...} にそろえる
+    (サーバーの初期値/DSLが作る従来の形と同じ)。"""
+    if not isinstance(form_data, list) or not field_types:
+        return form_data
+    out = []
+    for d in form_data:
+        if isinstance(d, dict) and not d.get('type') and field_types.get(d.get('name')):
+            nd = {}
+            for k, v in d.items():
+                nd[k] = v
+                if k == 'name':
+                    nd['type'] = field_types[d['name']]
+            out.append(nd)
+        else:
+            out.append(d)
+    return out
+
+
+def _apply_role_data(node, unique_id, form_data, type_cache=None):
     """node.data.roles のうち uniqueId が一致するRoleの data を差し替える。更新した件数を返す。
     以前の save_role_data は role['id'](=Role名)で探していたが、画面が渡すのは uniqueId なので
     一致せず、何も書き込まないまま成功を返していた。
-    uniqueId を持たない古いデータだけは、従来どおり id 一致で救済する。"""
+    uniqueId を持たない古いデータだけは、従来どおり id 一致で救済する。
+    type_cache を渡すと、type の無いエントリにスキーマの type を補ってから保存する
+    (GUIフォームの出力は type を持たないが、初期値/DSLが作るデータは持つため、形をそろえる)。"""
     roles = (node.get('data') or {}).get('roles') or []
+
+    def prepared(role):
+        if type_cache is None:
+            return form_data
+        return _with_field_types(form_data, _role_field_types(role.get('name'), type_cache))
+
     updated = 0
     for i, r in enumerate(roles):
         if str(r.get('uniqueId')) == str(unique_id):
-            roles[i] = {**r, 'data': form_data}
+            roles[i] = {**r, 'data': prepared(r)}
             updated += 1
     if updated == 0:
         for i, r in enumerate(roles):
             if r.get('uniqueId') in (None, '') and str(r.get('id')) == str(unique_id):
-                roles[i] = {**r, 'data': form_data}
+                roles[i] = {**r, 'data': prepared(r)}
                 updated += 1
     return updated
 
@@ -2087,20 +2132,21 @@ def save_role_data(eventId, subId, nodeId, roleId):
         formData = data.get('formData', {})
         # このSub 1件分だけを読み書きする(他のSubには一切触れない)。
         # roleId には画面から uniqueId が渡される(_apply_role_data 参照)。
+        type_cache = {}
         with _sub_lock(eventId, subId):
             sub_data = scenario.read_sub_event_transition(eventId, subId)
             nodes = sub_data.get('nodes', [])
             updated = 0
             for node in nodes:
                 if str(node['id']) == str(nodeId):
-                    updated += _apply_role_data(node, roleId, formData)
+                    updated += _apply_role_data(node, roleId, formData, type_cache)
                     break
                 sg = (node.get('data') or {}).get('subgroups', {}).get(nodeId)
                 if sg:
                     # 旧仕様: サブグループ内ノードは「そのサブグループの先頭ノード」だけを見ていた。
                     # 先頭に無ければ、同じサブグループ内の全ノードから uniqueId で探す。
                     for child in sg.get('nodes', []):
-                        updated += _apply_role_data(child, roleId, formData)
+                        updated += _apply_role_data(child, roleId, formData, type_cache)
                     break
             if updated:
                 sub_data['nodes'] = nodes
@@ -2189,13 +2235,14 @@ def save_role_data_batch(eventId, subId):
         updates = payload.get('updates') or []
         saved = 0
         missed = []
+        type_cache = {}
         with _sub_lock(eventId, subId):
             sub_data = scenario.read_sub_event_transition(eventId, subId)
             nodes = sub_data.get('nodes', [])
             for u in updates:
                 segments = [s for s in str(u.get('nodePath', '')).split('/') if s != '']
                 target = _find_transition_node(nodes, segments) if segments else None
-                if target is not None and _apply_role_data(target, u.get('uniqueId'), u.get('formData')) > 0:
+                if target is not None and _apply_role_data(target, u.get('uniqueId'), u.get('formData'), type_cache) > 0:
                     saved += 1
                 else:
                     missed.append({'nodePath': u.get('nodePath'), 'uniqueId': u.get('uniqueId')})
@@ -2216,6 +2263,146 @@ def get_sub_rev(eventId, subId):
         return jsonify({'rev': scenario.get_sub_event_transition_rev(eventId, subId)})
     except Exception as e:
         app.logger.error(f"Error reading sub rev: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+# =====================================================================
+# [app.py] ⑩  Roleプリセット(チーム共有)  ※ ⑨ の後ろに追加
+#   保存先: DATA_DIR/scenario_role_presets.json
+#     { "Role名": [ { "name": "標準", "data": [...フィールド値...], "savedAt": 1760000000000 }, ... ], ... }
+#   ・読み書きはロックで直列化し、書き込みは一時ファイル経由のアトミック書き込み。
+#   ・既存ファイルが壊れていて読めないときは、上書きせずエラーを返す(プリセット全損の防止)。
+# =====================================================================
+import time  # noqa: E402  (app.py に import time が無ければここで読み込む)
+
+_PRESETS_LOCK = threading.RLock()
+_PRESETS_MAX_PER_ROLE = 30
+
+
+def _presets_file():
+    return os.path.join(DATA_DIR, 'scenario_role_presets.json')
+
+
+def _load_presets():
+    path = _presets_file()
+    if not os.path.exists(path):
+        return {}
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)  # 壊れていれば例外 → 呼び出し側が500を返し、上書きしない
+    return data if isinstance(data, dict) else {}
+
+
+def _save_presets(presets):
+    scenario._write_json_atomic(_presets_file(), presets)
+
+
+def _clean_preset_args(role_name, name, data):
+    role_name = str(role_name or '').strip()
+    name = str(name or '').strip()
+    if not role_name or len(role_name) > 200:
+        return None, 'roleName が不正です'
+    if not name or len(name) > 100:
+        return None, 'プリセット名が不正です(1〜100文字)'
+    if not isinstance(data, list) or len(data) > 5000:
+        return None, 'data が不正です'
+    return (role_name, name), None
+
+
+def _upsert_preset(presets, role_name, name, data, saved_at):
+    lst = [p for p in presets.get(role_name, []) if p.get('name') != name]
+    lst.insert(0, {'name': name, 'data': data, 'savedAt': saved_at})
+    presets[role_name] = lst[:_PRESETS_MAX_PER_ROLE]
+
+
+@app.route('/api/scenario-role-presets', methods=['GET'])
+def get_role_presets():
+    try:
+        with _PRESETS_LOCK:
+            return jsonify({'presets': _load_presets()})
+    except Exception as e:
+        app.logger.error(f"Error reading role presets: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenario-role-presets', methods=['POST'])
+def save_role_preset():
+    """body: {roleName, name, data}。同名があれば上書き。戻り値: そのRoleのプリセット一覧。"""
+    try:
+        body = request.get_json(silent=True) or {}
+        key, err = _clean_preset_args(body.get('roleName'), body.get('name'), body.get('data'))
+        if err:
+            return jsonify({'error': err}), 400
+        role_name, name = key
+        with _PRESETS_LOCK:
+            presets = _load_presets()
+            _upsert_preset(presets, role_name, name, body['data'], int(time.time() * 1000))
+            _save_presets(presets)
+            return jsonify({'message': 'Preset saved', 'presets': presets[role_name]})
+    except Exception as e:
+        app.logger.error(f"Error saving role preset: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenario-role-presets', methods=['DELETE'])
+def delete_role_preset():
+    """query: ?roleName=...&name=..."""
+    try:
+        role_name = str(request.args.get('roleName', '')).strip()
+        name = str(request.args.get('name', '')).strip()
+        if not role_name or not name:
+            return jsonify({'error': 'roleName と name が必要です'}), 400
+        with _PRESETS_LOCK:
+            presets = _load_presets()
+            before = presets.get(role_name, [])
+            after = [p for p in before if p.get('name') != name]
+            if len(after) == len(before):
+                return jsonify({'message': 'Preset not found', 'presets': before}), 404
+            if after:
+                presets[role_name] = after
+            else:
+                presets.pop(role_name, None)
+            _save_presets(presets)
+            return jsonify({'message': 'Preset deleted', 'presets': after})
+    except Exception as e:
+        app.logger.error(f"Error deleting role preset: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenario-role-presets/import', methods=['POST'])
+def import_role_presets():
+    """ブラウザ(localStorage)に溜まっていたプリセットをまとめて取り込む。
+    body: {presets: {Role名: [{name, data, savedAt?}, ...]}}  既存の同名は上書きしない(skipped)。"""
+    try:
+        body = request.get_json(silent=True) or {}
+        incoming = body.get('presets')
+        if not isinstance(incoming, dict):
+            return jsonify({'error': 'presets が不正です'}), 400
+        imported = 0
+        skipped = 0
+        with _PRESETS_LOCK:
+            presets = _load_presets()
+            for role_name, items in incoming.items():
+                if not isinstance(items, list):
+                    continue
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    key, err = _clean_preset_args(role_name, it.get('name'), it.get('data'))
+                    if err:
+                        skipped += 1
+                        continue
+                    rn, nm = key
+                    if any(p.get('name') == nm for p in presets.get(rn, [])):
+                        skipped += 1
+                        continue
+                    saved_at = it.get('savedAt') if isinstance(it.get('savedAt'), (int, float)) else int(time.time() * 1000)
+                    _upsert_preset(presets, rn, nm, it['data'], saved_at)
+                    imported += 1
+            if imported:
+                _save_presets(presets)
+            return jsonify({'message': 'Imported', 'imported': imported, 'skipped': skipped, 'presets': presets})
+    except Exception as e:
+        app.logger.error(f"Error importing role presets: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 #===============================================================================
