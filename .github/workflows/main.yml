@@ -1,78 +1,185 @@
-name: Build React & Python App
+name: Build and Release
 
+# リポジトリのルート（SupportChigadio）直下の .github/workflows/ に置く。
+# 実行方法:
+#   1) タグを push する:  git tag v1.0.0 && git push origin v1.0.0
+#   2) Actions タブから "Run workflow"（タグ名を入力）
 on:
   push:
-    branches:
-      - main
     tags:
-      - 'v*.*.*'
+      - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "リリースタグ (例: v1.0.0)"
+        required: true
+      build_frontend:
+        description: "Reactをビルドして同梱する（通常はOFF。OFFならコミット済みのbuild/があればそれを使う）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # リリース作成に必要
+
+env:
+  APP_DIR: main-support # app.py があるフォルダ（リポジトリルートからの相対パス）
+  APP_NAME: SupportChigadio
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: Build (${{ matrix.suffix }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: windows-x64
+            exe: SupportChigadio.exe
+          - os: macos-latest # Apple Silicon (arm64)
+            suffix: macos-arm64
+            exe: SupportChigadio
+          - os: macos-15-intel # Intel Mac (x64)
+            suffix: macos-x64
+            exe: SupportChigadio
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: '20'
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
         run: |
-          pip install --upgrade pip
-          pip install pyinstaller
+          python -m pip install --upgrade pip
+          # app.py / pythonSrc が import している外部ライブラリ
+          pip install pyinstaller flask werkzeug psutil websockets openpyxl
+          # requirements.txt があれば追加で入れる
+          if [ -f "$APP_DIR/requirements.txt" ]; then pip install -r "$APP_DIR/requirements.txt"; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Install Node.js dependencies
-        run: npm install
-        working-directory: ./main-support
+      # ---- フロントエンド(React) ----
+      # 通常はビルドしない。手動実行で build_frontend をONにしたときだけビルドする。
+      # OFFの場合、コミット済みの main-support/build があればそれを同梱する。
+      - uses: actions/setup-node@v4
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_frontend }}
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Build React app
-        run: npm run build
-        working-directory: ./main-support
-        env:
-          CI: false
+      - name: Build frontend (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_frontend }}
+        run: |
+          FE=""
+          for d in "$APP_DIR" "."; do
+            if [ -f "$d/package.json" ]; then FE="$d"; break; fi
+          done
+          if [ -z "$FE" ]; then
+            echo "::error::package.json が見つかりません"
+            exit 1
+          fi
+          (cd "$FE" && (npm ci || npm install) && npm run build)
+          echo "FRONTEND_BUILD=$FE/build" >> "$GITHUB_ENV"
 
-      - name: Remove old build directory in repo root
-        run: if exist build rmdir /s /q build
-        shell: cmd
+      - name: Use committed build folder (if any)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_frontend) }}
+        run: |
+          if [ -d "$APP_DIR/build" ]; then
+            echo "FRONTEND_BUILD=$APP_DIR/build" >> "$GITHUB_ENV"
+          else
+            echo "::notice::build/ が無いため、画面なしでパッケージします"
+          fi
 
-      - name: Copy new build to repo root
-        run: xcopy /E /I /Y main-support\build build
-        shell: cmd
+      # ---- PyInstaller ----
+      - name: Build executable
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          # pythonSrc を確実にパッケージ扱いにする（無ければ空の __init__.py を作る）
+          if [ ! -f pythonSrc/__init__.py ]; then touch pythonSrc/__init__.py; fi
 
-      - name: Remove old app.exe in repo root
-        run: if exist app.exe del app.exe
-        shell: cmd
+          pyinstaller --noconfirm --clean --onefile \
+            --name "$APP_NAME" \
+            --paths . \
+            --hidden-import tkinter \
+            --hidden-import tkinter.filedialog \
+            app.py
 
-      - name: Build app.py with pyinstaller
-        run: pyinstaller --onefile app.py
-        working-directory: ./main-support
+          ls -la dist
 
-      - name: Copy app.exe to repo root
-        run: copy main-support\dist\app.exe app.exe
-        shell: cmd
+      # ---- 配布用に整える ----
+      # 配置: <zip>/main-support/{実行ファイル, build/}
+      # 実行ファイルは ../data を DATA_DIR として使うため、
+      # 解凍した main-support の隣に data/ が作られる。
+      - name: Package
+        run: |
+          STAGE="package/${APP_NAME}-${{ matrix.suffix }}/main-support"
+          mkdir -p "$STAGE"
+          cp "$APP_DIR/dist/${{ matrix.exe }}" "$STAGE/"
+          if [ -n "$FRONTEND_BUILD" ] && [ -d "$FRONTEND_BUILD" ]; then
+            cp -r "$FRONTEND_BUILD" "$STAGE/build"
+          fi
+          if [ "$RUNNER_OS" != "Windows" ]; then chmod +x "$STAGE/${{ matrix.exe }}"; fi
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd package
+          7z a -tzip "../${APP_NAME}-${{ matrix.suffix }}.zip" "${APP_NAME}-${{ matrix.suffix }}"
+
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd package
+          # -y でシンボリックリンクを保持、実行権限もzipに保存される
+          zip -r -y "../${APP_NAME}-${{ matrix.suffix }}.zip" "${APP_NAME}-${{ matrix.suffix }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
+          path: ${{ env.APP_NAME }}-${{ matrix.suffix }}.zip
+          if-no-files-found: error
 
   release:
+    name: Create GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # ビルドの一部が失敗していても、成功した分だけでリリースを作る
+    # （これが無いと、1つでも失敗すると "This job was skipped" になる）
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v4
         with:
-          files: |
-            build/**
-            app.exe
+          path: artifacts
+          merge-multiple: true
 
+      - name: List files
+        run: ls -la artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ env.APP_NAME }} ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/*.zip
+          body: |
+            ## ダウンロード
+            - **Windows (x64)**: `SupportChigadio-windows-x64.zip`
+            - **macOS (Apple Silicon)**: `SupportChigadio-macos-arm64.zip`
+            - **macOS (Intel)**: `SupportChigadio-macos-x64.zip`
+
+            ## 使い方
+            1. zipを解凍し、`main-support` フォルダ内の実行ファイルを起動
+            2. 起動時のダイアログで「サーバーモード / 通常モード」を選択
+            3. データは `main-support` の隣の `data/` に作成されます
+
+            ### macOS の初回起動について
+            署名・公証をしていないため、初回は以下を実行してください。
+            ```
+            xattr -cr SupportChigadio-macos-*/main-support
+            ```
+            または、右クリック →「開く」で起動できます。
