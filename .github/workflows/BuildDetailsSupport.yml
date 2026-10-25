@@ -1,3 +1,4 @@
+
 name: Build all DetailsSupport tools into their tool folders
 
 on:
@@ -18,6 +19,9 @@ permissions:
   contents: write
 
 jobs:
+  # --------------------------------------------------
+  # macOS
+  # --------------------------------------------------
   build-macos:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_macos }}
     runs-on: macos-latest
@@ -29,6 +33,7 @@ jobs:
         with:
           repository: ChigaDio/SupportChigadio
           ref: main
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,7 +43,8 @@ jobs:
       - name: Install build dependencies
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install pyinstaller
 
@@ -46,83 +52,149 @@ jobs:
             [ -n "$req" ] || continue
             echo "Installing requirements from: $req"
             python -m pip install -r "$req"
-          done < <(find detailsSupportTool -type f -name "requirements.txt" -print | sort)
+          done < <(
+            find detailsSupportTool \
+              -type f \
+              -name "requirements.txt" \
+              -not -path "*/.build_*/*" \
+              -print | sort
+          )
 
-      - name: Build macOS app bundles into each tool folder
+      - name: Remove old build directories
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          for tool_dir in detailsSupportTool/*; do
+          find detailsSupportTool \
+            -depth \
+            -type d \
+            -name ".build_*" \
+            -exec rm -rf {} +
+
+      - name: Build macOS applications
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE/detailsSupportTool"
+          TEMP_ROOT="$RUNNER_TEMP/details-support-macos"
+
+          rm -rf "$TEMP_ROOT"
+          mkdir -p "$TEMP_ROOT"
+
+          for tool_dir in "$ROOT"/*; do
             [ -d "$tool_dir" ] || continue
-
-            py_script=""
-            for cand in "$tool_dir"/main.py "$tool_dir"/server.py "$tool_dir"/*.py; do
-              [ -f "$cand" ] || continue
-              name="$(basename "$cand")"
-              if [ "$name" = "__init__.py" ]; then
-                continue
-              fi
-              py_script="$cand"
-              break
-            done
-
-            if [ -z "$py_script" ]; then
-              echo "Skipping $tool_dir: no Python entrypoint found"
-              continue
-            fi
 
             tool_name="$(basename "$tool_dir")"
 
-            old_app="$tool_dir/$tool_name.app"
-            if [ -e "$old_app" ]; then
-              rm -rf "$old_app"
+            # Find the entry point in priority order.
+            py_script=""
+
+            for candidate in \
+              "$tool_dir/main.py" \
+              "$tool_dir/server.py"; do
+              if [ -f "$candidate" ]; then
+                py_script="$candidate"
+                break
+              fi
+            done
+
+            if [ -z "$py_script" ]; then
+              while IFS= read -r candidate; do
+                [ -f "$candidate" ] || continue
+                [ "$(basename "$candidate")" = "__init__.py" ] && continue
+
+                py_script="$candidate"
+                break
+              done < <(
+                find "$tool_dir" \
+                  -maxdepth 1 \
+                  -type f \
+                  -name "*.py" \
+                  -print | sort
+              )
             fi
 
-            temp_out="$tool_dir/.build_macos_out"
-            rm -rf "$temp_out"
-            mkdir -p "$temp_out"
+            if [ -z "$py_script" ]; then
+              echo "Skipping $tool_name: no Python entry point found"
+              continue
+            fi
 
-            work_dir="$tool_dir/.build_macos_work"
-            rm -rf "$work_dir"
-            mkdir -p "$work_dir"
+            # Keep all intermediate files outside the repository.
+            tool_temp="$TEMP_ROOT/$tool_name"
+            dist_dir="$tool_temp/dist"
+            work_dir="$tool_temp/work"
+            spec_dir="$tool_temp/spec"
 
-            echo "Building macOS app: $tool_name from $py_script"
-            pyinstaller \
+            mkdir -p "$dist_dir" "$work_dir" "$spec_dir"
+
+            echo "Building macOS app: $tool_name"
+            echo "Entry point: $py_script"
+
+            python -m PyInstaller \
               --noconfirm \
               --clean \
               --name "$tool_name" \
-              --distpath "$temp_out" \
+              --distpath "$dist_dir" \
               --workpath "$work_dir" \
-              --specpath "$work_dir" \
+              --specpath "$spec_dir" \
               --onedir \
               --windowed \
               "$py_script"
 
-            built_app="$temp_out/$tool_name.app"
-            if [ -d "$built_app" ]; then
-              cp -R "$built_app" "$tool_dir/"
+            built_app="$dist_dir/$tool_name.app"
+            target_app="$tool_dir/$tool_name.app"
+
+            # A missing application must fail the build.
+            if [ ! -d "$built_app" ]; then
+              echo "::error::PyInstaller did not create $built_app"
+              exit 1
             fi
+
+            # Replace the old application with the new build.
+            rm -rf "$target_app"
+            ditto "$built_app" "$target_app"
+
+            if [ ! -f "$target_app/Contents/Info.plist" ]; then
+              echo "::error::Invalid macOS app bundle: $target_app"
+              exit 1
+            fi
+
+            echo "Created: $target_app"
           done
 
-      - name: Commit macOS artifacts
+      - name: Commit and push macOS artifacts
         shell: bash
         run: |
-          set -euxo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
 
-          if git diff --quiet --exit-code -- detailsSupportTool; then
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Synchronize with main before committing.
+          git fetch origin main
+          git rebase origin/main
+
+          # Include new files, modifications, and deletions.
+          git add -A -- detailsSupportTool
+
+          if git diff --cached --quiet; then
             echo "No macOS changes to commit"
             exit 0
           fi
 
-          git add detailsSupportTool
-          git commit -m "Build macOS DetailsSupport apps"
-          git push origin HEAD:${{ github.ref_name }}
+          git diff --cached --stat
 
+          git commit -m "Build macOS DetailsSupport apps"
+          git push origin HEAD:main
+
+  # --------------------------------------------------
+  # Windows
+  # --------------------------------------------------
   build-windows:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_windows }}
+    needs: build-macos
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.build_windows }}
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -132,6 +204,7 @@ jobs:
         with:
           repository: ChigaDio/SupportChigadio
           ref: main
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -142,90 +215,152 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install pyinstaller
 
-          Get-ChildItem -Path "detailsSupportTool" -Recurse -File -Filter "requirements.txt" | ForEach-Object {
-            Write-Host "Installing requirements from: $($_.FullName)"
-            python -m pip install -r $_.FullName
-          }
+          Get-ChildItem `
+            -Path "detailsSupportTool" `
+            -Recurse `
+            -File `
+            -Filter "requirements.txt" |
+            Where-Object {
+              $_.FullName -notmatch '[\\/]\.build_[^\\/]*[\\/]'
+            } |
+            ForEach-Object {
+              Write-Host "Installing requirements from: $($_.FullName)"
+              python -m pip install -r $_.FullName
 
-      - name: Build Windows executables into each tool folder
+              if ($LASTEXITCODE -ne 0) {
+                throw "Failed to install $($_.FullName)"
+              }
+            }
+
+      - name: Remove old build directories
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          Get-ChildItem -Path "detailsSupportTool" -Directory | ForEach-Object {
+          $oldDirs = @(
+            Get-ChildItem `
+              -Path "detailsSupportTool" `
+              -Directory `
+              -Recurse |
+              Where-Object { $_.Name -like ".build_*" } |
+              Sort-Object { $_.FullName.Length } -Descending
+          )
+
+          foreach ($dir in $oldDirs) {
+            Write-Host "Removing old build directory: $($dir.FullName)"
+            Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+          }
+
+      - name: Build Windows executables
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $root = Join-Path $env:GITHUB_WORKSPACE "detailsSupportTool"
+          $tempRoot = Join-Path $env:RUNNER_TEMP "details-support-windows"
+
+          Remove-Item -LiteralPath $tempRoot -Recurse -Force `
+            -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+
+          Get-ChildItem -Path $root -Directory | ForEach-Object {
             $toolDir = $_.FullName
             $toolName = $_.Name
 
             $script = $null
-            foreach ($candidate in @(
-              (Join-Path $toolDir "main.py"),
-              (Join-Path $toolDir "server.py")
-            )) {
-              if (Test-Path $candidate) {
-                $script = Get-Item $candidate
+
+            foreach ($name in @("main.py", "server.py")) {
+              $candidate = Join-Path $toolDir $name
+
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $script = Get-Item -LiteralPath $candidate
                 break
               }
             }
 
             if (-not $script) {
-              $allPy = Get-ChildItem -Path $toolDir -File -Filter "*.py" |
+              $script = Get-ChildItem `
+                -Path $toolDir `
+                -File `
+                -Filter "*.py" |
                 Where-Object { $_.Name -ne "__init__.py" } |
+                Sort-Object Name |
                 Select-Object -First 1
-
-              if (-not $allPy) {
-                Write-Host ("Skipping " + ${toolDir} + ": no Python entrypoint found")
-                return
-              }
-
-              $script = $allPy
             }
 
-            $existingExe = Join-Path $toolDir "$toolName.exe"
-            if (Test-Path $existingExe) {
-              Remove-Item $existingExe -Force
+            if (-not $script) {
+              Write-Host "Skipping ${toolName}: no Python entry point found"
+              return
             }
 
-            $tempOut = Join-Path $toolDir ".build_windows_out"
-            Remove-Item -Recurse -Force $tempOut -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force -Path $tempOut | Out-Null
+            $toolTemp = Join-Path $tempRoot $toolName
+            $distDir = Join-Path $toolTemp "dist"
+            $workDir = Join-Path $toolTemp "work"
+            $specDir = Join-Path $toolTemp "spec"
 
-            $workDir = Join-Path $toolDir ".build_windows_work"
-            Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+            New-Item -ItemType Directory -Force `
+              -Path $distDir, $workDir, $specDir | Out-Null
 
-            Write-Host "Building Windows exe for: $toolName from $($script.FullName)"
-            pyinstaller `
+            Write-Host "Building Windows executable: $toolName"
+            Write-Host "Entry point: $($script.FullName)"
+
+            python -m PyInstaller `
               --noconfirm `
               --clean `
               --name $toolName `
-              --distpath $tempOut `
+              --distpath $distDir `
               --workpath $workDir `
-              --specpath $workDir `
+              --specpath $specDir `
               --onefile `
               --windowed `
               $script.FullName
 
-            $generatedExe = Join-Path $tempOut "$toolName.exe"
-            if (Test-Path $generatedExe) {
-              Copy-Item $generatedExe $existingExe
+            if ($LASTEXITCODE -ne 0) {
+              throw "PyInstaller failed for $toolName"
             }
+
+            $generatedExe = Join-Path $distDir "$toolName.exe"
+            $targetExe = Join-Path $toolDir "$toolName.exe"
+
+            if (-not (Test-Path -LiteralPath $generatedExe -PathType Leaf)) {
+              throw "PyInstaller did not create $generatedExe"
+            }
+
+            # Only the final executable goes into the tool directory.
+            Copy-Item `
+              -LiteralPath $generatedExe `
+              -Destination $targetExe `
+              -Force
+
+            Write-Host "Created: $targetExe"
           }
 
-      - name: Commit Windows artifacts
+      - name: Commit and push Windows artifacts
         shell: bash
         run: |
-          set -euxo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
 
-          if git diff --quiet --exit-code -- detailsSupportTool; then
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          git rebase origin/main
+
+          # Include new files, modifications, and deletions.
+          git add -A -- detailsSupportTool
+
+          if git diff --cached --quiet; then
             echo "No Windows changes to commit"
             exit 0
           fi
 
-          git add detailsSupportTool
+          git diff --cached --stat
+
           git commit -m "Build Windows DetailsSupport executables"
-          git push origin HEAD:${{ github.ref_name }}
+          git push origin HEAD:main
