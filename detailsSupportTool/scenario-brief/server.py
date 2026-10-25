@@ -42,6 +42,7 @@ def read_all():
     me = LOCAL / "me.txt"
     o = {"me": me.read_text("utf-8").strip() if me.exists() else "",
          "project": (rj(DATA / "project.json") or {}).get("name", ""),
+         "memoW": (rj(DATA / "project.json") or {}).get("memoW"),
          "chapters": {}, "dict": {}, "layers": {}}
     for folder, key in (("chapters", "chapters"), ("dictionary", "dict")):
         for f in sorted((DATA / folder).glob("*.json")):
