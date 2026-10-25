@@ -3748,6 +3748,7 @@ if __name__ == '__main__':
     pythonSrc.matrix.register(app, DATA_DIR)
     pythonSrc.state.register(app, DATA_DIR)
     pythonSrc.behavior_routes.register(app, DATA_DIR)
+    scenario.register_scenario_role_tag_routes(app)
     scenario.register_subgroup_setting_routes(app, DATA_DIR)   # ← 追加（サブグループ設定 is_wait_key など）
 
     # お知らせ / ワークスペース / ダウンロード

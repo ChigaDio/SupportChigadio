@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
-import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete } from '@mui/material';
+import { Button, Box, Typography, TextField, Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete, Chip } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import OpenFileMenuButton from './OpenFileMenuButton';
 import { confirmDeleteWithReferenceCheck } from '../services/api';
@@ -11,6 +11,9 @@ function ScenarioRoleGrid() {
   const [newRoleName, setNewRoleName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newBranchType, setNewBranchType] = useState('General');
+  // タグ(ドキュメントサイトの分類・検索に使う。先頭のタグが「分類」になる)
+  const [newTags, setNewTags] = useState([]);
+  const [tagEdit, setTagEdit] = useState(null); // { name, tags } | null
   const [openDialog, setOpenDialog] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -31,7 +34,8 @@ function ScenarioRoleGrid() {
             id: item.id,
             name: item.name || '不明',
             description: item.description || '',
-            branchType: item.branchType || 'General'
+            branchType: item.branchType || 'General',
+            tags: Array.isArray(item.tags) ? item.tags : []
           })));
         } else {
           setData([]);
@@ -58,7 +62,7 @@ function ScenarioRoleGrid() {
     fetch('/api/scenario-role', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newRoleName, description: newDescription, branchType: newBranchType }),
+      body: JSON.stringify({ name: newRoleName, description: newDescription, branchType: newBranchType, tags: newTags }),
     })
       .then(response => {
         if (!response.ok) {
@@ -70,10 +74,11 @@ function ScenarioRoleGrid() {
       })
       .then(result => {
         alert(result.message);
-        setData([...data, { id: result.data.id, name: newRoleName, description: newDescription, branchType: newBranchType }]);
+        setData([...data, { id: result.data.id, name: newRoleName, description: newDescription, branchType: newBranchType, tags: newTags }]);
         setNewRoleName('');
         setNewDescription('');
         setNewBranchType('General');
+        setNewTags([]);
         setOpenDialog(false);
       })
       .catch(error => {
@@ -109,6 +114,35 @@ function ScenarioRoleGrid() {
     }
   };
 
+  // 既に使われているタグ(入力候補)
+  const allTags = Array.from(new Set(data.flatMap(r => r.tags || []))).sort();
+
+  const handleSaveTags = () => {
+    if (!tagEdit) return;
+    const tags = tagEdit.tags.map(t => String(t).trim()).filter(Boolean);
+    fetch('/api/scenario-role/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: tagEdit.name, tags }),
+    })
+      .then(response => {
+        if (!response.ok) {
+          return response.text().then(text => {
+            throw new Error(`HTTPエラー！ステータス: ${response.status}, 本文: ${text}`);
+          });
+        }
+        return response.json();
+      })
+      .then(() => {
+        setData(data.map(r => (r.name === tagEdit.name ? { ...r, tags } : r)));
+        setTagEdit(null);
+      })
+      .catch(error => {
+        console.error('タグ更新エラー:', error);
+        alert('タグ更新エラー: ' + error.message);
+      });
+  };
+
   const columns = [
     { field: 'id', headerName: 'ID', width: 100 },
     {
@@ -126,6 +160,22 @@ function ScenarioRoleGrid() {
     },
     { field: 'description', headerName: '説明', width: 300 },
     { field: 'branchType', headerName: 'タイプ', width: 150 },
+    {
+      field: 'tags',
+      headerName: 'タグ',
+      width: 260,
+      sortable: false,
+      renderCell: (params) => (
+        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', height: '100%', flexWrap: 'wrap' }}>
+          {(params.value || []).map((t, i) => (
+            <Chip key={t} label={t} size="small" color={i === 0 ? 'primary' : 'default'} variant={i === 0 ? 'filled' : 'outlined'} />
+          ))}
+          <Button size="small" onClick={() => setTagEdit({ name: params.row.name, tags: params.row.tags || [] })}>
+            {(params.value || []).length ? '編集' : '設定'}
+          </Button>
+        </Box>
+      ),
+    },
     {
       field: 'openInEditor',
       headerName: 'エディタ',
@@ -194,10 +244,40 @@ function ScenarioRoleGrid() {
             onChange={(e, newValue) => setNewBranchType(newValue || 'General')}
             renderInput={(params) => <TextField {...params} label="タイプ" margin="dense" fullWidth />}
           />
+          <Autocomplete
+            multiple
+            freeSolo
+            options={allTags}
+            value={newTags}
+            onChange={(e, v) => setNewTags(v)}
+            renderInput={(params) => (
+              <TextField {...params} label="タグ（先頭が分類。Enterで確定）" margin="dense" fullWidth />
+            )}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenDialog(false)}>キャンセル</Button>
           <Button onClick={handleCreateRole}>作成</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={!!tagEdit} onClose={() => setTagEdit(null)} fullWidth maxWidth="xs">
+        <DialogTitle>タグの編集: {tagEdit ? tagEdit.name : ''}</DialogTitle>
+        <DialogContent>
+          <Typography variant="caption" color="text.secondary">
+            先頭のタグがドキュメントサイトの「分類」になります。2つ目以降は検索用です（例: 会話 / 音 / 演出）。
+          </Typography>
+          <Autocomplete
+            multiple
+            freeSolo
+            options={allTags}
+            value={tagEdit ? tagEdit.tags : []}
+            onChange={(e, v) => setTagEdit({ ...tagEdit, tags: v })}
+            renderInput={(params) => <TextField {...params} label="タグ" margin="dense" fullWidth />}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTagEdit(null)}>キャンセル</Button>
+          <Button onClick={handleSaveTags}>保存</Button>
         </DialogActions>
       </Dialog>
       {loading ? (

@@ -10,6 +10,7 @@ from enum import Enum
 # 追加 import
 import glob
 from venv import logger
+from flask import request, jsonify
 
 # CustomClassData / CustomClassDataID (bit・color・bezier対応済みの型解決とバイナリ書き込み)を
 # シナリオ側でも再利用するために読み込む。app.py 側で customclassdata.register() が
@@ -123,6 +124,35 @@ def compute_max_role_concurrency():
 
     return max_counts
 
+def update_role_tags(role_name, tags, data_dir=None):
+    data_dir = data_dir or DATA_DIR            # scenario.py の DATA_DIR
+    path = os.path.join(data_dir, SCENARIO_ROLE, 'scenario_role_list.json')   # scenario.py の定数
+    with open(path, 'r', encoding='utf-8') as f:
+        roles = json.load(f)
+    clean = []
+    for t in tags or []:
+        t = str(t).strip()
+        if t and t not in clean:
+            clean.append(t)
+    for r in roles:
+        if r.get('name') == role_name:
+            r['tags'] = clean
+            break
+    else:
+        raise KeyError(role_name)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(roles, f, ensure_ascii=False, indent=2)
+    return clean
+
+def register_scenario_role_tag_routes(app):
+    @app.route('/api/scenario-role/tags', methods=['PUT'], endpoint='scenario_role_tags')
+    def _scenario_role_tags():
+        body = request.get_json(silent=True) or {}
+        try:
+            tags = update_role_tags(body.get('name', ''), body.get('tags', []))
+        except KeyError:
+            return jsonify({'message': 'Roleが見つかりません'}), 404
+        return jsonify({'message': 'タグを更新しました', 'tags': tags})
 
 
 
