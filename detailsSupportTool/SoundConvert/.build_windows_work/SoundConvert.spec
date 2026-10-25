@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['D:/a/SupportChigadio/SupportChigadio/detailsSupportTool/SoundConvert/audio_scanner.py'],
+    ['D:/a/SupportChigadio/SupportChigadio/detailsSupportTool/SoundConvert/main.py'],
     pathex=[],
     binaries=[],
     datas=[],
