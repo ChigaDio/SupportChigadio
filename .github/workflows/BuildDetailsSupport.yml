@@ -1,4 +1,4 @@
-name: Build DetailsSupport tools into tool folders
+name: Build DetailsSupport tools into their tool folders
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
       build_macos:
         description: Build macOS app bundles
         required: false
-        type: boolean
         default: true
+        type: boolean
       build_windows:
         description: Build Windows executables
         required: false
-        type: boolean
         default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -26,13 +26,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: ChigaDio/SupportChigadio
+          ref: main
+
+      - name: Verify repository structure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ls -la
+          test -d detailsSupportTool
+          find detailsSupportTool -maxdepth 2 -print | sort
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install build dependencies
         shell: bash
         run: |
           set -euxo pipefail
@@ -41,11 +52,11 @@ jobs:
 
           while IFS= read -r req; do
             [ -n "$req" ] || continue
-            echo "Installing: $req"
+            echo "Installing requirements from: $req"
             python -m pip install -r "$req"
           done < <(find detailsSupportTool -type f -name "requirements.txt" -print | sort)
 
-      - name: Build macOS apps into each tool folder
+      - name: Build macOS app bundles into each tool folder
         shell: bash
         run: |
           set -euxo pipefail
@@ -53,44 +64,50 @@ jobs:
           for tool_dir in detailsSupportTool/*; do
             [ -d "$tool_dir" ] || continue
 
-            py_script=""
+            script=""
             for candidate in "$tool_dir"/*.py; do
               [ -f "$candidate" ] || continue
               case "$(basename "$candidate")" in
                 "__init__.py") continue ;;
               esac
-              py_script="$candidate"
+              script="$candidate"
               break
             done
 
-            [ -n "$py_script" ] || continue
+            [ -n "$script" ] || continue
 
-            base_name="$(basename "$tool_dir")"
-            app_name="$base_name"
+            tool_name="$(basename "$tool_dir")"
 
-            # 既存の .app があれば削除してから上書き
-            existing_app="$(find "$tool_dir" -maxdepth 1 -name "*.app" -print -quit || true)"
-            if [ -n "$existing_app" ]; then
+            # 既存の .app を削除しておく
+            existing_app="$tool_dir/$tool_name.app"
+            if [ -e "$existing_app" ]; then
               rm -rf "$existing_app"
             fi
 
-            echo "Building macOS app for: $tool_dir"
+            # 一時出力先を使う（同じパスに mv しない）
+            temp_out="$tool_dir/.build_macos_out"
+            rm -rf "$temp_out"
+            mkdir -p "$temp_out"
+
+            work_dir="$tool_dir/.build_macos_work"
+            rm -rf "$work_dir"
+            mkdir -p "$work_dir"
+
+            echo "Building macOS app for: $tool_name"
             pyinstaller \
               --noconfirm \
               --clean \
-              --name "$app_name" \
-              --distpath "$tool_dir" \
-              --workpath "$tool_dir/.build_macos" \
-              --specpath "$tool_dir/.build_macos" \
+              --name "$tool_name" \
+              --distpath "$temp_out" \
+              --workpath "$work_dir" \
+              --specpath "$work_dir" \
               --onedir \
               --windowed \
-              "$py_script"
+              "$script"
 
-            # 生成された .app を tool directory に配置
-            built_app="$tool_dir/$app_name.app"
+            built_app="$temp_out/$tool_name.app"
             if [ -d "$built_app" ]; then
-              rm -rf "$built_app"
-              mv "$tool_dir/$app_name.app" "$tool_dir/$app_name.app"
+              cp -R "$built_app" "$tool_dir/"
             fi
           done
 
@@ -120,13 +137,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: ChigaDio/SupportChigadio
+          ref: main
+
+      - name: Verify repository structure
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem
+          Test-Path "detailsSupportTool"
+          Get-ChildItem -Path "detailsSupportTool" -Recurse | Select-Object FullName
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install build dependencies
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -134,11 +162,11 @@ jobs:
           python -m pip install pyinstaller
 
           Get-ChildItem -Path "detailsSupportTool" -Recurse -File -Filter "requirements.txt" | ForEach-Object {
-            Write-Host "Installing: $($_.FullName)"
+            Write-Host "Installing requirements from: $($_.FullName)"
             python -m pip install -r $_.FullName
           }
 
-      - name: Build Windows executables directly into each tool folder
+      - name: Build Windows executables into each tool folder
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -155,35 +183,41 @@ jobs:
               return
             }
 
+            # 既存 exe を削除
             $existingExe = Join-Path $toolDir "$toolName.exe"
             if (Test-Path $existingExe) {
               Remove-Item $existingExe -Force
             }
 
-            $existingOtherExe = Get-ChildItem -Path $toolDir -File -Filter "*.exe" | Select-Object -First 1
-            if ($existingOtherExe) {
-              Remove-Item $existingOtherExe.FullName -Force
-            }
+            # 一時出力先
+            $tempOut = Join-Path $toolDir ".build_windows_out"
+            Remove-Item -Recurse -Force $tempOut -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $tempOut | Out-Null
 
-            Write-Host "Building Windows exe for: $toolDir"
+            $workDir = Join-Path $toolDir ".build_windows_work"
+            Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+
+            Write-Host "Building Windows exe for: $toolName"
             pyinstaller `
               --noconfirm `
               --clean `
               --name $toolName `
-              --distpath $toolDir `
-              --workpath "$toolDir\.build_windows" `
-              --specpath "$toolDir\.build_windows" `
+              --distpath $tempOut `
+              --workpath $workDir `
+              --specpath $workDir `
               --onefile `
               --windowed `
               $script.FullName
 
-            $generatedExe = Join-Path $toolDir "$toolName.exe"
-            if (-not (Test-Path $generatedExe)) {
-              $fallback = Get-ChildItem -Path $toolDir -File -Filter "*.exe" | Select-Object -First 1
-              if ($fallback) {
-                $fallback.Name
-              }
+            $generatedExe = Join-Path $tempOut "$toolName.exe"
+            if (Test-Path $generatedExe) {
+              Copy-Item $generatedExe $existingExe
             }
+          }
+
+          Get-ChildItem -Path "detailsSupportTool" -Recurse -File -Filter "*.exe" | ForEach-Object {
+            Write-Host $_.FullName
           }
 
       - name: Commit Windows artifacts
