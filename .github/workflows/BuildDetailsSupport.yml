@@ -19,9 +19,9 @@ permissions:
   contents: write
 
 jobs:
-  # --------------------------------------------------
-  # macOS
-  # --------------------------------------------------
+  # ==================================================
+  # macOS build
+  # ==================================================
   build-macos:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_macos }}
     runs-on: macos-latest
@@ -82,12 +82,14 @@ jobs:
           rm -rf "$TEMP_ROOT"
           mkdir -p "$TEMP_ROOT"
 
+          built_count=0
+
           for tool_dir in "$ROOT"/*; do
             [ -d "$tool_dir" ] || continue
 
             tool_name="$(basename "$tool_dir")"
 
-            # Find the entry point in priority order.
+            # Find Python entry point.
             py_script=""
 
             for candidate in \
@@ -120,7 +122,6 @@ jobs:
               continue
             fi
 
-            # Keep all intermediate files outside the repository.
             tool_temp="$TEMP_ROOT/$tool_name"
             dist_dir="$tool_temp/dist"
             work_dir="$tool_temp/work"
@@ -128,8 +129,10 @@ jobs:
 
             mkdir -p "$dist_dir" "$work_dir" "$spec_dir"
 
+            echo "========================================"
             echo "Building macOS app: $tool_name"
             echo "Entry point: $py_script"
+            echo "========================================"
 
             python -m PyInstaller \
               --noconfirm \
@@ -145,23 +148,35 @@ jobs:
             built_app="$dist_dir/$tool_name.app"
             target_app="$tool_dir/$tool_name.app"
 
-            # A missing application must fail the build.
             if [ ! -d "$built_app" ]; then
-              echo "::error::PyInstaller did not create $built_app"
+              echo "::error::App bundle was not generated: $built_app"
               exit 1
             fi
 
-            # Replace the old application with the new build.
+            if [ ! -f "$built_app/Contents/Info.plist" ]; then
+              echo "::error::Invalid app bundle: $built_app"
+              exit 1
+            fi
+
+            # Replace only the final app bundle.
             rm -rf "$target_app"
             ditto "$built_app" "$target_app"
 
             if [ ! -f "$target_app/Contents/Info.plist" ]; then
-              echo "::error::Invalid macOS app bundle: $target_app"
+              echo "::error::App bundle copy failed: $target_app"
               exit 1
             fi
 
             echo "Created: $target_app"
+            built_count=$((built_count + 1))
           done
+
+          if [ "$built_count" -eq 0 ]; then
+            echo "::error::No macOS applications were built."
+            exit 1
+          fi
+
+          echo "Successfully built $built_count macOS applications."
 
       - name: Commit and push macOS artifacts
         shell: bash
@@ -172,29 +187,34 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Synchronize with main before committing.
-          git fetch origin main
-          git rebase origin/main
-
-          # Include new files, modifications, and deletions.
+          # Stage generated apps and cleanup changes first.
           git add -A -- detailsSupportTool
 
           if git diff --cached --quiet; then
             echo "No macOS changes to commit"
-            exit 0
+          else
+            git diff --cached --stat
+            git commit -m "Build macOS DetailsSupport apps"
           fi
 
-          git diff --cached --stat
+          # Rebase only after the working tree is clean.
+          git fetch origin main
+          git rebase origin/main
 
-          git commit -m "Build macOS DetailsSupport apps"
+          # Push the resulting commit to main.
           git push origin HEAD:main
 
-  # --------------------------------------------------
-  # Windows
-  # --------------------------------------------------
+  # ==================================================
+  # Windows build
+  # ==================================================
   build-windows:
     needs: build-macos
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.build_windows }}
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.build_windows
+      }}
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -217,7 +237,14 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           python -m pip install --upgrade pip setuptools wheel
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upgrade pip"
+          }
+
           python -m pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install PyInstaller"
+          }
 
           Get-ChildItem `
             -Path "detailsSupportTool" `
@@ -229,6 +256,7 @@ jobs:
             } |
             ForEach-Object {
               Write-Host "Installing requirements from: $($_.FullName)"
+
               python -m pip install -r $_.FullName
 
               if ($LASTEXITCODE -ne 0) {
@@ -246,13 +274,21 @@ jobs:
               -Path "detailsSupportTool" `
               -Directory `
               -Recurse |
-              Where-Object { $_.Name -like ".build_*" } |
-              Sort-Object { $_.FullName.Length } -Descending
+              Where-Object {
+                $_.Name -like ".build_*"
+              } |
+              Sort-Object {
+                $_.FullName.Length
+              } -Descending
           )
 
           foreach ($dir in $oldDirs) {
-            Write-Host "Removing old build directory: $($dir.FullName)"
-            Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+            Write-Host "Removing: $($dir.FullName)"
+
+            Remove-Item `
+              -LiteralPath $dir.FullName `
+              -Recurse `
+              -Force
           }
 
       - name: Build Windows executables
@@ -260,13 +296,26 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $root = Join-Path $env:GITHUB_WORKSPACE "detailsSupportTool"
-          $tempRoot = Join-Path $env:RUNNER_TEMP "details-support-windows"
+          $root = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "detailsSupportTool"
 
-          Remove-Item -LiteralPath $tempRoot -Recurse -Force `
+          $tempRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "details-support-windows"
+
+          Remove-Item `
+            -LiteralPath $tempRoot `
+            -Recurse `
+            -Force `
             -ErrorAction SilentlyContinue
 
-          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $tempRoot | Out-Null
+
+          $builtCount = 0
 
           Get-ChildItem -Path $root -Directory | ForEach-Object {
             $toolDir = $_.FullName
@@ -274,6 +323,7 @@ jobs:
 
             $script = $null
 
+            # Prefer main.py, then server.py.
             foreach ($name in @("main.py", "server.py")) {
               $candidate = Join-Path $toolDir $name
 
@@ -283,12 +333,15 @@ jobs:
               }
             }
 
+            # Fall back to another Python file in the tool folder.
             if (-not $script) {
               $script = Get-ChildItem `
                 -Path $toolDir `
                 -File `
                 -Filter "*.py" |
-                Where-Object { $_.Name -ne "__init__.py" } |
+                Where-Object {
+                  $_.Name -ne "__init__.py"
+                } |
                 Sort-Object Name |
                 Select-Object -First 1
             }
@@ -303,11 +356,15 @@ jobs:
             $workDir = Join-Path $toolTemp "work"
             $specDir = Join-Path $toolTemp "spec"
 
-            New-Item -ItemType Directory -Force `
+            New-Item `
+              -ItemType Directory `
+              -Force `
               -Path $distDir, $workDir, $specDir | Out-Null
 
+            Write-Host "========================================"
             Write-Host "Building Windows executable: $toolName"
             Write-Host "Entry point: $($script.FullName)"
+            Write-Host "========================================"
 
             python -m PyInstaller `
               --noconfirm `
@@ -328,17 +385,23 @@ jobs:
             $targetExe = Join-Path $toolDir "$toolName.exe"
 
             if (-not (Test-Path -LiteralPath $generatedExe -PathType Leaf)) {
-              throw "PyInstaller did not create $generatedExe"
+              throw "Executable was not generated: $generatedExe"
             }
 
-            # Only the final executable goes into the tool directory.
             Copy-Item `
               -LiteralPath $generatedExe `
               -Destination $targetExe `
               -Force
 
             Write-Host "Created: $targetExe"
+            $builtCount++
           }
+
+          if ($builtCount -eq 0) {
+            throw "No Windows executables were built."
+          }
+
+          Write-Host "Successfully built $builtCount Windows executables."
 
       - name: Commit and push Windows artifacts
         shell: bash
@@ -349,18 +412,17 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git fetch origin main
-          git rebase origin/main
-
-          # Include new files, modifications, and deletions.
           git add -A -- detailsSupportTool
 
           if git diff --cached --quiet; then
             echo "No Windows changes to commit"
-            exit 0
+          else
+            git diff --cached --stat
+            git commit -m "Build Windows DetailsSupport executables"
           fi
 
-          git diff --cached --stat
+          git fetch origin main
+          git rebase origin/main
 
-          git commit -m "Build Windows DetailsSupport executables"
           git push origin HEAD:main
+
