@@ -49,6 +49,13 @@ button.on{background:var(--ac);border-color:var(--ac);color:#fff}
 .h[data-c=nw]{cursor:nwse-resize}.h[data-c=se]{cursor:nwse-resize}.h[data-c=ne]{cursor:nesw-resize}.h[data-c=sw]{cursor:nesw-resize}
 .eh{position:absolute;left:0;right:0;top:40%;text-align:center;color:#7c83a6;pointer-events:none;font-size:22px}
 @media(max-width:720px){#main{flex-direction:column}#side{width:auto;max-height:130px;border-right:0;border-bottom:1px solid var(--ln)}}
+.ov{position:fixed;inset:0;background:rgba(10,12,24,.5);display:flex;align-items:center;justify-content:center;z-index:50}
+.md{background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;padding:18px}
+.tr{display:flex;gap:6px;align-items:center;padding:8px 0;border-top:1px solid var(--ln);flex-wrap:wrap}
+.md input:not([type=checkbox]){font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--ln);border-radius:8px;padding:5px 8px;min-width:0}
+.md input:disabled{border-color:transparent}.mu{color:var(--mu);font-size:12px}
+.pop{position:fixed;z-index:40;background:var(--bg);border:1px solid var(--ln);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;max-width:280px;max-height:60vh;overflow:auto;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.pop .ph2{color:var(--mu);font-size:12px;padding:2px 6px}
 </style>
 <script src="lib/jszip.min.js"></script>
 <script src="lib/jspdf.umd.min.js"></script>
@@ -106,7 +113,7 @@ function mk(s,n){
   return {id:uid(),name:n,pages:L[s]()};
 }
 let cropId=null,S=null,edit=true,sel=null,undo=[],snap=true,zm=1,pick=null,dr=null;
-const fresh=()=>({sec:{chars:[mk("chars","キャラクター 01")],bgs:[mk("bgs","背景 01")],stills:[mk("stills","スチル 01")],arts:[mk("arts","イラスト・ポスター 01")]},imgs:{},ar:{},cur:{s:"chars",i:null,p:0}});
+const fresh=()=>({sec:{chars:[mk("chars","キャラクター 01")],bgs:[mk("bgs","背景 01")],stills:[mk("stills","スチル 01")],arts:[mk("arts","イラスト・ポスター 01")]},imgs:{},ar:{},tpl:nt(),cur:{s:"chars",i:null,p:0}});
 const item=()=>S.sec[S.cur.s].find(x=>x.id===S.cur.i), pg=()=>{const it=item();return it&&it.pages[S.cur.p]||null}, fe=id=>pg().els.find(e=>e.id===id);
 const pu=()=>{undo.push(JSON.stringify(S.sec));if(undo.length>50)undo.shift()};
 // ---- storage ----
@@ -143,8 +150,8 @@ function side(){
     s.append(d);
   });
   const b=document.createElement("button");b.textContent="＋ 追加";b.style.marginTop="8px";
-  b.onclick=()=>{pu();const a=S.sec[S.cur.s],n=mk(S.cur.s,SEC[S.cur.s]+" "+String(a.length+1).padStart(2,"0"));a.push(n);S.cur.i=n.id;S.cur.p=0;sel=null;draw();save()};
-  s.append(b);
+  b.onclick=ev=>{ev.stopPropagation();addMenu(b)};
+  const b2=document.createElement("button");b2.textContent="テンプレート管理";b2.style.cssText="margin:8px 0 0 6px";b2.onclick=()=>openTpl();s.append(b,b2);
 }
 function bar(){
   const pt=$("#pt");pt.innerHTML="";const it=item();if(!it){$("#tb").innerHTML="";return}
@@ -158,7 +165,7 @@ function bar(){
     const sl=document.createElement("select");sl.innerHTML='<option value="">＋ ページ追加</option><option value="s">単ページ（横）</option><option value="d">見開き</option><option value="v">縦（ポスター）</option>';
     sl.onchange=()=>{if(!sl.value)return;pu();it.pages.push(P("新規ページ",sl.value,[]));S.cur.p=it.pages.length-1;sel=null;draw();save()};
     const x=document.createElement("button");x.textContent="このページを削除";x.onclick=()=>{if(it.pages.length<2)return;pu();it.pages.splice(S.cur.p,1);S.cur.p=0;sel=null;draw();save()};
-    pt.append(sl,x);
+    pt.append(sl,x);const tt=document.createElement("button");tt.textContent="テンプレート…";tt.onclick=()=>openTpl();pt.append(tt);
   }
   const tb=$("#tb");tb.innerHTML="";if(!edit)return;
   const B=[["addf","＋ 画像枠"],["addt","＋ 文字"],["addi","画像を追加"],["repl","画像を差し替え","i"],["fit","全体/はみ出し","i"],["crop","トリミング位置","i"],["iz-","画像 −","i"],["iz+","画像 ＋","i"],["crst","トリミング初期化","i"],["nc","キャプション","i"],["fs-","文字 −","t"],["fs+","文字 ＋","t"],["bd","太字","t"],["rl","↺ 回転","a"],["rr","回転 ↻","a"],["r0","回転0°","a"],["dup","複製","a"],["fr","前面へ","a"],["bk","背面へ","a"],["del","削除","a"],["undo","元に戻す"],["snap","吸着 "+(snap?"ON":"OFF")],["z-","縮小"],["z+","拡大"],["z0","画面に合わせる"]];
@@ -244,8 +251,9 @@ async function exportSite(){
     try{if(v.startsWith("data:")){b=d2b(v);ext=(b.type.split("/")[1]||"webp").replace("jpeg","jpg")}else{ext=v.split(".").pop();b=await (await fetch(v)).blob()}}catch(e){}
     if(b){im.file(id+"."+ext,b);map[id]="images/"+id+"."+ext}else map[id]=v;
   }
-  z.file("project.js","window.PROJECT="+JSON.stringify({t:Date.now(),sec:S.sec,ar:S.ar,cur:S.cur,imgs:map})+";");
+  z.file("project.js","window.PROJECT="+JSON.stringify({t:Date.now(),sec:S.sec,ar:S.ar,tpl:S.tpl,cur:S.cur,imgs:map})+";");
   z.file("index.html",siteHtml());
+  for(const sc of document.querySelectorAll('script[src^="lib/"]')){try{z.file(sc.getAttribute("src"),await (await fetch(sc.src)).blob())}catch(e){}}
   await dl("setting-book.zip",await z.generateAsync({type:"blob"}));msg("書き出しました（images/ は相対パス）");
 }
 const fb=f=>new Promise(r=>{const x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)});
@@ -265,7 +273,7 @@ async function imp(files){
       const k=ks.find(k=>k===v||k.endsWith("/"+v));
       if(k){const g=await map[k]();imgs[id]=await fb(new Blob([g],{type:g.type||"image/"+v.split(".").pop().replace("jpg","jpeg")}))}else imgs[id]=v;
     }
-    S={sec:j.sec,imgs,ar:j.ar||{},cur:j.cur||{s:"chars",i:null,p:0}};
+    S={sec:j.sec,imgs,ar:j.ar||{},tpl:Object.assign(nt(),j.tpl||{}),cur:j.cur||{s:"chars",i:null,p:0}};
     if(!item()){S.cur={s:"chars",i:S.sec.chars[0]?.id||null,p:0}}
     sel=null;cropId=null;undo=[];draw();save();msg("読み込みました");
   }catch(e){msg("読み込めませんでした（project.js と images/ を一緒に選んでください）")}
@@ -307,6 +315,63 @@ async function pdf(all){
 $("#imp").onclick=()=>{$("#ji").value="";$("#ji").click()};$("#impf").onclick=()=>{$("#jf").value="";$("#jf").click()};
 $("#ji").onchange=ev=>imp(ev.target.files);$("#jf").onchange=ev=>imp(ev.target.files);
 $("#exp").onclick=exportSite;$("#pdf").onclick=()=>pdf(false);$("#pdfa").onclick=()=>pdf(true);
+// ---- templates ----
+const CATS=["chars","bgs","stills","arts"],nt=()=>({chars:[],bgs:[],stills:[],arts:[]});
+const builtin=s=>[{id:"b-std",name:"標準（初期レイアウト）",b:1,mk:n=>mk(s,n).pages},{id:"b-blank",name:"空白（1ページ）",b:1,mk:()=>[P("ページ 1","s",[])]}];
+const allT=s=>builtin(s).concat(S.tpl[s]);
+const clonePages=ps=>JSON.parse(JSON.stringify(ps)).map(p=>{p.id=uid();p.els.forEach(e=>e.id=uid());return p});
+const tplPages=(t,n)=>t.b?t.mk(n):clonePages(t.pages);
+function newFrom(t){pu();const a=S.sec[S.cur.s],n=SEC[S.cur.s]+" "+String(a.length+1).padStart(2,"0"),it={id:uid(),name:n,pages:tplPages(t,n)};a.push(it);S.cur.i=it.id;S.cur.p=0;sel=null;cropId=null;draw();save()}
+function addPagesFrom(t){const it=item();if(!it)return;pu();const i0=it.pages.length;it.pages.push(...tplPages(t,it.name));S.cur.p=i0;sel=null;cropId=null;draw();save()}
+function saveTpl(scope,name,withImg){
+  const it=item();if(!it||!pg())return;const ps=clonePages(scope==="item"?it.pages:[pg()]);
+  if(!withImg)ps.forEach(p=>p.els.forEach(e=>{if(e.t==="img"){e.img=null;e.ix=0;e.iy=0;e.iz=1}}));
+  S.tpl[S.cur.s].push({id:uid(),name:name||((scope==="item"?it.name:pg().name)+" テンプレ"),pages:ps});save();msg("テンプレートを保存しました");
+}
+function closePop(){const o=$("#pop");if(o)o.remove()}
+function addMenu(btn){
+  closePop();const m=document.createElement("div");m.id="pop";m.className="pop";
+  const h=document.createElement("div");h.className="ph2";h.textContent="テンプレートから追加";m.append(h);
+  allT(S.cur.s).forEach(t=>{const b=document.createElement("button");b.textContent=t.name+(t.b?"":"（"+t.pages.length+"p）");b.onclick=()=>{closePop();newFrom(t)};m.append(b)});
+  const g=document.createElement("button");g.textContent="テンプレート管理…";g.onclick=()=>{closePop();openTpl()};m.append(g);
+  const r=btn.getBoundingClientRect();m.style.cssText=`left:${Math.min(r.left,innerWidth-290)}px;top:${r.bottom+4}px`;document.body.append(m);
+}
+addEventListener("pointerdown",ev=>{if(!ev.target.closest("#pop"))closePop()},true);
+const usedImgs=()=>{const o={};for(const c of CATS)S.tpl[c].forEach(t=>t.pages.forEach(p=>p.els.forEach(e=>{if(e.img&&S.imgs[e.img])o[e.img]=S.imgs[e.img]})));return o};
+async function expTpl(){await dl("templates.json",new Blob([JSON.stringify({tplbundle:1,tpl:S.tpl,imgs:usedImgs(),ar:S.ar})],{type:"application/json"}));msg("テンプレートを書き出しました")}
+async function impTpl(f){
+  try{const j=JSON.parse(await f.text());if(!j.tplbundle)throw 0;let n=0;
+    for(const c of CATS)(j.tpl[c]||[]).forEach(t=>{t.id=uid();S.tpl[c].push(t);n++});
+    Object.assign(S.imgs,j.imgs||{});Object.assign(S.ar,j.ar||{});save();msg(n+"件のテンプレートを追加しました");
+  }catch(e){msg("テンプレートを読み込めませんでした")}
+}
+function openTpl(){
+  const s=S.cur.s,ov=document.createElement("div"),md=document.createElement("div");ov.className="ov";md.className="md";ov.append(md);
+  ov.onpointerdown=ev=>{if(ev.target===ov)ov.remove()};
+  const mb=(t,f)=>{const b=document.createElement("button");b.textContent=t;b.onclick=f;return b};
+  const R=()=>{
+    md.innerHTML="";const h=document.createElement("h2");h.textContent="テンプレート — "+SEC[s];h.style.cssText='margin:0 0 6px;font:600 18px "Yu Mincho","Hiragino Mincho ProN",serif';md.append(h);
+    const note=document.createElement("div");note.className="mu";note.textContent="テンプレートはカテゴリごとに保存されます。保存数に上限はありません。";md.append(note);
+    const sv=document.createElement("div");sv.className="tr";sv.style.borderTop="0";
+    sv.innerHTML='<input class="ni" placeholder="テンプレート名（空なら自動）"><label><input type="checkbox" class="wi"> 画像も含める</label>';
+    const ni=$(".ni",sv),wi=$(".wi",sv),ok=!!(item()&&pg());
+    const b1=mb("この項目全体を保存",()=>{saveTpl("item",ni.value.trim(),wi.checked);R()}),b2=mb("このページだけ保存",()=>{saveTpl("page",ni.value.trim(),wi.checked);R()});
+    b1.disabled=b2.disabled=!ok;sv.append(b1,b2);md.append(sv);
+    allT(s).forEach(t=>{
+      const r=document.createElement("div");r.className="tr";
+      const nm=document.createElement("input");nm.value=t.name;nm.disabled=!!t.b;nm.style.flex="1";nm.onchange=()=>{t.name=nm.value.trim()||t.name;save()};
+      const info=document.createElement("span");info.className="mu";info.textContent=t.b?"組み込み":t.pages.length+"ページ";
+      const a=mb("新規項目で使う",()=>{ov.remove();newFrom(t)}),c=mb("現在の項目に追加",()=>{ov.remove();addPagesFrom(t)});c.disabled=!item();
+      r.append(nm,info,a,c);
+      if(!t.b){const d=mb("削除",()=>{if(!d.dataset.c){d.dataset.c=1;d.textContent="本当に削除";return}S.tpl[s]=S.tpl[s].filter(x=>x!==t);save();R()});r.append(d)}
+      md.append(r);
+    });
+    const ft=document.createElement("div");ft.className="tr";
+    const inp=document.createElement("input");inp.type="file";inp.accept=".json";inp.hidden=true;inp.onchange=async()=>{if(inp.files[0]){await impTpl(inp.files[0]);R()}};
+    ft.append(mb("テンプレ書き出し(JSON)",expTpl),mb("テンプレ読み込み(追加)",()=>{inp.value="";inp.click()}),inp,mb("閉じる",()=>ov.remove()));md.append(ft);
+  };
+  R();document.body.append(ov);
+}
 // ---- pointer ----
 const bp=ev=>{const r=$("#bd").getBoundingClientRect(),z=zf();return[(ev.clientX-r.left)/z,(ev.clientY-r.top)/z]};
 const sn=v=>snap?Math.round(v/10)*10:Math.round(v);
@@ -351,11 +416,11 @@ $("#view").addEventListener("drop",ev=>{
   addFiles(ev.dataTransfer.files,x,y,e&&e.t==="img"?e:null);
 });
 document.addEventListener("paste",ev=>{
-  if(!edit||!pg()||(ev.target.isContentEditable))return;const fs=[...(ev.clipboardData?.files||[])];if(!fs.length)return;
+  if(!edit||!pg()||ev.target.isContentEditable||ev.target.tagName==="INPUT")return;const fs=[...(ev.clipboardData?.files||[])];if(!fs.length)return;
   ev.preventDefault();const e=sel&&fe(sel),p=pg();addFiles(fs,60,60,e&&e.t==="img"?e:null);
 });
 document.addEventListener("keydown",ev=>{
-  if(!edit||!pg()||ev.target.isContentEditable||ev.target.tagName==="SELECT")return;
+  if(!edit||!pg()||ev.target.isContentEditable||ev.target.tagName==="SELECT"||ev.target.tagName==="INPUT")return;
   const k=ev.key,m=ev.ctrlKey||ev.metaKey;
   if(m&&k==="z"){ev.preventDefault();act("undo");return}
   if(m&&k==="d"){ev.preventDefault();act("dup");return}
@@ -368,7 +433,7 @@ document.addEventListener("keydown",ev=>{
 let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(board,120)});
 // ---- boot ----
 (async()=>{
-  const L=await load(),PJ=window.PROJECT;S=L||null;if(PJ&&PJ.sec&&(!L||(PJ.t||0)>(L.t||0)))S={sec:PJ.sec,imgs:PJ.imgs||{},ar:PJ.ar||{},cur:PJ.cur||{s:"chars",i:null,p:0},t:PJ.t};if(!S||!S.sec||!S.imgs)S=fresh();S.ar=S.ar||{};
+  const L=await load(),PJ=window.PROJECT;S=L||null;if(PJ&&PJ.sec&&(!L||(PJ.t||0)>(L.t||0)))S={sec:PJ.sec,imgs:PJ.imgs||{},ar:PJ.ar||{},tpl:PJ.tpl,cur:PJ.cur||{s:"chars",i:null,p:0},t:PJ.t};if(!S||!S.sec||!S.imgs)S=fresh();S.ar=S.ar||{};S.tpl=S.tpl||nt();CATS.forEach(c=>S.tpl[c]=S.tpl[c]||[]);
   if(!item())S.cur={s:S.cur.s&&S.sec[S.cur.s]?S.cur.s:"chars",i:null,p:0};
   if(!S.cur.i){S.cur.i=S.sec[S.cur.s][0]?.id||null;S.cur.p=0}
   draw();
