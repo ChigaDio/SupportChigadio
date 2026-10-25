@@ -1,0 +1,5 @@
+scenario-data/.local/
+build/
+dist/
+*.spec
+__pycache__/
