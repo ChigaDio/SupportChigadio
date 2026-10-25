@@ -1,4 +1,4 @@
-name: Build all DetailsSupport tools into each tool folder
+name: Build all DetailsSupport tools into their tool folders
 
 on:
   workflow_dispatch:
@@ -30,20 +30,12 @@ jobs:
           repository: ChigaDio/SupportChigadio
           ref: main
 
-      - name: Verify repo structure
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ls -la
-          test -d detailsSupportTool
-          find detailsSupportTool -maxdepth 2 -print | sort
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install build dependencies
         shell: bash
         run: |
           set -euxo pipefail
@@ -52,7 +44,7 @@ jobs:
 
           while IFS= read -r req; do
             [ -n "$req" ] || continue
-            echo "Installing: $req"
+            echo "Installing requirements from: $req"
             python -m pip install -r "$req"
           done < <(find detailsSupportTool -type f -name "requirements.txt" -print | sort)
 
@@ -64,8 +56,6 @@ jobs:
           for tool_dir in detailsSupportTool/*; do
             [ -d "$tool_dir" ] || continue
 
-            # Pick the Python entrypoint in each tool folder.
-            # Priority: main.py, server.py, *.py not __init__.py
             py_script=""
             for cand in "$tool_dir"/main.py "$tool_dir"/server.py "$tool_dir"/*.py; do
               [ -f "$cand" ] || continue
@@ -84,13 +74,11 @@ jobs:
 
             tool_name="$(basename "$tool_dir")"
 
-            # Delete any old macOS bundle in this tool folder
             old_app="$tool_dir/$tool_name.app"
             if [ -e "$old_app" ]; then
               rm -rf "$old_app"
             fi
 
-            # Build into a temp dir, not into the tool folder itself
             temp_out="$tool_dir/.build_macos_out"
             rm -rf "$temp_out"
             mkdir -p "$temp_out"
@@ -116,9 +104,6 @@ jobs:
               cp -R "$built_app" "$tool_dir/"
             fi
           done
-
-          echo "Built apps:"
-          find detailsSupportTool -maxdepth 2 -type d -name "*.app" -print | sort
 
       - name: Commit macOS artifacts
         shell: bash
@@ -148,20 +133,12 @@ jobs:
           repository: ChigaDio/SupportChigadio
           ref: main
 
-      - name: Verify repo structure
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          Get-ChildItem
-          Test-Path "detailsSupportTool"
-          Get-ChildItem -Path "detailsSupportTool" -Recurse | Select-Object FullName
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install build dependencies
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -199,7 +176,7 @@ jobs:
                 Select-Object -First 1
 
               if (-not $allPy) {
-                Write-Host "Skipping $toolDir: no Python entrypoint found"
+                Write-Host ("Skipping " + ${toolDir} + ": no Python entrypoint found")
                 return
               }
 
@@ -235,10 +212,6 @@ jobs:
             if (Test-Path $generatedExe) {
               Copy-Item $generatedExe $existingExe
             }
-          }
-
-          Get-ChildItem -Path "detailsSupportTool" -Recurse -File -Filter "*.exe" | ForEach-Object {
-            Write-Host $_.FullName
           }
 
       - name: Commit Windows artifacts
