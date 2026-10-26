@@ -15,5 +15,9 @@ if exist "%~dp0requirements.txt" (
   )
 )
 
-start "" "%~dp0scenario_editor_app.exe"
+rem Run in this console so logs stay visible; closing it stops the server.
+"%~dp0scenario_editor_app.exe"
+echo.
+echo Exited with code %errorlevel%.
+pause
 endlocal
