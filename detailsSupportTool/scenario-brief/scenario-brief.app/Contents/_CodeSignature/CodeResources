@@ -4,13 +4,21 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/README.md</key>
+		<data>
+		G0aPSCyHTdmuKw7A8nolde9vleg=
+		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		EbijhYDy55wJsjyBletyUmOHFAE=
+		osZ6ljaLOeQQ3x+GVQkrd388BVo=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
 		eEHOuYpZLB0vKGVIWGZOh5rH8+o=
+		</data>
+		<key>Resources/index.html</key>
+		<data>
+		HQ3mJaRUyv7qbdtyB0dfJWP0ZPY=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -29,10 +37,20 @@
 			<key>requirement</key>
 			<string>cdhash H"4840a5996c47a2d852b957b8ca04220f57eddac1"</string>
 		</dict>
+		<key>Frameworks/README.md</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/README.md</string>
+		</dict>
 		<key>Frameworks/base_library.zip</key>
 		<dict>
 			<key>symlink</key>
 			<string>../Resources/base_library.zip</string>
+		</dict>
+		<key>Frameworks/index.html</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/index.html</string>
 		</dict>
 		<key>Frameworks/libcrypto.3.dylib</key>
 		<dict>
@@ -445,11 +463,18 @@
 			<key>symlink</key>
 			<string>../Frameworks/Python.framework</string>
 		</dict>
+		<key>Resources/README.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			m3tm7NHcpiPwpaYTDbn62V4xmtBEdl+CByBqIqdF8Z0=
+			</data>
+		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			l0uca9WjdyJlRTdHLg027lm52AZmqkIMpHLlEM2IklA=
+			7RZpKmtFBKBdG9YM3ugWhSkMdZ1Zfb9QCP2UAuGFzKw=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
@@ -457,6 +482,13 @@
 			<key>hash2</key>
 			<data>
 			uQo7VuWRab4Phv4EEGmfQsyqFqDIXZgO8OtgaAMvCzY=
+			</data>
+		</dict>
+		<key>Resources/index.html</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			lWzMyx93Re8x+2Z2DSj7MAzj0t3fVPXvSsPUH6j0+z4=
 			</data>
 		</dict>
 		<key>Resources/libcrypto.3.dylib</key>

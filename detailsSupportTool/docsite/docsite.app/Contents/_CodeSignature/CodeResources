@@ -4,9 +4,13 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/README.md</key>
+		<data>
+		VQ2bTxndq8MBE7i7Q9A+h9Vouh0=
+		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		to8YuUJ2/aOVz2AMuIUyf3hdP60=
+		7FG1K7Y9aWHFt32Bbyuu8WBqgRw=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
@@ -44,6 +48,14 @@
 		<data>
 		5GfnzQXuvBptRWQjiqwNWKYHSsA=
 		</data>
+		<key>Resources/template/index.html</key>
+		<data>
+		+ukSPAR4fZjDhjzFwxlIzhOMb5o=
+		</data>
+		<key>Resources/template/style.css</key>
+		<data>
+		4zGAP4vnU6KVlOBLW2J5C5HfPMs=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -60,6 +72,11 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"4840a5996c47a2d852b957b8ca04220f57eddac1"</string>
+		</dict>
+		<key>Frameworks/README.md</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/README.md</string>
 		</dict>
 		<key>Frameworks/base_library.zip</key>
 		<dict>
@@ -499,6 +516,11 @@
 			<key>requirement</key>
 			<string>cdhash H"c0002136a39afe62cdd440be2aceb6d99236faf5"</string>
 		</dict>
+		<key>Frameworks/template</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/template</string>
+		</dict>
 		<key>Resources/Python</key>
 		<dict>
 			<key>symlink</key>
@@ -509,11 +531,18 @@
 			<key>symlink</key>
 			<string>../Frameworks/Python.framework</string>
 		</dict>
+		<key>Resources/README.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			4iCC8IsUAxNjGgWuOnbND9ZjPc1EH7YxeB6UGGIlT44=
+			</data>
+		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			MTfCzsZh+rXJmRlKgE0k6SJmnicdYpyG3YM6na82diI=
+			yaOAfFkPvb50Phl9wH2ix/OlKNYJlgRkGN+SypSgnjM=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
@@ -593,6 +622,20 @@
 		<dict>
 			<key>symlink</key>
 			<string>../Frameworks/python3.11</string>
+		</dict>
+		<key>Resources/template/index.html</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			OUO7KDqPF9Ef2ZV9pJfrOh3HHUqEidGpyRxGOUI7KP4=
+			</data>
+		</dict>
+		<key>Resources/template/style.css</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			CLQgNJe7Y/7XbKdOcWuo3d03FAKvNuwTqjrVcwwr4kQ=
+			</data>
 		</dict>
 	</dict>
 	<key>rules</key>

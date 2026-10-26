@@ -516,13 +516,21 @@
 		<data>
 		XoMTEbKV2RXCdV3NE9fDsAAttiE=
 		</data>
+		<key>Resources/README.md</key>
+		<data>
+		uY5xoys8dM/EH5O+18uLAg4/fdA=
+		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		X3U1b6d0UNI5m8zs5bTdxFaRZ+0=
+		ZFRo2GUEmwoQCsdgYf6WsY31QFE=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
 		eEHOuYpZLB0vKGVIWGZOh5rH8+o=
+		</data>
+		<key>Resources/style.qss</key>
+		<data>
+		CYStK+e7APW/Z597E26icnYHiTY=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -1149,6 +1157,11 @@
 			<key>symlink</key>
 			<string>PySide6/Qt/lib/QtWidgets.framework/Versions/A/QtWidgets</string>
 		</dict>
+		<key>Frameworks/README.md</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/README.md</string>
+		</dict>
 		<key>Frameworks/base_library.zip</key>
 		<dict>
 			<key>symlink</key>
@@ -1580,6 +1593,11 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"fe09cafdf198755a2a57495806291a474e75e0e2"</string>
+		</dict>
+		<key>Frameworks/style.qss</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/style.qss</string>
 		</dict>
 		<key>Resources/PySide6/Qt/lib</key>
 		<dict>
@@ -2632,11 +2650,18 @@
 			<key>symlink</key>
 			<string>PySide6/Qt/lib/QtWidgets.framework/Versions/A/QtWidgets</string>
 		</dict>
+		<key>Resources/README.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			WPw7VkDO2Z/zb7Pv881KBdYljqqe01AleH2d5lc53Kc=
+			</data>
+		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			y3LOZAEBMmrWiQvEQgBzkOoH7vzYbEuH0NI4j5RcAlE=
+			yzsC8qcO7UDG7PS4zBYdEcpF6HDKH7/zxinMYdfKu+4=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
@@ -2695,6 +2720,13 @@
 		<dict>
 			<key>symlink</key>
 			<string>../Frameworks/shiboken6</string>
+		</dict>
+		<key>Resources/style.qss</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			/zHh+nBB2WEYqmwuROqszOWWDGPsVzDyLguJMFyvl/E=
+			</data>
 		</dict>
 	</dict>
 	<key>rules</key>

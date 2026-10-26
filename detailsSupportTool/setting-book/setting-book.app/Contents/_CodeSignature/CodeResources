@@ -4,13 +4,33 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/README.md</key>
+		<data>
+		bO/Xsc/nXh1mOASkU9HoAqjWzZw=
+		</data>
+		<key>Resources/README.txt</key>
+		<data>
+		xg6dCVxpjb2uQz9TJ3UGP0z/k9s=
+		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		jRXsZ1EGtSTB9OvsnN/dSsm2rio=
+		bU1aDpu1G0IDRcuWjtZflmbl5rY=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
 		eEHOuYpZLB0vKGVIWGZOh5rH8+o=
+		</data>
+		<key>Resources/index.html</key>
+		<data>
+		XmJzdCXd0tClcQ5kGzX2ymG0JLA=
+		</data>
+		<key>Resources/lib/jspdf.umd.min.js</key>
+		<data>
+		5Tzk+sn/cFVqU+GgHIY2ozu0j10=
+		</data>
+		<key>Resources/lib/jszip.min.js</key>
+		<data>
+		yWN11Q5ysZmqVN57mtkI/Votx7w=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -29,10 +49,30 @@
 			<key>requirement</key>
 			<string>cdhash H"4840a5996c47a2d852b957b8ca04220f57eddac1"</string>
 		</dict>
+		<key>Frameworks/README.md</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/README.md</string>
+		</dict>
+		<key>Frameworks/README.txt</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/README.txt</string>
+		</dict>
 		<key>Frameworks/base_library.zip</key>
 		<dict>
 			<key>symlink</key>
 			<string>../Resources/base_library.zip</string>
+		</dict>
+		<key>Frameworks/index.html</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/index.html</string>
+		</dict>
+		<key>Frameworks/lib</key>
+		<dict>
+			<key>symlink</key>
+			<string>../Resources/lib</string>
 		</dict>
 		<key>Frameworks/libcrypto.3.dylib</key>
 		<dict>
@@ -436,11 +476,25 @@
 			<key>symlink</key>
 			<string>../Frameworks/Python.framework</string>
 		</dict>
+		<key>Resources/README.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			qog/9cEwFcbW2bVtUh2C5kuDLh/9lXRnb/Okc6Z6U2s=
+			</data>
+		</dict>
+		<key>Resources/README.txt</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			lMRRQBCxdCLaJS+3hfFnVU6PGHsktXSCQY9yGXV0I0w=
+			</data>
+		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			woeKtbqap6bbov7PnnVy9Camb5TTZrRm5C97e6HibIo=
+			XKzi0W3OCiK/YoVpljYJ7r9ZzuNXKDop8hUVHWZA5vU=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
@@ -448,6 +502,27 @@
 			<key>hash2</key>
 			<data>
 			uQo7VuWRab4Phv4EEGmfQsyqFqDIXZgO8OtgaAMvCzY=
+			</data>
+		</dict>
+		<key>Resources/index.html</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Ej65CvY8I/NvlJnWaxkK87DkUJDOUMu2TM+TfgrBQwA=
+			</data>
+		</dict>
+		<key>Resources/lib/jspdf.umd.min.js</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			mMzxeqEMILsTAXYmGPzJtqs6Tn8mtgcdZNC0EVTfOHU=
+			</data>
+		</dict>
+		<key>Resources/lib/jszip.min.js</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			rMfkFFWoB2W1/Zx+4bgHim0WC7vKRVrq6FTeZclH1Z4=
 			</data>
 		</dict>
 		<key>Resources/libcrypto.3.dylib</key>
