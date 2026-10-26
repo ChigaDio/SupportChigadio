@@ -2,7 +2,7 @@
 使い方: python server.py [--data データ保存先] [--port 8765] [--no-browser]
 データは  project.json / chapters/ / dictionary/ / users/<名前>/  に1ファイルずつ保存されます。
 """
-import argparse, hashlib, json, mimetypes, re, sys, threading, webbrowser
+import argparse, functools, hashlib, json, mimetypes, os, re, sys, threading, traceback, webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
@@ -61,6 +61,23 @@ def read_all():
     return o
 
 
+def guarded(fn):
+    """例外を握りつぶさず、ターミナルに表示して 500 を返す(空応答の防止)"""
+    @functools.wraps(fn)
+    def wrapper(self, *a, **k):
+        try:
+            return fn(self, *a, **k)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # ブラウザ側が先に切断しただけ
+        except Exception as e:
+            traceback.print_exc()
+            try:
+                self.send(500, f"サーバーエラー: {e}".encode("utf-8"), "text/plain")
+            except Exception:
+                pass
+    return wrapper
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -80,6 +97,7 @@ class H(BaseHTTPRequestHandler):
     def target(self):
         return safe(parse_qs(urlparse(self.path).query).get("path", [""])[0])
 
+    @guarded
     def do_GET(self):
         u = urlparse(self.path).path
         if u == "/api/all":
@@ -93,9 +111,15 @@ class H(BaseHTTPRequestHandler):
             m = max((f.stat().st_mtime_ns for f in DATA.rglob("*.json") if ".local" not in f.parts), default=0)
             return self.send(body=str(m).encode(), ctype="text/plain")
         if u in ("/", "/index.html"):
-            return self.send(body=(RES_DIR / "index.html").read_bytes(), ctype="text/html")
+            f = RES_DIR / "index.html"
+            if not f.is_file():
+                msg = f"index.html が見つかりません: {f}"
+                print(msg)
+                return self.send(500, msg.encode("utf-8"), "text/plain")
+            return self.send(body=f.read_bytes(), ctype="text/html")
         self.send(404)
 
+    @guarded
     def do_PUT(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if not self.origin_ok():
@@ -111,6 +135,7 @@ class H(BaseHTTPRequestHandler):
         p.write_bytes(body)
         self.send()
 
+    @guarded
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         u = urlparse(self.path)
@@ -126,6 +151,7 @@ class H(BaseHTTPRequestHandler):
             (IMGDIR / fn).write_bytes(body)
         self.send(body=json.dumps({"path": "images/" + fn}).encode())
 
+    @guarded
     def do_DELETE(self):
         p = self.target()
         if not p or not self.origin_ok():
@@ -134,7 +160,33 @@ class H(BaseHTTPRequestHandler):
         self.send()
 
 
-srv = ThreadingHTTPServer(("127.0.0.1", args.port), H)
+class Srv(ThreadingHTTPServer):
+    allow_reuse_address = False  # ポート使用中なら二重起動せずエラーで止まる
+    daemon_threads = True        # 処理中のスレッドが終了を邪魔しない
+
+
+try:
+    srv = Srv(("127.0.0.1", args.port), H)
+except OSError as e:
+    print(f"ポート {args.port} を使用できません: {e}")
+    print("すでに起動中のサーバーが残っている可能性があります。")
+    print("  確認: netstat -ano | findstr :%d" % args.port)
+    print("  終了: stop.bat を実行、または別ポートで起動 (--port 8800)")
+    sys.exit(1)
+
+if sys.platform == "win32":
+    # ウィンドウの×ボタン・ログオフ・シャットダウン時にも確実に終了する
+    import ctypes
+    _HR = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+
+    def _on_console_event(ev):
+        if ev in (1, 2, 5, 6):  # BREAK / CLOSE / LOGOFF / SHUTDOWN
+            os._exit(0)
+        return 0                # Ctrl+C は従来どおり KeyboardInterrupt に任せる
+
+    _handler = _HR(_on_console_event)  # 変数に保持(GCされると動かなくなる)
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(_handler, True)
+
 url = f"http://127.0.0.1:{args.port}/"
 print("データ保存先:", DATA)
 print("起動しました:", url, " (このウィンドウを閉じる / Ctrl+C で終了)")
@@ -144,3 +196,5 @@ try:
     srv.serve_forever()
 except KeyboardInterrupt:
     pass
+finally:
+    srv.server_close()
