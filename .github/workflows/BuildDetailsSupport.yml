@@ -113,9 +113,28 @@ jobs:
             work_dir="$tool_temp/work"
             spec_dir="$tool_temp/spec"
             mkdir -p "$dist_dir" "$work_dir" "$spec_dir"
+
+            # Bundle non-Python resources (index.html, static/, templates/ ...).
+            add_data=()
+            for item in "$tool_dir"/*; do
+              [ -e "$item" ] || continue
+              base="$(basename "$item")"
+              case "$base" in
+                *.py|*.pyc|*.app|*.exe|*.sh|*.bat|*.spec|requirements.txt|__pycache__|.build_*)
+                  continue
+                  ;;
+              esac
+              if [ -d "$item" ]; then
+                add_data+=(--add-data "$item:$base")
+              else
+                add_data+=(--add-data "$item:.")
+              fi
+            done
+
             echo "========================================"
             echo "Building macOS app: $tool_name"
             echo "Entry point: $py_script"
+            echo "Data args: ${add_data[*]-}"
             echo "========================================"
             python -m PyInstaller \
               --noconfirm \
@@ -126,6 +145,7 @@ jobs:
               --specpath "$spec_dir" \
               --onedir \
               --windowed \
+              ${add_data[@]+"${add_data[@]}"} \
               "$py_script"
             built_app="$dist_dir/$tool_name.app"
             target_app="$tool_dir/$tool_name.app"
@@ -165,7 +185,12 @@ jobs:
             fi
           fi
 
-          open "$DIR/__TOOL__.app"
+          # Run the binary inside the bundle directly so logs stay in this
+          # terminal and Ctrl+C / closing the terminal stops the server.
+          "$DIR/__TOOL__.app/Contents/MacOS/__TOOL__"
+          echo
+          echo "Exited with code $?."
+          read -r -p "Press Enter to close..."
           LAUNCHER_EOF
             sed -i '' "s/__TOOL__/${tool_name}/g" "$launcher"
             chmod +x "$launcher"
@@ -323,7 +348,11 @@ jobs:
             '  )',
             ')',
             '',
-            'start "" "%~dp0__TOOL__.exe"',
+            'rem Run in this console so logs stay visible; closing it stops the server.',
+            '"%~dp0__TOOL__.exe"',
+            'echo.',
+            'echo Exited with code %errorlevel%.',
+            'pause',
             'endlocal'
           )
 
@@ -363,10 +392,31 @@ jobs:
               -ItemType Directory `
               -Force `
               -Path $distDir, $workDir, $specDir | Out-Null
+            # Bundle non-Python resources (index.html, static/, templates/ ...).
+            $addData = @()
+            Get-ChildItem -LiteralPath $toolDir -Force |
+              Where-Object {
+                $_.Name -notmatch '\.(py|pyc|app|exe|sh|bat|spec)$' -and
+                $_.Name -ne 'requirements.txt' -and
+                $_.Name -ne '__pycache__' -and
+                $_.Name -notlike '.build_*'
+              } |
+              ForEach-Object {
+                if ($_.PSIsContainer) {
+                  $addData += "--add-data"
+                  $addData += "$($_.FullName);$($_.Name)"
+                } else {
+                  $addData += "--add-data"
+                  $addData += "$($_.FullName);."
+                }
+              }
+
             Write-Host "========================================"
             Write-Host "Building Windows executable: $toolName"
             Write-Host "Entry point: $($script.FullName)"
+            Write-Host "Data args: $($addData -join ' ')"
             Write-Host "========================================"
+            # No --windowed: keep the console so server logs are visible.
             python -m PyInstaller `
               --noconfirm `
               --clean `
@@ -375,7 +425,8 @@ jobs:
               --workpath $workDir `
               --specpath $specDir `
               --onefile `
-              --windowed `
+              --console `
+              @addData `
               $script.FullName
             if ($LASTEXITCODE -ne 0) {
               throw "PyInstaller failed for $toolName"
