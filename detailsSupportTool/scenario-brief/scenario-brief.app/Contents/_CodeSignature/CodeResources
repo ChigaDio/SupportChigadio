@@ -6,7 +6,7 @@
 	<dict>
 		<key>Resources/base_library.zip</key>
 		<data>
-		ESbeRgeZVyU5akMyKx9K3XVnHSY=
+		pWa9X7bDl1HBdqq3dZyNVEAEljk=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
@@ -155,6 +155,15 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"19c01d168e3473d6ad4f732245e338d19c0e2831"</string>
+		</dict>
+		<key>Frameworks/python3__dot__11/lib-dynload/_ctypes.cpython-311-darwin.so</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			sAqRLdrxMHrjLBxBHed6ZmgOMYI=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"b00a912ddaf1307ae32c1c411de77a66680e3182"</string>
 		</dict>
 		<key>Frameworks/python3__dot__11/lib-dynload/_datetime.cpython-311-darwin.so</key>
 		<dict>
@@ -440,7 +449,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			Q+Y5KP+NkNVnanFMet+O/TL2vO9omiD9jBW/CAIivpQ=
+			wi3OK6ImgGle4MVbVgBTVjRIO4B6MSwT7oWqN8OV7Mk=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
