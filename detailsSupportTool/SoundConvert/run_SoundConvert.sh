@@ -14,4 +14,9 @@ if [ -f "$DIR/requirements.txt" ]; then
   fi
 fi
 
-open "$DIR/SoundConvert.app"
+# Run the binary inside the bundle directly so logs stay in this
+# terminal and Ctrl+C / closing the terminal stops the server.
+"$DIR/SoundConvert.app/Contents/MacOS/SoundConvert"
+echo
+echo "Exited with code $?."
+read -r -p "Press Enter to close..."

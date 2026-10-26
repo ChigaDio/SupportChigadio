@@ -1,0 +1,323 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>シナリオ演出依頼資料集</title>
+<style>
+:root{--b:#2f5d8a;--bg:#e9ebee;--tx:#222;--pn:#fff;--bd:#cfd5dc}
+@media(prefers-color-scheme:dark){:root{--bg:#1d2126;--tx:#e6e8ea;--pn:#2a2f36;--bd:#454c55}}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,"Hiragino Sans","Yu Gothic",sans-serif}
+header,.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;background:var(--pn);border-bottom:1px solid var(--bd)}
+button,select,input,textarea{font:inherit;color:inherit;background:var(--pn);border:1px solid var(--bd);border-radius:6px;padding:4px 8px}
+input[type=color]{padding:0;width:34px;height:28px}input[type=range]{padding:0;width:90px}
+button{cursor:pointer}button.on{background:var(--b);color:#fff;border-color:var(--b)}
+.sw{width:22px;height:22px;padding:0;border-radius:50%}
+section{display:none}section.on{display:block}
+#area{padding:16px;display:flex;flex-direction:column;align-items:center;gap:16px;overflow:auto}
+.pg{position:relative;width:793px;height:1122px;background:#fff;color:#222;padding:60px 56px;overflow:hidden;box-shadow:0 2px 10px #0003;flex:none}
+.pb{height:100%;overflow:hidden;font:16px/1.9 "Hiragino Mincho ProN","Yu Mincho",serif}
+.pb p{margin:0;min-height:1.9em}
+canvas{position:absolute;left:0;top:0;width:793px;height:1122px;touch-action:none;mix-blend-mode:multiply;cursor:crosshair}
+.sel canvas{pointer-events:none}
+.dl{background:#fff3b8;border-radius:3px}.sel .dl{cursor:pointer}.sel .dl:hover{outline:2px solid var(--b)}
+.sp{font:700 11px sans-serif;color:#fff;border-radius:3px;padding:1px 5px;margin-right:2px;vertical-align:2px}
+.pn{position:absolute;right:20px;bottom:14px;font:11px sans-serif;color:#999}
+.card{background:var(--pn);border:1px solid var(--bd);border-radius:8px;padding:8px;margin:8px 0;display:grid;gap:6px}
+.card .bar{padding:0;border:0}.card input[data-f=name]{flex:1}
+.wrap{max-width:900px;margin:0 auto;padding:12px}
+#tx{width:100%;height:60vh;font:15px/1.7 serif;margin-top:8px}
+.hint{font-size:12px;opacity:.7}
+#dp{display:none}
+@media print{@page{size:A4 portrait;margin:0}body{background:#fff}.np{display:none!important}#area{padding:0;gap:0;display:block}.pg{box-shadow:none;break-after:page}#area .pg:last-child{break-after:auto}#cp.on,#dp.on{display:block}.dpg{break-before:page;padding:18mm;color:#222;background:#fff;font:12px/1.7 sans-serif}}
+#cp{display:none}#cvr{padding:16px;display:flex;justify-content:center}h2{margin:8px 0}
+.cover{padding:0;display:flex;background:#f6f7f9;color:#1b2333}
+.cvb{width:236px;background:#1f3a6e;display:flex;justify-content:center;padding-top:96px}
+.cvt{writing-mode:vertical-rl;color:#fff;font:600 54px/1.35 "Hiragino Mincho ProN","Yu Mincho",serif;letter-spacing:.16em;max-height:920px;overflow:hidden}
+.cvm{flex:1;padding:100px 56px 56px 64px;display:flex;flex-direction:column;font-family:"Hiragino Mincho ProN","Yu Mincho",serif}
+.cvs{font-size:20px;letter-spacing:.3em;line-height:2.1;border-top:3px solid #1f3a6e;padding-top:18px;width:max-content}
+.cvl{margin:60px 0 0;padding:0;list-style:none;counter-reset:n;font-size:15px;line-height:2.3;flex:1;overflow:hidden}
+.cvl li{counter-increment:n;border-bottom:1px solid #d3d8e0}.cvl li::before{content:"第" counter(n,cjk-decimal) "章　";color:#1f3a6e;font-weight:600}
+.cvf{font:12px/1.8 system-ui,sans-serif;color:#667}
+[hidden]{display:none!important}
+.pg{padding:0}
+.hd{position:absolute;left:56px;right:40px;top:28px;height:36px;border-bottom:2px solid #1f3a6e;display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:6px;font-family:"Hiragino Mincho ProN","Yu Mincho",serif}
+.hd b{font-size:15px;letter-spacing:.14em;color:#1f3a6e}.hd i{font:italic 600 13px Georgia,serif;color:#1f3a6e}
+.dv{position:absolute;top:72px;height:988px;border-left:1.5px solid #1f3a6e}
+.memo{position:absolute;top:84px;right:40px;height:960px;background:linear-gradient(#0000 29px,#dfe4ec 29px) 0 0/100% 30px}
+.memo span{position:absolute;top:-17px;left:2px;font:600 10px sans-serif;letter-spacing:.3em;color:#1f3a6e}
+.pb{position:absolute;left:56px;top:84px;height:960px;overflow:hidden;font:15px/30px "Hiragino Mincho ProN","Yu Mincho",serif;outline:0}
+.pb p{margin:0;min-height:30px;position:relative}
+.pb p::before{content:attr(data-n);position:absolute;left:-32px;width:26px;text-align:right;font:10px/30px sans-serif;color:#a3adbf}
+.pn{right:auto;left:56px;bottom:20px;font:10px sans-serif;letter-spacing:.12em;color:#8a94a6}
+.pf{position:absolute;right:40px;bottom:12px;display:flex;gap:6px}.pf button{font-size:11px;padding:2px 6px}
+.nc canvas{pointer-events:none}.t-move canvas{cursor:default}
+.t-sel .dl{cursor:pointer}.t-sel .dl:hover{outline:2px solid var(--b)}
+.t-edit .pb{outline:2px dashed #2f9bff44;overflow:visible;cursor:text}
+.t-brk .pb p{cursor:cell}.t-brk .pb p:hover{box-shadow:inset 0 2px #e11d48}
+#pp{position:fixed;right:14px;bottom:14px;width:318px;z-index:20;background:var(--pn);border:1px solid var(--bd);border-radius:10px;padding:10px;display:grid;gap:6px;box-shadow:0 6px 24px #0004}
+#pp .r{display:flex;flex-wrap:wrap;gap:4px;align-items:center}#pp textarea{width:100%}
+#pp [data-b].on{background:var(--b);color:#fff}
+#uv label{margin-left:6px}
+@media print{#area{zoom:1!important}}
+.mk{background:#ffe9a8}.pb{font-size:var(--fs,15px)}.t-sel .dl:not(.has){outline:1px dashed #e11d48}@media print{.mk{background:none!important}}
+</style></head><body>
+<header class="np"><b>演出依頼資料集</b>
+<label>名前 <input id="me" size="8" placeholder="自分の名前"></label>
+<select id="ch"></select>
+<span class="tabs"><button data-t="cv">表紙</button> <button data-t="v">資料</button> <button data-t="t">本文</button> <button data-t="d1">世界観</button> <button data-t="d2">用語</button> <button data-t="d3">キャラクター</button></span>
+<span style="flex:1"></span>
+<button id="rl" title="git pull のあとなどに、ディスクの内容を読み直します">🔄 再読込</button>
+<label><input type="checkbox" id="wd"> 辞書も出力</label><button id="pr">📄 PDF出力(A4)</button><span id="st" class="hint"></span></header>
+
+<div id="cp"></div>
+<section id="cv" class="np"><div class="bar"><label>プロジェクト名 <input id="pj" size="26" placeholder="例：星降る町のレクイエム"></label><span class="hint">この名前から表紙が作られ、PDFの1枚目になります</span></div><div id="cvr"></div></section>
+<section id="v"><div class="bar np" id="tb"></div><div id="area"></div></section>
+
+<section id="t" class="np"><div class="wrap"><div class="bar"><button id="nc">＋新しい章</button><input id="ti" placeholder="章タイトル" style="flex:1"><button id="cu">↑ 前へ</button><button id="cd">↓ 後ろへ</button><button id="cx">🗑 この章を削除</button></div>
+<div class="hint">小説をそのまま貼り付け。「---」だけの行で強制改ページ。本文を直すと書き込みの位置がずれることがあります。</div>
+<textarea id="tx" placeholder="ここに小説をコピペ"></textarea></div></section>
+<section id="d" class="np"><div class="wrap"><h2 id="dh"></h2><div class="hint" id="dn"></div><div class="bar"><button id="na"></button>
+<label><input type="checkbox" id="fh" checked> 今の章＋共通のみ</label><input id="fq" placeholder="検索"></div><div id="dl"></div></div></section>
+<div id="pp" class="np" hidden><textarea class="tx" id="pt" rows="3" placeholder="テキスト（改行OK）"></textarea>
+<div class="r tx"><select id="pf"><option value="sans">ゴシック</option><option value="serif">明朝</option><option value="hand">手書き風</option><option value="mono">等幅</option></select><input id="pz" type="number" min="8" max="96" style="width:58px" title="文字サイズ"><button data-b="b"><b>B</b></button><button data-b="i"><i>I</i></button><button data-b="u"><u>U</u></button><select id="pa"><option value="l">左寄せ</option><option value="c">中央</option><option value="r">右寄せ</option></select></div>
+<div class="r"><label data-for="text"><input type="checkbox" id="pd"> 枠線</label><label data-for="text rect ellipse poly">塗り<input type="color" id="pl" value="#fff59d"></label><button id="pln" data-for="text rect ellipse poly">塗りなし</button><select id="ds" data-for="text rect ellipse line arrow curve poly" title="線の種類"><option value="0">実線</option><option value="1">破線</option><option value="2">点線</option></select><select id="ah" data-for="line arrow curve poly" title="矢じり"><option value="n">矢じりなし</option><option value="e">終点→</option><option value="s">←始点</option><option value="b">←→両端</option></select></div>
+<div class="r"><label data-for="poly"><input type="checkbox" id="pcl"> 閉じる(多角形)</label><label data-for="img">透明度<input type="range" id="po" min="10" max="100"></label><button id="pfr">前面へ</button><button id="pbk">背面へ</button></div>
+<div class="r"><label>色<input type="color" id="pc"></label><label>線<input type="range" id="pw" min="1" max="24"></label><button id="pdup">複製</button><button id="pdel">🗑削除</button></div>
+<div class="hint">ドラッグで移動、四隅で拡大縮小。「吸着」ONで、行・他の図形・余白線にピタッと揃います。</div></div>
+<div id="dp"></div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const W=793,H=1122,id=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+const h=s=>{let x=0;for(const c of s)x=Math.imul(31,x)+c.charCodeAt(0)|0;return(x>>>0).toString(36)};
+const CATS=['世界観','用語','キャラクター','章設定'],FREE=['pen','marker','brush'];
+const TPL=['BGM','SE','背景','暗転','立ち絵','表情','カメラ','演出','動き','ウェイト','カット番号','付箋','自由メモ…'],COL=['#e11d48','#2563eb','#16a34a','#facc15','#111827'];
+const TOOLS=[['move','↖選択・移動'],['pen','✏️鉛筆'],['marker','🖍マーカー'],['brush','🖌筆'],['line','／線'],['arrow','→矢印'],['curve','〰曲線矢印'],['poly','⟋折れ線'],['rect','▭四角'],['ellipse','◯丸'],['text','Ｔ文字ボックス'],['tpl','🏷演出ラベル'],['eraser','🧽消しゴム'],['sel','👆話者指定'],['done','✔対応済み'],['edit','✎本文編集'],['brk','✂改ページ']];
+let S={me:'',project:'',chapters:{},dict:{},layers:{}};
+let tool='pen',dirty=new Set(),hist=[],reds=[],tm,sel=null,gd=null,pt0=null,stamp,pcur=null;
+const chs=()=>Object.values(S.chapters).sort((a,b)=>a.order-b.order||(a.id<b.id?-1:1)),cp=()=>S.chapters[S.cur];
+const lay=(u,c)=>((S.layers[u]??={})[c]??={erased:[],speakers:{},done:{},strokes:[]}),mine=()=>lay(S.me,S.cur);
+const myp=()=>`users/${S.me}/${S.cur}.json`,mk=p=>dirty.add(p);
+const need=()=>S.me?1:(alert('上の「名前」欄に自分の名前を入力してください。書き込みは名前ごとに保存されます。'),0);
+const col=()=>$('#co').value,wd=()=>+$('#wi').value;
+
+/* ---- 保存 (Pythonサーバー経由で1ファイル=1作者/1章/1項目。他人のファイルは書き換えない) ---- */
+const api=(m,u,b)=>fetch(u,{method:m,body:b}).then(r=>{if(!r.ok)throw Error(r.status);return r});
+const J=o=>JSON.stringify(o,null,1)+'\n';
+const jl=l=>`{\n"erased":${JSON.stringify(l.erased)},\n"speakers":${JSON.stringify(Object.fromEntries(Object.entries(l.speakers).sort()))},\n"done":${JSON.stringify(Object.fromEntries(Object.entries(l.done||{}).sort()))},\n"strokes":[\n${l.strokes.map(s=>JSON.stringify(s)).join(',\n')}\n]\n}\n`;
+function cont(p){if(p=='project.json')return J({name:S.project,memoW:S.memoW,fs:S.fs});const[a,b,c]=p.split('/'),k=(b||'').slice(0,-5);
+ if(a=='chapters')return S.chapters[k]?J(S.chapters[k]):null;if(a=='dictionary')return S.dict[k]?J(S.dict[k]):null;const l=S.layers[b]?.[c.slice(0,-5)];return l?jl(l):null}
+function save(){clearTimeout(tm);tm=setTimeout(flush,400);$('#st').textContent='…'}
+async function flush(){try{for(const p of[...dirty]){const t=cont(p);await api(t==null?'DELETE':'PUT','/api/file?path='+encodeURIComponent(p),t);dirty.delete(p)}stamp=await(await api('GET','/api/stamp')).text();$('#st').textContent='保存済み'}catch(e){$('#st').textContent='保存失敗: '+e.message}}
+async function load(){const c=S.cur;S=await(await api('GET','/api/all')).json();S.cur=c;hist=[];reds=[];stamp=await(await api('GET','/api/stamp')).text()}
+$('#rl').onclick=async()=>{await flush();await load();init()};
+
+/* ---- タブ・章・表紙 ---- */
+let ct,dcat=CATS[0];
+function tab(t){ct=t;const s=t[0]=='d'?'d':t;if(s=='d')dcat=CATS[t[1]-1];
+ $$('section').forEach(x=>x.classList.toggle('on',x.id==s));$$('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t==t));
+ if(s=='cv'){$('#pj').value=S.project||'';$('#cvr').innerHTML=coverHtml()}if(s=='v')render();if(s=='t'){$('#ti').value=cp()?.title||'';$('#tx').value=cp()?.text||''}if(s=='d')renderDict()}
+$$('.tabs button').forEach(b=>b.onclick=()=>tab(b.dataset.t));
+function chSel(){if(!(S.cur in S.chapters))S.cur=chs()[0]?.id;$('#ch').innerHTML=chs().map(c=>`<option value="${c.id}">${esc(c.title)}</option>`).join('');$('#ch').value=S.cur||''}
+function init(){chSel();$('#me').value=S.me||'';tab(ct||'cv')}
+$('#ch').onchange=()=>{S.cur=$('#ch').value;hist=[];reds=[];tab(ct)};
+$('#me').onchange=()=>{S.me=$('#me').value.replace(/[\\/:*?"<>|\s]/g,'_');$('#me').value=S.me;api('PUT','/api/me',S.me)};
+const coverHtml=()=>{const t=S.project||'無題のプロジェクト',us=Object.keys(S.layers).filter(u=>u);
+ return `<div class="pg cover"><div class="cvb"><div class="cvt" style="font-size:${t.length>12?38:54}px">${esc(t)}</div></div><div class="cvm"><div class="cvs">シナリオスクリプト<br>演出依頼資料集</div><ol class="cvl">${chs().map(c=>`<li>${esc(c.title)}</li>`).join('')}</ol><div class="cvf">${new Date().toLocaleDateString('ja-JP')}<br>${us.map(esc).join(' / ')}</div></div></div>`};
+$('#pj').oninput=()=>{S.project=$('#pj').value;mk('project.json');save();$('#cvr').innerHTML=coverHtml()};
+$('#nc').onclick=()=>{const t=prompt('章タイトル');if(!t)return;const i=id('c');S.chapters[i]={id:i,title:t,order:chs().length?Math.max(...chs().map(c=>c.order))+1:1,text:''};S.cur=i;mk(`chapters/${i}.json`);save();init();tab('t')};
+$('#tx').oninput=()=>{if(cp()){cp().text=$('#tx').value;mk(`chapters/${S.cur}.json`);save()}};
+$('#ti').oninput=()=>{if(cp()){cp().title=$('#ti').value;mk(`chapters/${S.cur}.json`);save();chSel()}};
+/* 並べ替えは前後の章のorderの中間値を入れるだけ → 書き換わるファイルは動かした章の1つだけ */
+function mv(dn){const a=chs(),i=a.findIndex(c=>c.id==S.cur),j=dn?i+1:i-1;if(i<0||j<0||j>=a.length)return;const lo=a[dn?j:j-1],hi=a[dn?j+1:j];
+ S.chapters[S.cur].order=lo?(hi?(lo.order+hi.order)/2:lo.order+1):hi.order-1;mk(`chapters/${S.cur}.json`);save();chSel()}
+$('#cu').onclick=()=>mv(0);$('#cd').onclick=()=>mv(1);
+$('#cx').onclick=()=>{const c=cp();if(!c||!confirm(`「${c.title}」を削除しますか？\n自分の書き込みも消えます（他の人の書き込みファイルは残ります）`))return;const i=S.cur;
+ delete S.chapters[i];mk(`chapters/${i}.json`);if(S.layers[S.me]?.[i]){delete S.layers[S.me][i];mk(`users/${S.me}/${i}.json`)}S.cur=undefined;hist=[];reds=[];save();init()};
+
+/* ---- 世界観・用語・キャラクター ---- */
+const opt=(a,v)=>a.map(x=>`<option${x==v?' selected':''}>${x}</option>`).join('');
+const TT={世界観:'世界観設定',用語:'用語集',キャラクター:'キャラクター設定'},PH={世界観:'舞台・歴史・ルール・雰囲気など',用語:'意味・読み・使われる場面',キャラクター:'一人称・口調・年齢・外見・性格・関係性など'};
+function renderDict(){const q=$('#fq').value;$('#dh').textContent=TT[dcat];$('#dn').textContent=dcat=='キャラクター'?'ここで作ったキャラクターが、資料タブの「👆話者指定」で選べます。':'「全章共通」か、特定の章だけに紐づけられます。';$('#na').textContent='＋'+dcat+'を追加';
+ const a=Object.values(S.dict).filter(d=>!d.del&&d.cat==dcat&&(!$('#fh').checked||!d.ch||d.ch==S.cur)&&(!q||(d.name+d.body).includes(q))).sort((x,y)=>x.name.localeCompare(y.name));
+ $('#dl').innerHTML=a.map(d=>`<div class="card" data-i="${d.id}"><div class="bar"><input data-f="name" value="${esc(d.name)}" placeholder="名前">${dcat=='キャラクター'?`<input type="color" data-f="col" value="${d.col||'#3b6ea5'}" title="セリフのラベル色">`:''}<select data-f="ch"><option value="">全章共通</option>${chs().map(c=>`<option value="${c.id}"${c.id==d.ch?' selected':''}>${esc(c.title)}</option>`).join('')}</select><button data-x>🗑</button></div><textarea data-f="body" rows="${dcat=='世界観'?8:4}" placeholder="${PH[dcat]}">${esc(d.body)}</textarea></div>`).join('')||'<p>まだありません。右上の「＋追加」から作成します。</p>'}
+$('#fq').oninput=$('#fh').onchange=renderDict;
+$('#na').onclick=()=>{const i=id('e');S.dict[i]={id:i,cat:dcat,name:'新規',body:'',ch:''};mk(`dictionary/${i}.json`);save();renderDict()};
+$('#dl').oninput=e=>{const c=e.target.closest('.card'),f=e.target.dataset.f;if(c&&f){S.dict[c.dataset.i][f]=e.target.value;mk(`dictionary/${c.dataset.i}.json`);save()}};
+$('#dl').onclick=e=>{const c=e.target.closest('.card');if(c&&e.target.dataset.x!=null&&confirm('削除しますか？')){S.dict[c.dataset.i].del=1;mk(`dictionary/${c.dataset.i}.json`);save();renderDict()}};
+const ents=()=>Object.values(S.dict).filter(d=>!d.del&&(!d.ch||d.ch==S.cur));
+
+/* ---- 資料ビュー (コンテ風: 左=本文 / 縦線 / 右=記入メモ欄) ---- */
+const MW=()=>S.memoW??260,L0=56,R0=40,T0=84,PGH=960,hide=new Set();
+const spk=()=>{const m={};for(const l of Object.values(S.layers))for(const[k,v]of Object.entries(l[S.cur]?.speakers||{}))if(!m[k]||v[1]>m[k][1])m[k]=v;return m};
+const line=(l,cnt,sp)=>esc(l).replace(/「[^」]*」/g,m=>{const k=h(m)+'.'+(cnt[m]=(cnt[m]||0)+1),d=S.dict[(sp[k]||[])[0]];return(d&&!d.del?`<b class="sp" contenteditable="false" style="background:${d.col||'hsl('+parseInt(h(d.name),36)%360+',55%,38%)'}">${esc(d.name)}</b>`:'')+`<span class="dl${d&&!d.del?' has':''}" data-k="${k}">${m}</span>`})||'<br>';
+const setText=t=>{const c=cp(),o=c.text;act(()=>{c.text=t},()=>{c.text=o},1,1,`chapters/${c.id}.json`)};
+function uv(){$('#uv').innerHTML=Object.keys(S.layers).filter(u=>S.layers[u][S.cur]).map(u=>`<label title="この人の書き込みの表示/非表示"><input type="checkbox" data-u="${esc(u)}"${hide.has(u)?'':' checked'}>${esc(u)}</label>`).join('')}
+function render(){const a=$('#area'),c=cp(),y=scrollY;a.innerHTML='';$('#mw').value=MW();a.style.setProperty('--fs',(S.fs||15)+'px');$('#fsz').value=S.fs||15;
+ if(!c){a.innerHTML='<p>「本文」タブで章を作り、小説を貼り付けてください。</p>';return}
+ let n=0,pg,cnt={},sp=spk(),free=0;
+ const np=(b=-1)=>{const mw=free?0:MW(),tw=W-L0-R0-(mw?24+mw:0);pg=document.createElement('div');pg.className='pg';pg.brk=b;pg.free=free;pg.g={tx1:L0+tw,dv:L0+tw+12,mx:L0+tw+24};
+  pg.innerHTML=`<div class="hd"><b>${esc(c.title)}</b><i>p.${n+1}</i></div>${mw?`<div class="dv" style="left:${pg.g.dv}px"></div><div class="memo" style="left:${pg.g.mx}px"><span>演出メモ</span></div>`:''}<div class="pb" style="width:${tw}px"></div><canvas width="1586" height="2244"></canvas><span class="pn">${esc(S.project)}</span><div class="pf np">${b>=0?'<button data-a="free" title="このページをコマ割り(メモ欄)なしの全幅にする/戻す">コンテ枠⇄全幅</button><button data-a="join" title="この改ページを消す">改ページ解除</button>':''}</div>`;
+  a.append(pg);pg.i=n++;pg.b=pg.querySelector('.pb')};np();
+ c.text.split('\n').forEach((l,i)=>{const m=l.trim().match(/^---(\*?)$/);if(m){free=m[1]?1:0;np(i);return}
+  const p=document.createElement('p');p.dataset.l=i;p.dataset.n=l.trim()?i+1:'';p.innerHTML=line(l,cnt,sp);pg.b.append(p);
+  if(pg.b.scrollHeight>pg.b.clientHeight+1&&pg.b.children.length>1){pg.b.removeChild(p);np();pg.b.append(p)}});
+ $$('#area .pb').forEach(b=>{const p=b.children;if(p.length)b.dataset.r=p[0].dataset.l+','+p[p.length-1].dataset.l;b.contentEditable=tool=='edit'});
+ $$('#area .pg').forEach(bind);uv();$('#pgj').innerHTML=$$('#area .pg').map((_,i)=>`<option value="${i}">p.${i+1}</option>`).join('');paintAll();hl(1);scrollTo(0,y)}
+$('#area').onclick=e=>{const c=cp(),bt=e.target.closest('.pf button');
+ if(bt){const pg=bt.closest('.pg'),L=c.text.split('\n');if(bt.dataset.a=='join')L.splice(pg.brk,1);else L[pg.brk]=pg.free?'---':'---*';return setText(L.join('\n'))}
+ if(tool=='brk'){const p=e.target.closest('.pb p');if(p){const i=+p.dataset.l,L=c.text.split('\n');if(!/^---\*?$/.test((L[i-1]||'').trim()))L.splice(i,0,'---');setText(L.join('\n'))}return}
+ if(tool!='sel')return;const s=e.target.closest('.dl');if(!s||!need())return;
+ const cs=ents().filter(d=>d.cat=='キャラクター');if(!cs.length)return alert('「キャラクター」タブで項目を追加すると、ここから選べます。');
+ const dd=document.createElement('select');dd.size=Math.min(9,cs.length+1);dd.style.cssText=`position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:30`;
+ dd.innerHTML='<option value="">(指定なし)</option>'+cs.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+ dd.onchange=()=>{const k=s.dataset.k,m=mine().speakers,o=m[k],v=dd.value;dd.remove();act(()=>m[k]=[v,Date.now()],()=>o?m[k]=o:delete m[k],1)};
+ dd.onblur=()=>dd.remove();document.body.append(dd);dd.focus()};
+$('#area').addEventListener('input',e=>{const b=e.target.closest?.('.pb');if(b)b.dirty=1});
+$('#area').addEventListener('focusout',e=>{const b=e.target.closest?.('.pb');if(tool!='edit'||!b||!b.dirty)return;b.dirty=0;const[r0,r1]=(b.dataset.r||'').split(',').map(Number);if(isNaN(r0))return;
+ const nl=[...b.children].flatMap(p=>{const c=p.cloneNode(true);c.querySelectorAll('.sp').forEach(x=>x.remove());return c.textContent.split('\n')}),L=cp().text.split('\n');L.splice(r0,r1-r0+1,...nl);setText(L.join('\n'))});
+
+/* ---- 書き込み ---- */
+function act(d,u,full,run=1,p=myp()){if(run)d();hist.push({d,u,full,p});reds=[];fin(p,full)}
+const fin=(p,full)=>{mk(p);save();if(sel&&!(S.me&&mine().strokes.includes(sel)))sel=null;full?render():paintAll();pp()};
+const undo=()=>{const x=hist.pop();if(x){x.u();reds.push(x);fin(x.p,x.full)}},redo=()=>{const x=reds.pop();if(x){x.d();hist.push(x);fin(x.p,x.full)}};
+const addS=s=>{s.id=id('s');const L=mine();act(()=>L.strokes.push(s),()=>L.strokes.splice(L.strokes.indexOf(s),1))};
+const erasedSet=()=>new Set(Object.values(S.layers).flatMap(u=>u[S.cur]?.erased||[]));
+const vis=i=>{const er=erasedSet();return Object.entries(S.layers).filter(([u])=>!hide.has(u)).flatMap(([u,l])=>(l[S.cur]?.strokes||[]).filter(s=>s.pg==i&&!er.has(s.id)).map(s=>({s,u}))).sort((a,b)=>(a.s.zi||0)-(b.s.zi||0)||(a.s.id<b.s.id?-1:1))};
+const paint=i=>{const g=$$('#area canvas')[i]?.g;if(!g)return;g.clearRect(0,0,W,H);const dn=doneSet();vis(i).forEach(o=>{if(dn.has(o.s.id)){g.save();g.globalAlpha=.5;draw(g,o.s);g.restore();const b=bnd(o.s);g.save();g.fillStyle='#16a34a';g.beginPath();g.arc(b[2],b[1],9,0,7);g.fill();g.strokeStyle='#fff';g.lineWidth=2;g.setLineDash([]);g.beginPath();g.moveTo(b[2]-4,b[1]);g.lineTo(b[2]-1,b[1]+3);g.lineTo(b[2]+4,b[1]-3);g.stroke();g.restore()}else draw(g,o.s)});if(sel&&sel.pg==i)selBox(g);if(gd&&gd.i==i)guide(g)},paintAll=()=>$$('#area canvas').forEach((_,i)=>paint(i));
+const ds=(x,y,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/l));return Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy)};
+function hit(s,x,y){const p=s.p;if(s.t=='curve'){let pr=p[0];for(let k=1;k<=24;k++){const u=k/24,v=1-u,q=[0,1].map(d=>v*v*v*p[0][d]+3*v*v*u*p[1][d]+3*v*u*u*p[2][d]+u*u*u*p[3][d]);if(ds(x,y,pr,q)<s.w/2+8)return 1;pr=q}return 0}
+ if(FREE.includes(s.t)||s.t=='line'||s.t=='arrow'||s.t=='poly'){const r=s.w*(s.t=='marker'?1.5:.5)+8;return p.some((a,i)=>ds(x,y,a,p[i+1]||a)<r)||(s.cl&&ds(x,y,p.at(-1),p[0])<r)}
+ if(s.t=='rect'){const[a,b]=p,c=[[a[0],a[1]],[b[0],a[1]],[b[0],b[1]],[a[0],b[1]]];return c.some((u,i)=>ds(x,y,u,c[(i+1)%4])<8)}
+ if(s.t=='ellipse'){const[a,b]=p,v=Math.hypot((x-(a[0]+b[0])/2)/(Math.abs(b[0]-a[0])/2+1),(y-(a[1]+b[1])/2)/(Math.abs(b[1]-a[1])/2+1));return Math.abs(v-1)<.25}
+ const X=p.map(a=>a[0]),Y=p.map(a=>a[1]);return x>Math.min(...X)-6&&x<Math.max(...X)+6&&y>Math.min(...Y)-6&&y<Math.max(...Y)+6}
+function erase(i,[x,y],ers){const M=mine(),all=$('#es').value=='all';
+ for(const{s,u}of vis(i).reverse()){if(!hit(s,x,y))continue;let o;
+  if(u==S.me){const k=M.strokes.indexOf(s);o={d:()=>M.strokes.splice(M.strokes.indexOf(s),1),u:()=>M.strokes.splice(k,0,s)}}
+  else if(all)o={d:()=>M.erased.push(s.id),u:()=>M.erased.splice(M.erased.indexOf(s.id),1)};
+  if(o){o.d();ers.push(o);fin(myp(),0);break}}}
+function draw(g,s){if(s.t=='tpl')s={...s,t:'text',z:13,b:1,bd:1,fl:s.c+'22'};const p=s.p,t=s.t;g.save();g.strokeStyle=g.fillStyle=s.c;g.lineWidth=s.w;g.lineCap=g.lineJoin='round';if(s.ds&&!FREE.includes(t))g.setLineDash(s.ds==1?[s.w*3+4,s.w*2+4]:[1,s.w*2+3]);
+ if(t=='pen'){g.lineWidth=Math.max(1,s.w*.6);g.globalAlpha=.9}
+ if(t=='marker'){g.globalAlpha=.4;g.lineWidth=s.w*3;g.lineCap='butt'}
+ if(t=='brush'){for(let i=1;i<p.length;i++){g.lineWidth=s.w*(p[i][2]||1);g.beginPath();g.moveTo(p[i-1][0],p[i-1][1]);g.lineTo(p[i][0],p[i][1]);g.stroke()}if(p.length<2){g.beginPath();g.arc(p[0][0],p[0][1],s.w/2,0,7);g.fill()}}
+ else if(FREE.includes(t)){g.beginPath();p.forEach((a,i)=>i?g.lineTo(a[0],a[1]):g.moveTo(a[0],a[1]));if(p.length==1)g.lineTo(p[0][0]+.1,p[0][1]);g.stroke()}
+ else if(t=='line'||t=='arrow'||t=='curve'||t=='poly'){const c3=t=='curve',pl=t=='poly',a=p[0],b=c3?p[3]:pl?p.at(-1):p[1],ah=s.ah||(t=='arrow'||c3?'e':'n');g.beginPath();g.moveTo(a[0],a[1]);if(c3)g.bezierCurveTo(p[1][0],p[1][1],p[2][0],p[2][1],b[0],b[1]);else if(pl){p.slice(1).forEach(q=>g.lineTo(q[0],q[1]));if(s.cl){g.closePath();if(s.fl){g.fillStyle=s.fl;g.fill()}}}else g.lineTo(b[0],b[1]);g.stroke();g.setLineDash([]);
+  const L=10+s.w*2,hd=(f,o)=>{const r=Math.atan2(o[1]-f[1],o[0]-f[0]);g.beginPath();g.moveTo(o[0]+L*Math.cos(r+2.6),o[1]+L*Math.sin(r+2.6));g.lineTo(o[0],o[1]);g.lineTo(o[0]+L*Math.cos(r-2.6),o[1]+L*Math.sin(r-2.6));g.stroke()};
+  if(!s.cl){if(ah=='e'||ah=='b')hd(c3?p[2]:pl?p.at(-2):a,b);if(ah=='s'||ah=='b')hd(c3?p[1]:pl?p[1]:b,a)}}
+ else if(t=='rect'){if(s.fl){g.fillStyle=s.fl;g.fillRect(p[0][0],p[0][1],p[1][0]-p[0][0],p[1][1]-p[0][1])}g.strokeRect(p[0][0],p[0][1],p[1][0]-p[0][0],p[1][1]-p[0][1])}
+ else if(t=='ellipse'){g.beginPath();g.ellipse((p[0][0]+p[1][0])/2,(p[0][1]+p[1][1])/2,Math.abs(p[1][0]-p[0][0])/2,Math.abs(p[1][1]-p[0][1])/2,0,0,7);if(s.fl){g.fillStyle=s.fl;g.fill()}g.stroke()}
+ else if(t=='img'){const[a,b]=p,im=getImg(s.src);g.globalAlpha=s.op||1;if(im.complete&&im.naturalWidth)g.drawImage(im,a[0],a[1],b[0]-a[0],b[1]-a[1]);else{g.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);g.font='12px sans-serif';g.fillText('画像が見つかりません: '+s.src,a[0]+4,a[1]+16)}}
+ else if(t=='text'){const[a,b]=p,z=s.z||14,w=b[0]-a[0],h=b[1]-a[1],al=s.al||'l';
+  if(s.fl){g.fillStyle=s.fl;g.fillRect(a[0],a[1],w,h)}if(s.bd){g.lineWidth=1.5;g.strokeRect(a[0],a[1],w,h)}
+  g.fillStyle=g.strokeStyle=s.c;g.font=fnt(s);g.textBaseline='top';g.textAlign={l:'left',c:'center',r:'right'}[al];const x=al=='l'?a[0]+6:al=='c'?a[0]+w/2:b[0]-6;
+  wrap(g,s).forEach((l,i)=>{const y=a[1]+5+i*z*1.35;g.fillText(l,x,y);if(s.u){const m=g.measureText(l).width,x0=al=='l'?x:al=='c'?x-m/2:x-m;g.lineWidth=1;g.beginPath();g.moveTo(x0,y+z*1.12);g.lineTo(x0+m,y+z*1.12);g.stroke()}})}
+ g.restore()}
+const FAM={sans:'"Hiragino Sans","Yu Gothic",sans-serif',serif:'"Hiragino Mincho ProN","Yu Mincho",serif',hand:'"Klee One","Yu Kyokasho","HG教科書体",cursive',mono:'"Courier New","MS Gothic",monospace'};
+const fnt=s=>`${s.i?'italic ':''}${s.b?'700 ':''}${s.z||14}px ${FAM[s.f||'sans']}`,mg=document.createElement('canvas').getContext('2d'),clone=o=>JSON.parse(JSON.stringify(o));
+const BOX=['text','rect','ellipse','img'],LN=['line','arrow','curve','poly'];
+function wrap(g,s){const w=Math.abs(s.p[1][0]-s.p[0][0])-12;g.font=fnt(s);const o=[];for(const para of(s.s||'').split(/\n|\|/)){let l='';for(const ch of para){if(g.measureText(l+ch).width>w&&l){o.push(l);l=ch}else l+=ch}o.push(l)}return o}
+const norm=s=>{const[a,b]=s.p;s.p=[[Math.min(a[0],b[0]),Math.min(a[1],b[1])],[Math.max(a[0],b[0]),Math.max(a[1],b[1])]]};
+function fit(s){const n=wrap(mg,s).length*(s.z||14)*1.35+10;if(s.p[1][1]-s.p[0][1]<n)s.p[1][1]=s.p[0][1]+n}
+const bnd=s=>{const X=s.p.map(a=>a[0]),Y=s.p.map(a=>a[1]);return[Math.min(...X),Math.min(...Y),Math.max(...X),Math.max(...Y)]};
+const hs=s=>BOX.includes(s.t)?[[s.p[0][0],s.p[0][1]],[s.p[1][0],s.p[0][1]],[s.p[1][0],s.p[1][1]],[s.p[0][0],s.p[1][1]]]:LN.includes(s.t)?s.p:[];
+function selBox(g){const[a,b,c,d]=bnd(sel);g.save();g.strokeStyle='#2f9bff';g.lineWidth=1;g.setLineDash([5,4]);g.strokeRect(a-4,b-4,c-a+8,d-b+8);g.setLineDash([]);g.fillStyle='#fff';hs(sel).forEach(p=>{g.fillRect(p[0]-5,p[1]-5,10,10);g.strokeRect(p[0]-5,p[1]-5,10,10)});g.restore()}
+function guide(g){g.save();g.strokeStyle='#06b6d4';g.lineWidth=1;g.setLineDash([4,3]);if(gd.x!=null){g.beginPath();g.moveTo(gd.x,0);g.lineTo(gd.x,H);g.stroke()}if(gd.y!=null){g.beginPath();g.moveTo(0,gd.y);g.lineTo(W,gd.y);g.stroke()}g.restore()}
+/* 吸着: 本文の行(30px) / 縦線・余白 / 他の図形・文字の端と中心 */
+function snapPts(pg,s,xs,ys){if(!$('#sn').checked)return[0,0,{}];const T=7,cx=[pg.g.tx1,pg.g.mx,pg.g.dv,L0,W-R0,W/2],cy=[T0,T0+PGH];for(let k=0;k<=32;k++)cy.push(T0+k*30);
+ vis(pg.i).forEach(({s:o})=>{if(o!==s){const[a,b,c,d]=bnd(o);cx.push(a,(a+c)/2,c);cy.push(b,(b+d)/2,d)}});
+ const f=(v,c)=>{let m=1e9,g=null;for(const q of v)for(const k of c)if(Math.abs(k-q)<Math.abs(m)){m=k-q;g=k}return Math.abs(m)<=T?[m,g]:[0,null]};
+ const[dx,gx]=f(xs,cx),[dy,gy]=f(ys,cy);return[dx,dy,{x:gx,y:gy}]}
+const IMG={},getImg=src=>IMG[src]??=Object.assign(new Image(),{onload:()=>paintAll(),src});
+function polyEnd(){const s=pcur;pcur=null;if(!s)return;s.p.pop();s.p=s.p.filter((a,i,r)=>!i||Math.hypot(a[0]-r[i-1][0],a[1]-r[i-1][1])>3);if(s.cl&&s.p.length<3)delete s.cl;if(s.p.length>=2)addS(s);else paintAll()}
+function bind(pg){const cv=pg.querySelector('canvas'),g=cv.getContext('2d');cv.g=g;g.scale(2,2);let cur,ers,dr;
+ const q=e=>{const r=cv.getBoundingClientRect();return[Math.round((e.clientX-r.left)*W/r.width),Math.round((e.clientY-r.top)*H/r.height)]};
+ cv.ondblclick=e=>{if(tool=='poly')return polyEnd();if(tool=='move'&&sel){if(sel.t=='poly'){const p=q(e),a=sel.p,s=sel;let bi=0,bd=1e9;for(let i=0;i<a.length-(s.cl?0:1);i++){const d=ds(p[0],p[1],a[i],a[(i+1)%a.length]);if(d<bd){bd=d;bi=i}}if(bd<14){const o=clone(a),n=clone(a);n.splice(bi+1,0,p);act(()=>{s.p=clone(n)},()=>{s.p=clone(o)},0)}return}pp(1)}};
+ cv.onpointerdown=e=>{const p=q(e);cv.setPointerCapture(e.pointerId);
+  if(tool=='move'){
+   if(sel&&sel.pg==pg.i){const i=hs(sel).findIndex(h=>Math.hypot(h[0]-p[0],h[1]-p[1])<10);if(i>=0){dr={m:'h',i,o:clone(sel.p)};return}}
+   const o=vis(pg.i).reverse().find(o=>hit(o.s,p[0],p[1]));
+   if(!o||o.u!=S.me){sel=null;paintAll();pp();if(o)$('#st').textContent='他の人の書き込みは動かせません（自分の分だけ編集できます）';return}
+   sel=o.s;dr={m:'m',st:p,o:clone(sel.p)};paintAll();pp();return}
+  if(!need())return;
+  if(tool=='poly'){if(!pcur||pcur.pg!=pg.i){pcur={t:'poly',pg:pg.i,c:col(),w:wd(),p:[p,p]};if(+$('#tds').value)pcur.ds=+$('#tds').value;if($('#tah').value)pcur.ah=$('#tah').value}
+   else{const r=e.shiftKey?pcur.p.at(-1):p,f=pcur.p[0];pcur.p[pcur.p.length-1]=r;if(pcur.p.length>=4&&Math.hypot(r[0]-f[0],r[1]-f[1])<10){pcur.cl=1;return polyEnd()}pcur.p.push(r)}
+   paint(pg.i);draw(g,pcur);return}
+  if(tool=='done'){const o=vis(pg.i).reverse().find(o=>hit(o.s,p[0],p[1]));if(o){const d=mine().done??={},k=o.s.id,had=k in d;act(()=>{had?delete d[k]:d[k]=Date.now()},()=>{had?d[k]=1:delete d[k]},0)}return}
+  if(tool=='eraser'){ers=[];erase(pg.i,p,ers);return}
+  if(tool=='text'||tool=='tpl'){const t=tool=='tpl',lab=$('#tp').value,s={t:'text',pg:pg.i,c:col(),w:2,p:[p,[p[0]+(t?180:200),p[1]+30]],s:t?(lab.includes('自由')?'':lab+'：'):'テキスト',z:t?13:15};if(t)Object.assign(s,{b:1,bd:1,fl:col()+'22'});if(t&&lab=='付箋')Object.assign(s,{c:'#5b4a00',fl:'#fff3a3',s:'付箋：',b:0,p:[p,[p[0]+170,p[1]+90]]});if(t&&lab=='カット番号')Object.assign(s,{s:'C'+cutN(),al:'c',p:[p,[p[0]+54,p[1]+30]]});fit(s);sel=s;addS(s);setTool('move');pp(1);return}
+  cur={t:tool,pg:pg.i,c:col(),w:wd(),p:FREE.includes(tool)?[p]:tool=='curve'?[p,p,p,p]:[p,p]};if(+$('#tds').value)cur.ds=+$('#tds').value;if($('#tah').value)cur.ah=$('#tah').value};
+ cv.onpointermove=e=>{const p=q(e);
+  if(pcur&&pcur.pg==pg.i&&tool=='poly'){if(e.shiftKey&&pcur.p.length>1){const a=pcur.p.at(-2),dx=p[0]-a[0],dy=p[1]-a[1],an=Math.round(Math.atan2(dy,dx)/(Math.PI/12))*Math.PI/12,r=Math.hypot(dx,dy);p[0]=Math.round(a[0]+r*Math.cos(an));p[1]=Math.round(a[1]+r*Math.sin(an))}pcur.p[pcur.p.length-1]=p;paint(pg.i);draw(g,pcur);return}
+  if(dr){const s=sel;
+   if(dr.m=='m'){const dx=p[0]-dr.st[0],dy=p[1]-dr.st[1],sh=dr.o.map(a=>[a[0]+dx,a[1]+dy]),X=sh.map(a=>a[0]),Y=sh.map(a=>a[1]),x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);
+    const[sx,sy,gu]=snapPts(pg,s,[x0,(x0+x1)/2,x1],[y0,(y0+y1)/2,y1]);gd={i:pg.i,...gu};s.p=dr.o.map(a=>[a[0]+dx+sx,a[1]+dy+sy,...a.slice(2)])}
+   else{const[sx,sy,gu]=snapPts(pg,s,[p[0]],[p[1]]),m=[p[0]+sx,p[1]+sy];gd={i:pg.i,...gu};
+    if(BOX.includes(s.t)){const o=dr.o,hh=[[o[0][0],o[0][1]],[o[1][0],o[0][1]],[o[1][0],o[1][1]],[o[0][0],o[1][1]]];if(s.t=='img'&&s.ar){const f=hh[(dr.i+2)%4];m[1]=f[1]+Math.sign(m[1]-f[1]||1)*Math.abs(m[0]-f[0])/s.ar}s.p=[hh[(dr.i+2)%4],m];norm(s)}else{s.p=clone(dr.o);s.p[dr.i]=m}}
+   paint(pg.i);return}
+  if(ers)return erase(pg.i,p,ers);if(!cur)return;
+  if(e.shiftKey){const a=cur.p[0],dx=p[0]-a[0],dy=p[1]-a[1];if(LN.includes(cur.t)){const an=Math.round(Math.atan2(dy,dx)/(Math.PI/12))*Math.PI/12,r=Math.hypot(dx,dy);p[0]=Math.round(a[0]+r*Math.cos(an));p[1]=Math.round(a[1]+r*Math.sin(an))}else if(FREE.includes(cur.t))cur.p.length=1;else{const m=Math.max(Math.abs(dx),Math.abs(dy));p[0]=a[0]+Math.sign(dx||1)*m;p[1]=a[1]+Math.sign(dy||1)*m}}
+  if(FREE.includes(cur.t)){const l=cur.p.at(-1);if(cur.t=='brush')p.push(Math.max(.4,Math.min(2,2.2-Math.hypot(p[0]-l[0],p[1]-l[1])/6)));cur.p.push(p)}else if(cur.t=='curve'){const a=cur.p[0],dx=p[0]-a[0],dy=p[1]-a[1],n=[-dy*.3,dx*.3];cur.p=[a,[a[0]+dx/3+n[0],a[1]+dy/3+n[1]],[a[0]+2*dx/3+n[0],a[1]+2*dy/3+n[1]],p]}else cur.p[1]=p;
+  paint(pg.i);draw(g,cur)};
+ cv.onpointerup=cv.onpointercancel=()=>{
+  if(dr){const s=sel,o=dr.o;dr=null;gd=null;if(BOX.includes(s.t)){norm(s);if(s.t=='text')fit(s)}const n=clone(s.p);paint(pg.i);if(JSON.stringify(n)!=JSON.stringify(o))act(()=>{s.p=clone(n)},()=>{s.p=clone(o)},0,0);return}
+  if(ers){if(ers.length){const a=ers;act(()=>a.forEach(x=>x.d()),()=>[...a].reverse().forEach(x=>x.u()),0,0)}ers=null;return}
+  if(!cur)return;const s=cur;cur=null;if(BOX.includes(s.t))norm(s);addS(s)}}
+
+/* ---- ツールバー・プロパティパネル ---- */
+$('#tb').innerHTML=TOOLS.map(([k,l])=>`<button data-k="${k}">${l}</button>`).join('')+COL.map(c=>`<button class="sw" data-c="${c}" style="background:${c}"></button>`).join('')+`<input type="color" id="co" value="#e11d48" title="色"><input type="range" id="wi" min="1" max="24" value="4" title="太さ"><select id="tds" title="線の種類"><option value="0">実線</option><option value="1">破線</option><option value="2">点線</option></select><select id="tah" title="矢じり(線・矢印・曲線)"><option value="">矢じり:標準</option><option value="n">なし</option><option value="e">終点</option><option value="s">始点</option><option value="b">両端</option></select><select id="tp" title="BGM・SE・背景などの演出指示ラベル。ドラッグ不要でクリックした位置に置け、中の文字は後から自由に書き換えられます">${opt(TPL)}</select><select id="es"><option value="me">消す：自分の書込のみ</option><option value="all">消す：全員の書込</option></select><button id="un">↩ 戻す</button><button id="re">↪ やり直し</button><label title="動かすとき、本文の行・縦線・他の図形の端にピタッと揃えます"><input type="checkbox" id="sn" checked>吸着</label><label title="右の記入欄の幅(0で全幅)">メモ幅<input type="range" id="mw" min="0" max="480" step="10"></label><span id="uv" title="見たい人の書き込みだけ表示"></span><select id="pgj" title="ページ移動"></select><select id="zm" title="表示倍率"><option value="0.6">60%</option><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option></select><button id="csv" title="セリフと話者の一覧をCSVで保存">📋セリフCSV</button><button id="img" title="画像を貼る(貼り付け Ctrl+V / ドラッグ&ドロップも可)。画像は scenario-data/images/ に保存され、相対パスで参照されます">🖼画像</button><input type="file" id="imf" accept="image/*" multiple hidden><input id="qs" placeholder="本文検索" style="width:90px"><select id="fsz" title="本文の文字サイズ"><option>13</option><option>14</option><option>15</option><option>16</option><option>18</option></select>`;
+function setTool(k){if(pcur&&k!='poly')polyEnd();tool=k;$$('#tb [data-k]').forEach(b=>b.classList.toggle('on',b.dataset.k==k));$('#area').className='t-'+k+(['sel','edit','brk'].includes(k)?' nc':'');
+ if(k!='move'&&sel){sel=null;pp();paintAll()}$$('#area .pb').forEach(b=>b.contentEditable=k=='edit')}
+$('#tb').onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.k)setTool(b.dataset.k);if(b.dataset.c){$('#co').value=b.dataset.c;if(sel)setP({c:b.dataset.c})}if(b.id=='un')undo();if(b.id=='re')redo()};
+$('#tb').onchange=e=>{const u=e.target.dataset.u;if(u!=null){e.target.checked?hide.delete(u):hide.add(u);paintAll()}};
+$('#mw').onchange=()=>{S.memoW=+$('#mw').value;mk('project.json');save();render()};
+function pp(f){const d=$('#pp');d.hidden=!sel;if(!sel)return;const s=sel,tx=s.t=='text';$$('#pp .tx').forEach(x=>x.hidden=!tx);$$('#pp [data-for]').forEach(x=>x.hidden=!x.dataset.for.split(' ').includes(s.t));$('#ds').value=s.ds||0;$('#ah').value=s.ah||(s.t=='line'||s.t=='poly'?'n':'e');$('#pcl').checked=!!s.cl;$('#po').value=(s.op||1)*100;$('#pl').value=(s.fl||'#fff59d').slice(0,7);$('#pc').value=s.c;$('#pw').value=s.w||4;
+ if(tx){$('#pt').value=s.s||'';$('#pf').value=s.f||'sans';$('#pz').value=s.z||14;$('#pa').value=s.al||'l';$('#pd').checked=!!s.bd;$('#pl').value=(s.fl||'#fff59d').slice(0,7);$$('#pp [data-b]').forEach(b=>b.classList.toggle('on',!!s[b.dataset.b]))}
+ if(f&&tx){$('#pt').focus();$('#pt').select()}}
+function setP(pr){const s=sel;if(!s)return;const o={p:clone(s.p)};for(const k in pr)o[k]=s[k];
+ act(()=>{Object.assign(s,pr);if(s.t=='text')fit(s)},()=>{for(const k in o)o[k]===undefined?delete s[k]:s[k]=clone(o[k])},0)}
+function delS(){const s=sel,M=mine(),k=M.strokes.indexOf(s);if(k>=0)act(()=>M.strokes.splice(M.strokes.indexOf(s),1),()=>M.strokes.splice(k,0,s))}
+$('#pt').onfocus=()=>pt0=sel&&{s:sel.s,p:clone(sel.p)};
+$('#pt').oninput=()=>{if(!sel)return;sel.s=$('#pt').value;fit(sel);mk(myp());save();paint(sel.pg)};
+$('#pt').onchange=()=>{const s=sel,o=pt0;if(!s||!o)return;const n={s:s.s,p:clone(s.p)};act(()=>Object.assign(s,clone(n)),()=>Object.assign(s,clone(o)),0,0)};
+$('#pf').onchange=()=>setP({f:$('#pf').value});$('#pz').onchange=()=>setP({z:+$('#pz').value});$('#pa').onchange=()=>setP({al:$('#pa').value});
+$('#pd').onchange=()=>setP({bd:$('#pd').checked?1:0});$('#pl').onchange=()=>setP({fl:$('#pl').value+'33'});$('#pln').onclick=()=>setP({fl:''});
+$('#pc').onchange=()=>setP({c:$('#pc').value});$('#pw').onchange=()=>setP({w:+$('#pw').value});
+$$('#pp [data-b]').forEach(b=>b.onclick=()=>setP({[b.dataset.b]:sel[b.dataset.b]?0:1}));
+$('#pdel').onclick=delS;
+$('#pdup').onclick=()=>{const n=clone(sel),M=mine();n.id=id('s');n.p=n.p.map(a=>[a[0]+14,a[1]+14,...a.slice(2)]);sel=n;act(()=>M.strokes.push(n),()=>M.strokes.splice(M.strokes.indexOf(n),1))};
+const doneSet=()=>new Set(Object.values(S.layers).flatMap(u=>Object.keys(u[S.cur]?.done||{})));
+const cutN=()=>Math.max(0,...Object.values(S.layers).flatMap(l=>(l[S.cur]?.strokes||[]).map(s=>(/^C(\d+)$/.exec(s.s||'')||[])[1]|0)))+1;
+$('#ds').onchange=()=>setP({ds:+$('#ds').value});$('#ah').onchange=()=>setP({ah:$('#ah').value});
+$('#pgj').onchange=()=>$$('#area .pg')[$('#pgj').value]?.scrollIntoView({behavior:'smooth',block:'start'});
+$('#zm').onchange=()=>{$('#area').style.zoom=$('#zm').value};
+$('#csv').onclick=()=>{const c=cp();if(!c)return;const sp=spk(),cnt={},rows=[['章','行','話者','セリフ']];
+ c.text.split('\n').forEach((l,i)=>{for(const m of l.matchAll(/「[^」]*」/g)){const e=esc(m[0]),k=h(e)+'.'+(cnt[e]=(cnt[e]||0)+1);rows.push([c.title,i+1,S.dict[(sp[k]||[])[0]]?.name||'',m[0]])}});
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\r\n')],{type:'text/csv'}));a.download=[S.project,c.title,'セリフ一覧'].filter(Boolean).join('_')+'.csv';a.click()};
+$('#pcl').onchange=()=>setP({cl:$('#pcl').checked?1:0});$('#po').onchange=()=>setP({op:+$('#po').value/100});
+$('#pfr').onclick=()=>setP({zi:Math.max(0,...vis(sel.pg).map(o=>o.s.zi||0))+1});$('#pbk').onclick=()=>setP({zi:Math.min(0,...vis(sel.pg).map(o=>o.s.zi||0))-1});
+$('#fsz').onchange=()=>{S.fs=+$('#fsz').value;mk('project.json');save();render()};
+function hl(ns){const q=$('#qs').value;$$('#area .pb p').forEach(p=>p.classList.toggle('mk',!!q&&p.textContent.includes(q)));if(!ns)$('#area .mk')?.scrollIntoView({block:'center'})}
+$('#qs').oninput=()=>hl();
+const curPage=()=>{const a=$$('#area .pg'),i=a.findIndex(pg=>pg.getBoundingClientRect().bottom>innerHeight*.5);return i<0?a.length-1:i};
+async function addImg(f,pi,pos){if(pi<0||!need()||!/^image\//.test(f.type))return;
+ try{const r=await(await api('POST','/api/image?name='+encodeURIComponent(f.name||'paste.png'),f)).json(),im=new Image();im.src=r.path;await im.decode().catch(()=>{});IMG[r.path]=im;
+  const ar=(im.naturalWidth||4)/(im.naturalHeight||3),w=Math.min(260,im.naturalWidth||260),h=w/ar,[x,y]=pos||[Math.round(W/2-w/2),300];addS({t:'img',src:r.path,pg:pi,c:'#000',w:2,ar,p:[[x,y],[x+w,Math.round(y+h)]]})}
+ catch(e){$('#st').textContent='画像の保存に失敗: '+e.message}}
+$('#img').onclick=()=>$('#imf').click();$('#imf').onchange=()=>{[...$('#imf').files].forEach(f=>addImg(f,curPage()));$('#imf').value=''};
+addEventListener('paste',e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA/.test(e.target.tagName)||e.target.isContentEditable)return;const f=[...e.clipboardData.files].find(f=>f.type.startsWith('image/'));if(f){e.preventDefault();addImg(f,curPage())}});
+$('#area').addEventListener('dragover',e=>e.preventDefault());
+$('#area').addEventListener('drop',e=>{const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/')),pg=e.target.closest?.('.pg');if(!f||!pg)return;e.preventDefault();const r=pg.getBoundingClientRect();addImg(f,pg.i,[Math.round((e.clientX-r.left)*W/r.width),Math.round((e.clientY-r.top)*H/r.height)])});
+const KEYS={v:'move',p:'pen',m:'marker',b:'brush',l:'line',a:'arrow',c:'curve',r:'rect',o:'ellipse',t:'text',e:'eraser',d:'done',g:'poly'};
+setInterval(async()=>{try{const a=document.activeElement,t=await(await api('GET','/api/stamp')).text();if(!stamp||t==stamp||dirty.size||sel||(a&&(/INPUT|TEXTAREA|SELECT/.test(a.tagName)||a.isContentEditable)))return;await load();init();$('#st').textContent='他の人の更新を反映しました'}catch{}},8000);
+onkeydown=e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||e.target.isContentEditable)return;
+ if(pcur&&e.key=='Enter')return polyEnd();if(pcur&&e.key=='Escape'){pcur=null;return paintAll()}
+ if((e.key=='Delete'||e.key=='Backspace')&&sel){e.preventDefault();return delS()}
+ if(!(e.ctrlKey||e.metaKey||e.altKey)&&KEYS[e.key.toLowerCase()]&&!e.repeat)return setTool(KEYS[e.key.toLowerCase()]);
+ if(sel&&e.key.startsWith('Arrow')){e.preventDefault();const d=e.shiftKey?10:1,[dx,dy]={ArrowLeft:[-d,0],ArrowRight:[d,0],ArrowUp:[0,-d],ArrowDown:[0,d]}[e.key],s=sel,o=clone(s.p);return act(()=>{s.p=o.map(a=>[a[0]+dx,a[1]+dy,...a.slice(2)])},()=>{s.p=clone(o)},0)}
+ if(!(e.ctrlKey||e.metaKey))return;if(e.key=='z'){e.preventDefault();e.shiftKey?redo():undo()}if(e.key=='y')redo()};
+
+/* ---- PDF出力 (ブラウザの印刷→PDFで保存。用紙A4・縦) ---- */
+const dpHtml=()=>`<div class="dpg">${CATS.map(k=>{const a=ents().filter(d=>d.cat==k);return a.length?`<h3>${k}</h3>`+a.map(d=>`<p><b>${esc(d.name)}</b>${d.ch?'':'（共通）'}<br>${esc(d.body).replace(/\n/g,'<br>')}</p>`).join(''):''}).join('')}</div>`;
+$('#pr').onclick=()=>{sel=null;tab('v');const dp=$('#dp');dp.innerHTML=$('#wd').checked?dpHtml():'';dp.className=dp.innerHTML?'on':'';$('#cp').innerHTML=coverHtml();$('#cp').className='on';
+ document.title=[S.project,cp()?.title,'演出依頼'].filter(Boolean).join('_');setTimeout(print,150)};
+onafterprint=()=>{$('#dp').className=$('#cp').className='';$('#cp').innerHTML='';document.title='シナリオ演出依頼資料集'};
+document.execCommand('defaultParagraphSeparator',false,'p');setTool('pen');load().then(init,()=>{document.body.innerHTML='<p style="padding:2em">サーバーに接続できません。run.bat / run.sh（または ScenarioBrief）から起動してください。</p>'});
+</script></body></html>

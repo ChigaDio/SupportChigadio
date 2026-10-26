@@ -14,4 +14,9 @@ if [ -f "$DIR/requirements.txt" ]; then
   fi
 fi
 
-open "$DIR/docsite.app"
+# Run the binary inside the bundle directly so logs stay in this
+# terminal and Ctrl+C / closing the terminal stops the server.
+"$DIR/docsite.app/Contents/MacOS/docsite"
+echo
+echo "Exited with code $?."
+read -r -p "Press Enter to close..."
