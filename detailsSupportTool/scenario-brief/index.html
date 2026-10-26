@@ -58,6 +58,23 @@ canvas{position:absolute;left:0;top:0;width:793px;height:1122px;touch-action:non
 #uv label{margin-left:6px}
 @media print{#area{zoom:1!important}}
 .mk{background:#ffe9a8}.pb{font-size:var(--fs,15px)}.t-sel .dl:not(.has){outline:1px dashed #e11d48}@media print{.mk{background:none!important}}
+#area .pg{transform:scale(var(--k,1));transform-origin:top center;margin:0 calc((var(--k,1) - 1)*396.5px) calc((var(--k,1) - 1)*1122px)}
+.pg canvas{touch-action:pan-x pan-y pinch-zoom;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#area[data-fd="1"] .pg canvas{touch-action:none}
+#lib{position:fixed;left:14px;top:120px;bottom:14px;width:350px;z-index:21;background:var(--pn);border:1px solid var(--bd);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;box-shadow:0 6px 24px #0004}
+#lib .r{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+#lg{overflow:auto;flex:1}#lg h4{margin:8px 0 4px;font-size:12px;display:flex;justify-content:space-between;gap:6px;word-break:break-all}
+#lg .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px}
+.th{border:1px solid var(--bd);border-radius:6px;padding:3px;font-size:10px;cursor:grab;overflow:hidden;word-break:break-all}.th img{width:100%;height:68px;object-fit:contain;background:#fff;display:block;pointer-events:none}
+@media print{#area{--k:1!important}}
+@media(pointer:coarse){button,select,input:not([type=range]):not([type=checkbox]){min-height:38px}.sw{width:34px;height:34px}}
+@media(max-width:640px){#pp,#lib{left:8px;right:8px;width:auto}}
+#ex{position:fixed;inset:0;z-index:40;background:#0008;display:flex;align-items:center;justify-content:center}
+#ex .exb{background:var(--pn);width:min(860px,96vw);height:min(640px,92vh);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
+#ex .r{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#xls{flex:1;overflow:auto;border:1px solid var(--bd);border-radius:8px;padding:6px}
+.xd{padding:6px 8px;cursor:pointer;border-radius:6px}.xd:hover{background:#2f5d8a22}
+.xg{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:8px}.th.on{outline:3px solid var(--b)}
 </style></head><body>
 <header class="np"><b>演出依頼資料集</b>
 <label>名前 <input id="me" size="8" placeholder="自分の名前"></label>
@@ -76,10 +93,17 @@ canvas{position:absolute;left:0;top:0;width:793px;height:1122px;touch-action:non
 <textarea id="tx" placeholder="ここに小説をコピペ"></textarea></div></section>
 <section id="d" class="np"><div class="wrap"><h2 id="dh"></h2><div class="hint" id="dn"></div><div class="bar"><button id="na"></button>
 <label><input type="checkbox" id="fh" checked> 今の章＋共通のみ</label><input id="fq" placeholder="検索"></div><div id="dl"></div></div></section>
+<div id="ex" class="np" hidden><div class="exb"><div class="r"><b>📂 サーバー上の画像を選ぶ</b><span style="flex:1"></span><button id="xcl">✕</button></div>
+<div class="r"><button id="xup">⬆ 上へ</button><button id="xhm">🏠 データフォルダ</button><select id="xdr" hidden></select><input id="xpa" style="flex:1;min-width:160px" title="パスを直接入力してEnter"><button id="xgo">移動</button></div>
+<div id="xls"></div><div class="r"><button id="xfo">📁 このフォルダを登録</button><button id="xfi">🗎 選んだ画像を登録</button><span class="hint" id="xin"></span></div></div></div>
+<div id="lib" class="np" hidden><div class="r"><b>🖼 画像ライブラリ</b><span style="flex:1"></span><button id="lcl">✕</button></div>
+<div class="r"><button id="lup">📤 アップロード</button><button id="lfo">📂 サーバーから選ぶ</button><button id="lrl">🔄 再読込</button></div>
+<div class="hint">アップロード＝ scenario-data/images にコピー。「サーバーから選ぶ」＝サーバー上のどこでもエクスプローラー風に辿って選べ、コピーせず相対パス(例 ../art/a.png。別ドライブ等は絶対パス)だけを保存。クリックで配置、ドラッグで好きな位置へ置けます。</div><div id="lg"></div></div>
 <div id="pp" class="np" hidden><textarea class="tx" id="pt" rows="3" placeholder="テキスト（改行OK）"></textarea>
 <div class="r tx"><select id="pf"><option value="sans">ゴシック</option><option value="serif">明朝</option><option value="hand">手書き風</option><option value="mono">等幅</option></select><input id="pz" type="number" min="8" max="96" style="width:58px" title="文字サイズ"><button data-b="b"><b>B</b></button><button data-b="i"><i>I</i></button><button data-b="u"><u>U</u></button><select id="pa"><option value="l">左寄せ</option><option value="c">中央</option><option value="r">右寄せ</option></select></div>
 <div class="r"><label data-for="text"><input type="checkbox" id="pd"> 枠線</label><label data-for="text rect ellipse poly">塗り<input type="color" id="pl" value="#fff59d"></label><button id="pln" data-for="text rect ellipse poly">塗りなし</button><select id="ds" data-for="text rect ellipse line arrow curve poly" title="線の種類"><option value="0">実線</option><option value="1">破線</option><option value="2">点線</option></select><select id="ah" data-for="line arrow curve poly" title="矢じり"><option value="n">矢じりなし</option><option value="e">終点→</option><option value="s">←始点</option><option value="b">←→両端</option></select></div>
-<div class="r"><label data-for="poly"><input type="checkbox" id="pcl"> 閉じる(多角形)</label><label data-for="img">透明度<input type="range" id="po" min="10" max="100"></label><button id="pfr">前面へ</button><button id="pbk">背面へ</button></div>
+<div class="r"><button id="ro" data-for="img" title="画像本来の縦横比に戻す">元の縦横比</button><select id="rt" data-for="img" title="枠の縦横比を変える"><option value="">比率…</option><option value="1">1:1</option><option value="1.3333">4:3</option><option value="1.7778">16:9</option><option value="0.75">3:4</option><option value="0.5625">9:16</option></select><label data-for="img"><input type="checkbox" id="fx"> 比率固定</label><label data-for="img"><input type="checkbox" id="ct"> トリミング</label></div>
+<div class="r"><label data-for="poly"><input type="checkbox" id="pcl"> 閉じる(多角形)</label><label data-for="img">透明度<input type="range" id="po" min="10" max="100"></label><button id="pfr">前面へ</button><button id="pbk">背面へ</button><button id="pcp">コピー</button></div>
 <div class="r"><label>色<input type="color" id="pc"></label><label>線<input type="range" id="pw" min="1" max="24"></label><button id="pdup">複製</button><button id="pdel">🗑削除</button></div>
 <div class="hint">ドラッグで移動、四隅で拡大縮小。「吸着」ONで、行・他の図形・余白線にピタッと揃います。</div></div>
 <div id="dp"></div>
@@ -92,7 +116,7 @@ const CATS=['世界観','用語','キャラクター','章設定'],FREE=['pen','
 const TPL=['BGM','SE','背景','暗転','立ち絵','表情','カメラ','演出','動き','ウェイト','カット番号','付箋','自由メモ…'],COL=['#e11d48','#2563eb','#16a34a','#facc15','#111827'];
 const TOOLS=[['move','↖選択・移動'],['pen','✏️鉛筆'],['marker','🖍マーカー'],['brush','🖌筆'],['line','／線'],['arrow','→矢印'],['curve','〰曲線矢印'],['poly','⟋折れ線'],['rect','▭四角'],['ellipse','◯丸'],['text','Ｔ文字ボックス'],['tpl','🏷演出ラベル'],['eraser','🧽消しゴム'],['sel','👆話者指定'],['done','✔対応済み'],['edit','✎本文編集'],['brk','✂改ページ']];
 let S={me:'',project:'',chapters:{},dict:{},layers:{}};
-let tool='pen',dirty=new Set(),hist=[],reds=[],tm,sel=null,gd=null,pt0=null,stamp,pcur=null;
+let tool='pen',dirty=new Set(),hist=[],reds=[],tm,sel=null,gd=null,pt0=null,stamp,pcur=null,bust=0,CLIP=null,pcnt=0,penDown=0,penSeen=0,FD=navigator.maxTouchPoints>0&&!matchMedia('(any-pointer:fine)').matches;
 const chs=()=>Object.values(S.chapters).sort((a,b)=>a.order-b.order||(a.id<b.id?-1:1)),cp=()=>S.chapters[S.cur];
 const lay=(u,c)=>((S.layers[u]??={})[c]??={erased:[],speakers:{},done:{},strokes:[]}),mine=()=>lay(S.me,S.cur);
 const myp=()=>`users/${S.me}/${S.cur}.json`,mk=p=>dirty.add(p);
@@ -103,7 +127,7 @@ const col=()=>$('#co').value,wd=()=>+$('#wi').value;
 const api=(m,u,b)=>fetch(u,{method:m,body:b}).then(r=>{if(!r.ok)throw Error(r.status);return r});
 const J=o=>JSON.stringify(o,null,1)+'\n';
 const jl=l=>`{\n"erased":${JSON.stringify(l.erased)},\n"speakers":${JSON.stringify(Object.fromEntries(Object.entries(l.speakers).sort()))},\n"done":${JSON.stringify(Object.fromEntries(Object.entries(l.done||{}).sort()))},\n"strokes":[\n${l.strokes.map(s=>JSON.stringify(s)).join(',\n')}\n]\n}\n`;
-function cont(p){if(p=='project.json')return J({name:S.project,memoW:S.memoW,fs:S.fs});const[a,b,c]=p.split('/'),k=(b||'').slice(0,-5);
+function cont(p){if(p=='project.json')return J({name:S.project,memoW:S.memoW,fs:S.fs,imgRefs:S.imgRefs});const[a,b,c]=p.split('/'),k=(b||'').slice(0,-5);
  if(a=='chapters')return S.chapters[k]?J(S.chapters[k]):null;if(a=='dictionary')return S.dict[k]?J(S.dict[k]):null;const l=S.layers[b]?.[c.slice(0,-5)];return l?jl(l):null}
 function save(){clearTimeout(tm);tm=setTimeout(flush,400);$('#st').textContent='…'}
 async function flush(){try{for(const p of[...dirty]){const t=cont(p);await api(t==null?'DELETE':'PUT','/api/file?path='+encodeURIComponent(p),t);dirty.delete(p)}stamp=await(await api('GET','/api/stamp')).text();$('#st').textContent='保存済み'}catch(e){$('#st').textContent='保存失敗: '+e.message}}
@@ -189,8 +213,16 @@ function hit(s,x,y){const p=s.p;if(s.t=='curve'){let pr=p[0];for(let k=1;k<=24;k
  if(s.t=='rect'){const[a,b]=p,c=[[a[0],a[1]],[b[0],a[1]],[b[0],b[1]],[a[0],b[1]]];return c.some((u,i)=>ds(x,y,u,c[(i+1)%4])<8)}
  if(s.t=='ellipse'){const[a,b]=p,v=Math.hypot((x-(a[0]+b[0])/2)/(Math.abs(b[0]-a[0])/2+1),(y-(a[1]+b[1])/2)/(Math.abs(b[1]-a[1])/2+1));return Math.abs(v-1)<.25}
  const X=p.map(a=>a[0]),Y=p.map(a=>a[1]);return x>Math.min(...X)-6&&x<Math.max(...X)+6&&y>Math.min(...Y)-6&&y<Math.max(...Y)+6}
-function erase(i,[x,y],ers){const M=mine(),all=$('#es').value=='all';
- for(const{s,u}of vis(i).reverse()){if(!hit(s,x,y))continue;let o;
+const dens=p=>{const o=[p[0]];for(let i=1;i<p.length;i++){const a=p[i-1],b=p[i],n=Math.max(1,Math.ceil(Math.hypot(b[0]-a[0],b[1]-a[1])/3));for(let k=1;k<=n;k++){const t=k/n,q=[+(a[0]+(b[0]-a[0])*t).toFixed(1),+(a[1]+(b[1]-a[1])*t).toFixed(1)];if(b[2]!==undefined)q.push(b[2]);o.push(q)}}return o};
+function cut(s,e,r){const R=r+(s.t=='marker'?s.w*3:s.w)/2;if(!s.p.some((a,i)=>ds(e[0],e[1],a,s.p[i+1]||a)<R))return null;
+ const runs=[];let c=[];for(const a of dens(s.p)){if(Math.hypot(a[0]-e[0],a[1]-e[1])<R){if(c.length)runs.push(c);c=[]}else c.push(a)}if(c.length)runs.push(c);return runs.filter(r=>r.length>1)}
+function erase(i,e,ers){const M=mine(),all=$('#es').value=='all',part=$('#em').value=='part',r=wd()*2+4;
+ for(const{s,u}of vis(i).slice().reverse()){let o;
+  if(part&&FREE.includes(s.t)){const runs=cut(s,e,r);if(!runs)continue;const pcs=runs.map(p=>({...s,id:s.id+'~'+Math.random().toString(36).slice(2,5),p}));
+   if(u==S.me){const k=M.strokes.indexOf(s);o={d:()=>M.strokes.splice(M.strokes.indexOf(s),1,...pcs),u:()=>{pcs.forEach(q=>{const j=M.strokes.indexOf(q);if(j>=0)M.strokes.splice(j,1)});M.strokes.splice(k,0,s)}}}
+   else if(all)o={d:()=>{M.erased.push(s.id);M.strokes.push(...pcs)},u:()=>{M.erased.splice(M.erased.indexOf(s.id),1);pcs.forEach(q=>{const j=M.strokes.indexOf(q);if(j>=0)M.strokes.splice(j,1)})}};
+   if(o){o.d();ers.push(o);fin(myp(),0)}continue}
+  if(!hit(s,e[0],e[1]))continue;
   if(u==S.me){const k=M.strokes.indexOf(s);o={d:()=>M.strokes.splice(M.strokes.indexOf(s),1),u:()=>M.strokes.splice(k,0,s)}}
   else if(all)o={d:()=>M.erased.push(s.id),u:()=>M.erased.splice(M.erased.indexOf(s.id),1)};
   if(o){o.d();ers.push(o);fin(myp(),0);break}}}
@@ -204,7 +236,7 @@ function draw(g,s){if(s.t=='tpl')s={...s,t:'text',z:13,b:1,bd:1,fl:s.c+'22'};con
   if(!s.cl){if(ah=='e'||ah=='b')hd(c3?p[2]:pl?p.at(-2):a,b);if(ah=='s'||ah=='b')hd(c3?p[1]:pl?p[1]:b,a)}}
  else if(t=='rect'){if(s.fl){g.fillStyle=s.fl;g.fillRect(p[0][0],p[0][1],p[1][0]-p[0][0],p[1][1]-p[0][1])}g.strokeRect(p[0][0],p[0][1],p[1][0]-p[0][0],p[1][1]-p[0][1])}
  else if(t=='ellipse'){g.beginPath();g.ellipse((p[0][0]+p[1][0])/2,(p[0][1]+p[1][1])/2,Math.abs(p[1][0]-p[0][0])/2,Math.abs(p[1][1]-p[0][1])/2,0,0,7);if(s.fl){g.fillStyle=s.fl;g.fill()}g.stroke()}
- else if(t=='img'){const[a,b]=p,im=getImg(s.src);g.globalAlpha=s.op||1;if(im.complete&&im.naturalWidth)g.drawImage(im,a[0],a[1],b[0]-a[0],b[1]-a[1]);else{g.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);g.font='12px sans-serif';g.fillText('画像が見つかりません: '+s.src,a[0]+4,a[1]+16)}}
+ else if(t=='img'){const[a,b]=p,im=getImg(s.src);g.globalAlpha=s.op||1;if(im.complete&&im.naturalWidth){const bw=b[0]-a[0],bh=b[1]-a[1],nw=im.naturalWidth,nh=im.naturalHeight;if(s.cv){const k=Math.max(bw/nw,bh/nh),sw=bw/k,sh=bh/k;g.drawImage(im,(nw-sw)/2,(nh-sh)/2,sw,sh,a[0],a[1],bw,bh)}else g.drawImage(im,a[0],a[1],bw,bh)}else{g.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);g.font='12px sans-serif';g.fillText('画像が見つかりません: '+s.src,a[0]+4,a[1]+16)}}
  else if(t=='text'){const[a,b]=p,z=s.z||14,w=b[0]-a[0],h=b[1]-a[1],al=s.al||'l';
   if(s.fl){g.fillStyle=s.fl;g.fillRect(a[0],a[1],w,h)}if(s.bd){g.lineWidth=1.5;g.strokeRect(a[0],a[1],w,h)}
   g.fillStyle=g.strokeStyle=s.c;g.font=fnt(s);g.textBaseline='top';g.textAlign={l:'left',c:'center',r:'right'}[al];const x=al=='l'?a[0]+6:al=='c'?a[0]+w/2:b[0]-6;
@@ -225,14 +257,16 @@ function snapPts(pg,s,xs,ys){if(!$('#sn').checked)return[0,0,{}];const T=7,cx=[p
  vis(pg.i).forEach(({s:o})=>{if(o!==s){const[a,b,c,d]=bnd(o);cx.push(a,(a+c)/2,c);cy.push(b,(b+d)/2,d)}});
  const f=(v,c)=>{let m=1e9,g=null;for(const q of v)for(const k of c)if(Math.abs(k-q)<Math.abs(m)){m=k-q;g=k}return Math.abs(m)<=T?[m,g]:[0,null]};
  const[dx,gx]=f(xs,cx),[dy,gy]=f(ys,cy);return[dx,dy,{x:gx,y:gy}]}
-const IMG={},getImg=src=>IMG[src]??=Object.assign(new Image(),{onload:()=>paintAll(),src});
+const IMG={},imgUrl=(src,b)=>'api/img?p='+encodeURIComponent(src)+(b?'&t='+b:''),getImg=src=>IMG[src]??=Object.assign(new Image(),{onload:()=>paintAll(),src:imgUrl(src,bust)});
 function polyEnd(){const s=pcur;pcur=null;if(!s)return;s.p.pop();s.p=s.p.filter((a,i,r)=>!i||Math.hypot(a[0]-r[i-1][0],a[1]-r[i-1][1])>3);if(s.cl&&s.p.length<3)delete s.cl;if(s.p.length>=2)addS(s);else paintAll()}
-function bind(pg){const cv=pg.querySelector('canvas'),g=cv.getContext('2d');cv.g=g;g.scale(2,2);let cur,ers,dr;
+function bind(pg){const cv=pg.querySelector('canvas'),g=cv.getContext('2d');cv.g=g;g.scale(2,2);let cur,ers,dr,lastE;
  const q=e=>{const r=cv.getBoundingClientRect();return[Math.round((e.clientX-r.left)*W/r.width),Math.round((e.clientY-r.top)*H/r.height)]};
  cv.ondblclick=e=>{if(tool=='poly')return polyEnd();if(tool=='move'&&sel){if(sel.t=='poly'){const p=q(e),a=sel.p,s=sel;let bi=0,bd=1e9;for(let i=0;i<a.length-(s.cl?0:1);i++){const d=ds(p[0],p[1],a[i],a[(i+1)%a.length]);if(d<bd){bd=d;bi=i}}if(bd<14){const o=clone(a),n=clone(a);n.splice(bi+1,0,p);act(()=>{s.p=clone(n)},()=>{s.p=clone(o)},0)}return}pp(1)}};
- cv.onpointerdown=e=>{const p=q(e);cv.setPointerCapture(e.pointerId);
+ cv.onpointerleave=()=>{if(tool=='eraser'&&!ers)paint(pg.i)};
+ cv.onpointerdown=e=>{if(e.pointerType=='touch'&&(!FD||penDown))return;if(e.pointerType=='pen'){penDown=1;if(FD&&!penSeen){penSeen=1;FD=0;$('#fg').checked=false;$('#area').dataset.fd=0}}
+  const p=q(e);cv.setPointerCapture(e.pointerId);
   if(tool=='move'){
-   if(sel&&sel.pg==pg.i){const i=hs(sel).findIndex(h=>Math.hypot(h[0]-p[0],h[1]-p[1])<10);if(i>=0){dr={m:'h',i,o:clone(sel.p)};return}}
+   if(sel&&sel.pg==pg.i){const i=hs(sel).findIndex(h=>Math.hypot(h[0]-p[0],h[1]-p[1])<(e.pointerType=='mouse'?10:22));if(i>=0){dr={m:'h',i,o:clone(sel.p)};return}}
    const o=vis(pg.i).reverse().find(o=>hit(o.s,p[0],p[1]));
    if(!o||o.u!=S.me){sel=null;paintAll();pp();if(o)$('#st').textContent='他の人の書き込みは動かせません（自分の分だけ編集できます）';return}
    sel=o.s;dr={m:'m',st:p,o:clone(sel.p)};paintAll();pp();return}
@@ -241,34 +275,35 @@ function bind(pg){const cv=pg.querySelector('canvas'),g=cv.getContext('2d');cv.g
    else{const r=e.shiftKey?pcur.p.at(-1):p,f=pcur.p[0];pcur.p[pcur.p.length-1]=r;if(pcur.p.length>=4&&Math.hypot(r[0]-f[0],r[1]-f[1])<10){pcur.cl=1;return polyEnd()}pcur.p.push(r)}
    paint(pg.i);draw(g,pcur);return}
   if(tool=='done'){const o=vis(pg.i).reverse().find(o=>hit(o.s,p[0],p[1]));if(o){const d=mine().done??={},k=o.s.id,had=k in d;act(()=>{had?delete d[k]:d[k]=Date.now()},()=>{had?d[k]=1:delete d[k]},0)}return}
-  if(tool=='eraser'){ers=[];erase(pg.i,p,ers);return}
+  if(tool=='eraser'){ers=[];lastE=p;erase(pg.i,p,ers);return}
   if(tool=='text'||tool=='tpl'){const t=tool=='tpl',lab=$('#tp').value,s={t:'text',pg:pg.i,c:col(),w:2,p:[p,[p[0]+(t?180:200),p[1]+30]],s:t?(lab.includes('自由')?'':lab+'：'):'テキスト',z:t?13:15};if(t)Object.assign(s,{b:1,bd:1,fl:col()+'22'});if(t&&lab=='付箋')Object.assign(s,{c:'#5b4a00',fl:'#fff3a3',s:'付箋：',b:0,p:[p,[p[0]+170,p[1]+90]]});if(t&&lab=='カット番号')Object.assign(s,{s:'C'+cutN(),al:'c',p:[p,[p[0]+54,p[1]+30]]});fit(s);sel=s;addS(s);setTool('move');pp(1);return}
   cur={t:tool,pg:pg.i,c:col(),w:wd(),p:FREE.includes(tool)?[p]:tool=='curve'?[p,p,p,p]:[p,p]};if(+$('#tds').value)cur.ds=+$('#tds').value;if($('#tah').value)cur.ah=$('#tah').value};
- cv.onpointermove=e=>{const p=q(e);
+ cv.onpointermove=e=>{if(e.pointerType=='touch'&&(!FD||penDown))return;const p=q(e);
+  if(tool=='eraser'&&!ers&&e.pointerType!='touch'){paint(pg.i);g.save();g.strokeStyle='#666';g.lineWidth=1;g.beginPath();g.arc(p[0],p[1],wd()*2+4,0,7);g.stroke();g.restore();return}
   if(pcur&&pcur.pg==pg.i&&tool=='poly'){if(e.shiftKey&&pcur.p.length>1){const a=pcur.p.at(-2),dx=p[0]-a[0],dy=p[1]-a[1],an=Math.round(Math.atan2(dy,dx)/(Math.PI/12))*Math.PI/12,r=Math.hypot(dx,dy);p[0]=Math.round(a[0]+r*Math.cos(an));p[1]=Math.round(a[1]+r*Math.sin(an))}pcur.p[pcur.p.length-1]=p;paint(pg.i);draw(g,pcur);return}
   if(dr){const s=sel;
    if(dr.m=='m'){const dx=p[0]-dr.st[0],dy=p[1]-dr.st[1],sh=dr.o.map(a=>[a[0]+dx,a[1]+dy]),X=sh.map(a=>a[0]),Y=sh.map(a=>a[1]),x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);
     const[sx,sy,gu]=snapPts(pg,s,[x0,(x0+x1)/2,x1],[y0,(y0+y1)/2,y1]);gd={i:pg.i,...gu};s.p=dr.o.map(a=>[a[0]+dx+sx,a[1]+dy+sy,...a.slice(2)])}
    else{const[sx,sy,gu]=snapPts(pg,s,[p[0]],[p[1]]),m=[p[0]+sx,p[1]+sy];gd={i:pg.i,...gu};
-    if(BOX.includes(s.t)){const o=dr.o,hh=[[o[0][0],o[0][1]],[o[1][0],o[0][1]],[o[1][0],o[1][1]],[o[0][0],o[1][1]]];if(s.t=='img'&&s.ar){const f=hh[(dr.i+2)%4];m[1]=f[1]+Math.sign(m[1]-f[1]||1)*Math.abs(m[0]-f[0])/s.ar}s.p=[hh[(dr.i+2)%4],m];norm(s)}else{s.p=clone(dr.o);s.p[dr.i]=m}}
+    if(BOX.includes(s.t)){const o=dr.o,hh=[[o[0][0],o[0][1]],[o[1][0],o[0][1]],[o[1][0],o[1][1]],[o[0][0],o[1][1]]];if(s.t=='img'&&s.ar&&!s.fr){const f=hh[(dr.i+2)%4];m[1]=f[1]+Math.sign(m[1]-f[1]||1)*Math.abs(m[0]-f[0])/s.ar}s.p=[hh[(dr.i+2)%4],m];norm(s)}else{s.p=clone(dr.o);s.p[dr.i]=m}}
    paint(pg.i);return}
-  if(ers)return erase(pg.i,p,ers);if(!cur)return;
+  if(ers){const l=lastE||p,n=Math.max(1,Math.ceil(Math.hypot(p[0]-l[0],p[1]-l[1])/Math.max(3,wd()*.75)));for(let k=1;k<=n;k++)erase(pg.i,[l[0]+(p[0]-l[0])*k/n,l[1]+(p[1]-l[1])*k/n],ers);lastE=p;return}if(!cur)return;
   if(e.shiftKey){const a=cur.p[0],dx=p[0]-a[0],dy=p[1]-a[1];if(LN.includes(cur.t)){const an=Math.round(Math.atan2(dy,dx)/(Math.PI/12))*Math.PI/12,r=Math.hypot(dx,dy);p[0]=Math.round(a[0]+r*Math.cos(an));p[1]=Math.round(a[1]+r*Math.sin(an))}else if(FREE.includes(cur.t))cur.p.length=1;else{const m=Math.max(Math.abs(dx),Math.abs(dy));p[0]=a[0]+Math.sign(dx||1)*m;p[1]=a[1]+Math.sign(dy||1)*m}}
-  if(FREE.includes(cur.t)){const l=cur.p.at(-1);if(cur.t=='brush')p.push(Math.max(.4,Math.min(2,2.2-Math.hypot(p[0]-l[0],p[1]-l[1])/6)));cur.p.push(p)}else if(cur.t=='curve'){const a=cur.p[0],dx=p[0]-a[0],dy=p[1]-a[1],n=[-dy*.3,dx*.3];cur.p=[a,[a[0]+dx/3+n[0],a[1]+dy/3+n[1]],[a[0]+2*dx/3+n[0],a[1]+2*dy/3+n[1]],p]}else cur.p[1]=p;
+  if(FREE.includes(cur.t)){const l=cur.p.at(-1);if(cur.t=='brush')p.push(e.pointerType=='pen'&&e.pressure?Math.max(.3,Math.min(2.2,.3+e.pressure*2.2)):Math.max(.4,Math.min(2,2.2-Math.hypot(p[0]-l[0],p[1]-l[1])/6)));cur.p.push(p)}else if(cur.t=='curve'){const a=cur.p[0],dx=p[0]-a[0],dy=p[1]-a[1],n=[-dy*.3,dx*.3];cur.p=[a,[a[0]+dx/3+n[0],a[1]+dy/3+n[1]],[a[0]+2*dx/3+n[0],a[1]+2*dy/3+n[1]],p]}else cur.p[1]=p;
   paint(pg.i);draw(g,cur)};
- cv.onpointerup=cv.onpointercancel=()=>{
+ cv.onpointerup=cv.onpointercancel=e=>{if(e.pointerType=='pen')penDown=0;
   if(dr){const s=sel,o=dr.o;dr=null;gd=null;if(BOX.includes(s.t)){norm(s);if(s.t=='text')fit(s)}const n=clone(s.p);paint(pg.i);if(JSON.stringify(n)!=JSON.stringify(o))act(()=>{s.p=clone(n)},()=>{s.p=clone(o)},0,0);return}
   if(ers){if(ers.length){const a=ers;act(()=>a.forEach(x=>x.d()),()=>[...a].reverse().forEach(x=>x.u()),0,0)}ers=null;return}
   if(!cur)return;const s=cur;cur=null;if(BOX.includes(s.t))norm(s);addS(s)}}
 
 /* ---- ツールバー・プロパティパネル ---- */
-$('#tb').innerHTML=TOOLS.map(([k,l])=>`<button data-k="${k}">${l}</button>`).join('')+COL.map(c=>`<button class="sw" data-c="${c}" style="background:${c}"></button>`).join('')+`<input type="color" id="co" value="#e11d48" title="色"><input type="range" id="wi" min="1" max="24" value="4" title="太さ"><select id="tds" title="線の種類"><option value="0">実線</option><option value="1">破線</option><option value="2">点線</option></select><select id="tah" title="矢じり(線・矢印・曲線)"><option value="">矢じり:標準</option><option value="n">なし</option><option value="e">終点</option><option value="s">始点</option><option value="b">両端</option></select><select id="tp" title="BGM・SE・背景などの演出指示ラベル。ドラッグ不要でクリックした位置に置け、中の文字は後から自由に書き換えられます">${opt(TPL)}</select><select id="es"><option value="me">消す：自分の書込のみ</option><option value="all">消す：全員の書込</option></select><button id="un">↩ 戻す</button><button id="re">↪ やり直し</button><label title="動かすとき、本文の行・縦線・他の図形の端にピタッと揃えます"><input type="checkbox" id="sn" checked>吸着</label><label title="右の記入欄の幅(0で全幅)">メモ幅<input type="range" id="mw" min="0" max="480" step="10"></label><span id="uv" title="見たい人の書き込みだけ表示"></span><select id="pgj" title="ページ移動"></select><select id="zm" title="表示倍率"><option value="0.6">60%</option><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option></select><button id="csv" title="セリフと話者の一覧をCSVで保存">📋セリフCSV</button><button id="img" title="画像を貼る(貼り付け Ctrl+V / ドラッグ&ドロップも可)。画像は scenario-data/images/ に保存され、相対パスで参照されます">🖼画像</button><input type="file" id="imf" accept="image/*" multiple hidden><input id="qs" placeholder="本文検索" style="width:90px"><select id="fsz" title="本文の文字サイズ"><option>13</option><option>14</option><option>15</option><option>16</option><option>18</option></select>`;
+$('#tb').innerHTML=TOOLS.map(([k,l])=>`<button data-k="${k}">${l}</button>`).join('')+COL.map(c=>`<button class="sw" data-c="${c}" style="background:${c}"></button>`).join('')+`<input type="color" id="co" value="#e11d48" title="色"><input type="range" id="wi" min="1" max="24" value="4" title="太さ"><select id="tds" title="線の種類"><option value="0">実線</option><option value="1">破線</option><option value="2">点線</option></select><select id="tah" title="矢じり(線・矢印・曲線)"><option value="">矢じり:標準</option><option value="n">なし</option><option value="e">終点</option><option value="s">始点</option><option value="b">両端</option></select><select id="tp" title="BGM・SE・背景などの演出指示ラベル。ドラッグ不要でクリックした位置に置け、中の文字は後から自由に書き換えられます">${opt(TPL)}</select><select id="em" title="消し方"><option value="part">部分消し(ペイント風)</option><option value="whole">線ごと消す</option></select><select id="es"><option value="me">消す：自分の書込のみ</option><option value="all">消す：全員の書込</option></select><button id="un">↩ 戻す</button><button id="re">↪ やり直し</button><button id="pst">📋貼り付け</button><button id="pok" title="折れ線を確定(ダブルクリック/Enterでも可)">折れ線確定</button><label title="タッチ画面で指でも描く/操作する。OFFならペン・マウスだけが描き、指はスクロール/ピンチ"><input type="checkbox" id="fg">指でも描く</label><label title="動かすとき、本文の行・縦線・他の図形の端にピタッと揃えます"><input type="checkbox" id="sn" checked>吸着</label><label title="右の記入欄の幅(0で全幅)">メモ幅<input type="range" id="mw" min="0" max="480" step="10"></label><span id="uv" title="見たい人の書き込みだけ表示"></span><select id="pgj" title="ページ移動"></select><select id="zm" title="表示倍率"><option value="0.6">60%</option><option value="0.8">80%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="fit">幅に合わせる</option></select><button id="csv" title="セリフと話者の一覧をCSVで保存">📋セリフCSV</button><button id="img" title="画像を貼る(貼り付け Ctrl+V / ドラッグ&ドロップも可)。画像は scenario-data/images/ に保存され、相対パスで参照されます">🖼画像</button><input type="file" id="imf" accept="image/*" multiple hidden><input id="qs" placeholder="本文検索" style="width:90px"><select id="fsz" title="本文の文字サイズ"><option>13</option><option>14</option><option>15</option><option>16</option><option>18</option></select>`;
 function setTool(k){if(pcur&&k!='poly')polyEnd();tool=k;$$('#tb [data-k]').forEach(b=>b.classList.toggle('on',b.dataset.k==k));$('#area').className='t-'+k+(['sel','edit','brk'].includes(k)?' nc':'');
  if(k!='move'&&sel){sel=null;pp();paintAll()}$$('#area .pb').forEach(b=>b.contentEditable=k=='edit')}
 $('#tb').onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.k)setTool(b.dataset.k);if(b.dataset.c){$('#co').value=b.dataset.c;if(sel)setP({c:b.dataset.c})}if(b.id=='un')undo();if(b.id=='re')redo()};
 $('#tb').onchange=e=>{const u=e.target.dataset.u;if(u!=null){e.target.checked?hide.delete(u):hide.add(u);paintAll()}};
 $('#mw').onchange=()=>{S.memoW=+$('#mw').value;mk('project.json');save();render()};
-function pp(f){const d=$('#pp');d.hidden=!sel;if(!sel)return;const s=sel,tx=s.t=='text';$$('#pp .tx').forEach(x=>x.hidden=!tx);$$('#pp [data-for]').forEach(x=>x.hidden=!x.dataset.for.split(' ').includes(s.t));$('#ds').value=s.ds||0;$('#ah').value=s.ah||(s.t=='line'||s.t=='poly'?'n':'e');$('#pcl').checked=!!s.cl;$('#po').value=(s.op||1)*100;$('#pl').value=(s.fl||'#fff59d').slice(0,7);$('#pc').value=s.c;$('#pw').value=s.w||4;
+function pp(f){const d=$('#pp');d.hidden=!sel;if(!sel)return;const s=sel,tx=s.t=='text';$$('#pp .tx').forEach(x=>x.hidden=!tx);$$('#pp [data-for]').forEach(x=>x.hidden=!x.dataset.for.split(' ').includes(s.t));$('#ds').value=s.ds||0;$('#ah').value=s.ah||(s.t=='line'||s.t=='poly'?'n':'e');$('#pcl').checked=!!s.cl;$('#fx').checked=!s.fr;$('#ct').checked=!!s.cv;$('#po').value=(s.op||1)*100;$('#pl').value=(s.fl||'#fff59d').slice(0,7);$('#pc').value=s.c;$('#pw').value=s.w||4;
  if(tx){$('#pt').value=s.s||'';$('#pf').value=s.f||'sans';$('#pz').value=s.z||14;$('#pa').value=s.al||'l';$('#pd').checked=!!s.bd;$('#pl').value=(s.fl||'#fff59d').slice(0,7);$$('#pp [data-b]').forEach(b=>b.classList.toggle('on',!!s[b.dataset.b]))}
  if(f&&tx){$('#pt').focus();$('#pt').select()}}
 function setP(pr){const s=sel;if(!s)return;const o={p:clone(s.p)};for(const k in pr)o[k]=s[k];
@@ -287,7 +322,7 @@ const doneSet=()=>new Set(Object.values(S.layers).flatMap(u=>Object.keys(u[S.cur
 const cutN=()=>Math.max(0,...Object.values(S.layers).flatMap(l=>(l[S.cur]?.strokes||[]).map(s=>(/^C(\d+)$/.exec(s.s||'')||[])[1]|0)))+1;
 $('#ds').onchange=()=>setP({ds:+$('#ds').value});$('#ah').onchange=()=>setP({ah:$('#ah').value});
 $('#pgj').onchange=()=>$$('#area .pg')[$('#pgj').value]?.scrollIntoView({behavior:'smooth',block:'start'});
-$('#zm').onchange=()=>{$('#area').style.zoom=$('#zm').value};
+const setK=()=>{const v=$('#zm').value;$('#area').style.setProperty('--k',v=='fit'?Math.min(1.6,(innerWidth-24)/793):v)};$('#zm').onchange=setK;addEventListener('resize',()=>$('#zm').value=='fit'&&setK());if(innerWidth<830)$('#zm').value='fit';setK();
 $('#csv').onclick=()=>{const c=cp();if(!c)return;const sp=spk(),cnt={},rows=[['章','行','話者','セリフ']];
  c.text.split('\n').forEach((l,i)=>{for(const m of l.matchAll(/「[^」]*」/g)){const e=esc(m[0]),k=h(e)+'.'+(cnt[e]=(cnt[e]||0)+1);rows.push([c.title,i+1,S.dict[(sp[k]||[])[0]]?.name||'',m[0]])}});
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\r\n')],{type:'text/csv'}));a.download=[S.project,c.title,'セリフ一覧'].filter(Boolean).join('_')+'.csv';a.click()};
@@ -297,14 +332,49 @@ $('#fsz').onchange=()=>{S.fs=+$('#fsz').value;mk('project.json');save();render()
 function hl(ns){const q=$('#qs').value;$$('#area .pb p').forEach(p=>p.classList.toggle('mk',!!q&&p.textContent.includes(q)));if(!ns)$('#area .mk')?.scrollIntoView({block:'center'})}
 $('#qs').oninput=()=>hl();
 const curPage=()=>{const a=$$('#area .pg'),i=a.findIndex(pg=>pg.getBoundingClientRect().bottom>innerHeight*.5);return i<0?a.length-1:i};
+async function placeImg(src,pi=curPage(),pos){if(pi<0||!need())return;const im=getImg(src);try{await im.decode()}catch{}
+ const ar=(im.naturalWidth||4)/(im.naturalHeight||3),w=Math.min(260,im.naturalWidth||260),h=Math.round(w/ar),[x,y]=pos?[Math.round(pos[0]-w/2),Math.round(pos[1]-h/2)]:[Math.round(W/2-w/2),300];
+ addS({t:'img',src,pg:pi,c:'#000',w:2,ar,p:[[x,y],[x+w,y+h]]})}
 async function addImg(f,pi,pos){if(pi<0||!need()||!/^image\//.test(f.type))return;
- try{const r=await(await api('POST','/api/image?name='+encodeURIComponent(f.name||'paste.png'),f)).json(),im=new Image();im.src=r.path;await im.decode().catch(()=>{});IMG[r.path]=im;
-  const ar=(im.naturalWidth||4)/(im.naturalHeight||3),w=Math.min(260,im.naturalWidth||260),h=w/ar,[x,y]=pos||[Math.round(W/2-w/2),300];addS({t:'img',src:r.path,pg:pi,c:'#000',w:2,ar,p:[[x,y],[x+w,Math.round(y+h)]]})}
+ try{const r=await(await api('POST','/api/image?name='+encodeURIComponent(f.name||'paste.png'),f)).json();placeImg(r.path,pi,pos);if(!$('#lib').hidden)libLoad()}
  catch(e){$('#st').textContent='画像の保存に失敗: '+e.message}}
-$('#img').onclick=()=>$('#imf').click();$('#imf').onchange=()=>{[...$('#imf').files].forEach(f=>addImg(f,curPage()));$('#imf').value=''};
-addEventListener('paste',e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA/.test(e.target.tagName)||e.target.isContentEditable)return;const f=[...e.clipboardData.files].find(f=>f.type.startsWith('image/'));if(f){e.preventDefault();addImg(f,curPage())}});
+$('#imf').onchange=()=>{[...$('#imf').files].forEach(f=>addImg(f,curPage()));$('#imf').value=''};
+addEventListener('paste',e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA/.test(e.target.tagName)||e.target.isContentEditable)return;const f=[...e.clipboardData.files].find(f=>f.type.startsWith('image/'));if(f){e.preventDefault();addImg(f,curPage())}else if(CLIP){e.preventDefault();pasteS()}});
 $('#area').addEventListener('dragover',e=>e.preventDefault());
-$('#area').addEventListener('drop',e=>{const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/')),pg=e.target.closest?.('.pg');if(!f||!pg)return;e.preventDefault();const r=pg.getBoundingClientRect();addImg(f,pg.i,[Math.round((e.clientX-r.left)*W/r.width),Math.round((e.clientY-r.top)*H/r.height)])});
+$('#area').addEventListener('drop',e=>{const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/')),sr=e.dataTransfer.getData('text/x-img'),pg=e.target.closest?.('.pg');if(!(f||sr)||!pg)return;e.preventDefault();const r=pg.getBoundingClientRect(),pos=[Math.round((e.clientX-r.left)*W/r.width),Math.round((e.clientY-r.top)*H/r.height)];sr?placeImg(sr,pg.i,pos):addImg(f,pg.i,pos)});
+/* ---- 画像ライブラリ ---- */
+async function libLoad(){try{await flush();const o=await(await api('GET','/api/imgs')).json(),th=x=>`<div class="th" draggable="true" data-s="${esc(x)}" title="${esc(x)}"><img src="${imgUrl(x,bust)}" loading="lazy"><div>${esc(x.split('/').pop())}</div></div>`;
+ $('#lg').innerHTML=`<h4>アップロード済み (images/)</h4><div class="g">${o.uploaded.map(th).join('')||'<span class="hint">なし</span>'}</div>`+o.refs.map(r=>`<h4><span>${r.dir?'📁':'🗎'} ${esc(r.ref)}${r.missing?' ⚠見つかりません':''}</span><button data-rm="${esc(r.ref)}" title="登録を外す(ファイル自体は消えません)">✕</button></h4><div class="g">${r.items.map(th).join('')}</div>`).join('')}
+ catch(e){$('#lg').textContent='読み込み失敗: '+e.message}}
+/* ---- サーバー上のファイルをエクスプローラー風に選ぶ ---- */
+let xcur=null;const xsel=new Set(),xj=n=>xcur.rel=='.'?n:xcur.rel+'/'+n;
+async function xgo(p){try{const o=await(await api('GET','/api/ls?p='+encodeURIComponent(p||''))).json();xcur=o;xsel.clear();$('#xpa').value=o.path;
+ $('#xdr').hidden=!o.drives.length;if(o.drives.length)$('#xdr').innerHTML=o.drives.map(d=>`<option${o.path.toUpperCase().startsWith(d.toUpperCase())?' selected':''}>${esc(d)}</option>`).join('');
+ $('#xls').innerHTML=(o.parent?'<div class="xd" data-up="1">⬆ ..（上のフォルダ）</div>':'')+o.dirs.map(d=>`<div class="xd" data-d="${esc(d)}">📁 ${esc(d)}</div>`).join('')+`<div class="xg">${o.files.map(f=>`<div class="th" data-f="${esc(f)}" title="${esc(f)}"><img src="${imgUrl(xj(f),bust)}" loading="lazy"><div>${esc(f)}</div></div>`).join('')}</div>`;
+ $('#xin').textContent=`フォルダ ${o.dirs.length} / 画像 ${o.files.length}（画像をクリックで選択、複数可）`}catch(e){$('#xls').textContent='開けません: '+e.message}}
+function addRefs(l){if(!l.length)return;S.imgRefs=[...new Set([...(S.imgRefs||[]),...l])];mk('project.json');save();$('#ex').hidden=true;libLoad();if(l.length==1&&/\.\w+$/.test(l[0])&&xsel.size==1)placeImg(l[0])}
+$('#lfo').onclick=()=>{$('#ex').hidden=false;xgo(xcur?xcur.path:'')};$('#xcl').onclick=()=>$('#ex').hidden=true;
+$('#xup').onclick=()=>xcur?.parent&&xgo(xcur.parent);$('#xhm').onclick=()=>xgo('');$('#xgo').onclick=()=>xgo($('#xpa').value);$('#xdr').onchange=()=>xgo($('#xdr').value);
+$('#xpa').onkeydown=e=>{if(e.key=='Enter')xgo($('#xpa').value)};
+$('#xls').onclick=e=>{if(!xcur)return;if(e.target.closest('[data-up]'))return xgo(xcur.parent);const d=e.target.closest('[data-d]');if(d)return xgo(xcur.path.replace(/[\\/]$/,'')+xcur.sep+d.dataset.d);
+ const t=e.target.closest('.th');if(t){const f=t.dataset.f;xsel.has(f)?xsel.delete(f):xsel.add(f);t.classList.toggle('on',xsel.has(f))}};
+$('#xfo').onclick=()=>xcur&&addRefs([xcur.rel]);$('#xfi').onclick=()=>xcur&&addRefs([...xsel].map(xj));
+$('#img').onclick=()=>{const l=$('#lib');l.hidden=!l.hidden;if(!l.hidden)libLoad()};$('#lcl').onclick=()=>$('#lib').hidden=true;
+$('#lup').onclick=()=>$('#imf').click();
+$('#lrl').onclick=()=>{bust=Date.now();for(const k in IMG)delete IMG[k];libLoad();paintAll()};
+$('#lg').onclick=e=>{const rm=e.target.closest('[data-rm]');if(rm){S.imgRefs=(S.imgRefs||[]).filter(x=>x!=rm.dataset.rm);mk('project.json');save();return libLoad()}const t=e.target.closest('.th');if(t)placeImg(t.dataset.s)};
+$('#lg').ondragstart=e=>{const t=e.target.closest('.th');if(t)e.dataTransfer.setData('text/x-img',t.dataset.s)};
+const natR=s=>{const im=getImg(s.src);return im.naturalWidth?im.naturalWidth/im.naturalHeight:s.ar||1};
+const setR=(s,r,cv)=>{const[a,b]=s.p;setP({p:[a,[b[0],a[1]+(b[0]-a[0])/r]],ar:r,cv:cv?1:0})};
+$('#ro').onclick=()=>sel&&setR(sel,natR(sel),0);
+$('#rt').onchange=()=>{const v=+$('#rt').value;if(sel&&v)setR(sel,v,Math.abs(v-natR(sel))>.02);$('#rt').value=''};
+$('#fx').onchange=()=>{const s=sel;if(s)setP($('#fx').checked?{fr:0,ar:(s.p[1][0]-s.p[0][0])/(s.p[1][1]-s.p[0][1])}:{fr:1})};
+$('#ct').onchange=()=>setP({cv:$('#ct').checked?1:0});
+/* ---- コピー&ペースト ---- */
+function copyS(){if(sel){CLIP=clone(sel);pcnt=0;$('#st').textContent='コピーしました'}}
+function pasteS(){if(!CLIP||!need())return;const pi=curPage();if(pi<0)return;pcnt++;const n=clone(CLIP),d=CLIP.pg==pi?14*pcnt:0,M=mine();n.id=id('s');n.pg=pi;n.p=n.p.map(a=>[a[0]+d,a[1]+d,...a.slice(2)]);sel=n;act(()=>M.strokes.push(n),()=>M.strokes.splice(M.strokes.indexOf(n),1))}
+$('#pcp').onclick=copyS;$('#pst').onclick=pasteS;$('#pok').onclick=()=>polyEnd();
+$('#fg').checked=FD;$('#area').dataset.fd=FD?1:0;$('#fg').onchange=()=>{FD=$('#fg').checked;$('#area').dataset.fd=FD?1:0};
 const KEYS={v:'move',p:'pen',m:'marker',b:'brush',l:'line',a:'arrow',c:'curve',r:'rect',o:'ellipse',t:'text',e:'eraser',d:'done',g:'poly'};
 setInterval(async()=>{try{const a=document.activeElement,t=await(await api('GET','/api/stamp')).text();if(!stamp||t==stamp||dirty.size||sel||(a&&(/INPUT|TEXTAREA|SELECT/.test(a.tagName)||a.isContentEditable)))return;await load();init();$('#st').textContent='他の人の更新を反映しました'}catch{}},8000);
 onkeydown=e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||e.target.isContentEditable)return;
@@ -312,12 +382,12 @@ onkeydown=e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA|SELECT/.test
  if((e.key=='Delete'||e.key=='Backspace')&&sel){e.preventDefault();return delS()}
  if(!(e.ctrlKey||e.metaKey||e.altKey)&&KEYS[e.key.toLowerCase()]&&!e.repeat)return setTool(KEYS[e.key.toLowerCase()]);
  if(sel&&e.key.startsWith('Arrow')){e.preventDefault();const d=e.shiftKey?10:1,[dx,dy]={ArrowLeft:[-d,0],ArrowRight:[d,0],ArrowUp:[0,-d],ArrowDown:[0,d]}[e.key],s=sel,o=clone(s.p);return act(()=>{s.p=o.map(a=>[a[0]+dx,a[1]+dy,...a.slice(2)])},()=>{s.p=clone(o)},0)}
- if(!(e.ctrlKey||e.metaKey))return;if(e.key=='z'){e.preventDefault();e.shiftKey?redo():undo()}if(e.key=='y')redo()};
+ if(!(e.ctrlKey||e.metaKey))return;if(e.key=='c'&&sel){copyS();return}if(e.key=='x'&&sel){copyS();return delS()}if(e.key=='z'){e.preventDefault();e.shiftKey?redo():undo()}if(e.key=='y')redo()};
 
 /* ---- PDF出力 (ブラウザの印刷→PDFで保存。用紙A4・縦) ---- */
 const dpHtml=()=>`<div class="dpg">${CATS.map(k=>{const a=ents().filter(d=>d.cat==k);return a.length?`<h3>${k}</h3>`+a.map(d=>`<p><b>${esc(d.name)}</b>${d.ch?'':'（共通）'}<br>${esc(d.body).replace(/\n/g,'<br>')}</p>`).join(''):''}).join('')}</div>`;
 $('#pr').onclick=()=>{sel=null;tab('v');const dp=$('#dp');dp.innerHTML=$('#wd').checked?dpHtml():'';dp.className=dp.innerHTML?'on':'';$('#cp').innerHTML=coverHtml();$('#cp').className='on';
  document.title=[S.project,cp()?.title,'演出依頼'].filter(Boolean).join('_');setTimeout(print,150)};
 onafterprint=()=>{$('#dp').className=$('#cp').className='';$('#cp').innerHTML='';document.title='シナリオ演出依頼資料集'};
-document.execCommand('defaultParagraphSeparator',false,'p');setTool('pen');load().then(init,()=>{document.body.innerHTML='<p style="padding:2em">サーバーに接続できません。run.bat / run.sh（または ScenarioBrief）から起動してください。</p>'});
+document.execCommand('defaultParagraphSeparator',false,'p');setTool('pen');load().then(init,()=>{document.body.innerHTML='<p style="padding:2em">サーバーに接続できません。run.bat / run.sh（または ScenarioBrief）から起動してください。<br>他のPC/iPadからは、起動した画面に表示される「他のPC・iPadなどから使う場合」のURL（?key=…付き）で開いてください。</p>'});
 </script></body></html>
