@@ -1,0 +1,3 @@
+PySide6>=6.6
+# 以下はモックサーバー(tests/mock_server.py)とテストだけに必要
+Flask>=3.0
