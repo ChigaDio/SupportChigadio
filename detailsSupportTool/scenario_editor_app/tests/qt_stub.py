@@ -183,6 +183,8 @@ class Stub(metaclass=Meta):
     # 本物らしい挙動が要るもの
     def setParent(self, p, *a):
         self.__dict__["_st"]["parent"] = p
+        # 実 Qt では、takeAt した項目のウィジェットを setParent(None) すると item.widget() が None になる
+        self.__dict__["_st"]["orphaned"] = p is None or p is False
 
 
 def _install_super_targets():
@@ -239,7 +241,9 @@ class Layout(Stub):
             self.kind, self.v = kind, v
 
         def widget(self):
-            return self.v if self.kind == "w" else None
+            if self.kind != "w" or self.v.__dict__.get("_st", {}).get("orphaned"):
+                return None
+            return self.v
 
         def layout(self):
             return self.v if self.kind == "l" else None

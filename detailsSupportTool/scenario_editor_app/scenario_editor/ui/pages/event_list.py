@@ -219,9 +219,10 @@ class EventListPage(Page):
     def render(self, *_):
         while self.list_lay.count() > 1:
             it = self.list_lay.takeAt(0)
-            if it.widget():
-                it.widget().setParent(None)
-                it.widget().deleteLater()
+            w = it.widget()   # 一度だけ取る(setParent 後は None になり得る)
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         self.count_chip.setText(f"{len(self.events)} イベント")
         if self.loading and not self.events:
             self.list_lay.insertWidget(0, self._empty("読み込み中..."))
