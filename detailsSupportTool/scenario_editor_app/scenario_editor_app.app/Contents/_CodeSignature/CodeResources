@@ -522,7 +522,7 @@
 		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		qDsKrba2fZ8KZ5zq9kiUCzDfYxc=
+		+BN9BujK5ij1tHM+D5SU+3Ij8U8=
 		</data>
 		<key>Resources/docs/ARCHITECTURE.md</key>
 		<data>
@@ -546,7 +546,7 @@
 		</data>
 		<key>Resources/scenario_editor/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		75gCawKrP3T4lsBLhkatjkI1ulE=
+		Yp/hsw6BOyDzAN2MtQLWP+8BsM0=
 		</data>
 		<key>Resources/scenario_editor/api/__init__.py</key>
 		<data>
@@ -554,7 +554,7 @@
 		</data>
 		<key>Resources/scenario_editor/api/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		jI2Lx8iMPdXgx32FRoPNKDS1R1g=
+		polbJY6Nvl08gK2CgVnBNe1GllQ=
 		</data>
 		<key>Resources/scenario_editor/api/client.py</key>
 		<data>
@@ -570,7 +570,7 @@
 		</data>
 		<key>Resources/scenario_editor/core/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		vT8sxhmhNiJy39o1uAhz9pYdBY4=
+		dUfWZs34GZ9rYm4befjMwgPooa0=
 		</data>
 		<key>Resources/scenario_editor/core/diff.py</key>
 		<data>
@@ -626,7 +626,7 @@
 		</data>
 		<key>Resources/scenario_editor/ui/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		Lz5S0ZsPR/uQ06jzFbBdxEOfOWs=
+		VDwv/bPnE4EVBxEiOlD8slN3K3E=
 		</data>
 		<key>Resources/scenario_editor/ui/app_state.py</key>
 		<data>
@@ -642,7 +642,7 @@
 		</data>
 		<key>Resources/scenario_editor/ui/dialogs/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		Eioa4dytZOW1omNlXO3IPSRRdjE=
+		5sDUz7ekCNTau2f/19rHiduXXks=
 		</data>
 		<key>Resources/scenario_editor/ui/dialogs/diff_dialog.py</key>
 		<data>
@@ -674,7 +674,7 @@
 		</data>
 		<key>Resources/scenario_editor/ui/pages/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		vKTuDl1I5fzOX9+cCNerZyhaprA=
+		RVPrPxa3e3rQo5mjcezg0Kn126w=
 		</data>
 		<key>Resources/scenario_editor/ui/pages/base.py</key>
 		<data>
@@ -682,7 +682,7 @@
 		</data>
 		<key>Resources/scenario_editor/ui/pages/event_list.py</key>
 		<data>
-		9mhCt7ao73bSlTu1U1fagDCU1is=
+		sFDpW/JFZkJqEo2JL0+vJ1jWkGU=
 		</data>
 		<key>Resources/scenario_editor/ui/pages/role_detail.py</key>
 		<data>
@@ -710,7 +710,7 @@
 		</data>
 		<key>Resources/scenario_editor/ui/widgets/__pycache__/__init__.cpython-311.pyc</key>
 		<data>
-		GvGYOAV4Lwv8ihgsyFQQHdTa8tg=
+		mICe0TVBBrFpG0vPqp3TURFc4nA=
 		</data>
 		<key>Resources/scenario_editor/ui/widgets/block_canvas.py</key>
 		<data>
@@ -3000,7 +3000,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			/HPm3jF0CIfCvgrLwECJUS4c2FDEfj7GjKTi+cjlG/s=
+			6mdrrPzDZ00hobI6SRwsUIq+dwDPB9zd7K3tmAqxBto=
 			</data>
 		</dict>
 		<key>Resources/docs/ARCHITECTURE.md</key>
@@ -3092,7 +3092,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			A5wSyXWAHDI/E0kqMDN14bX36/fX6DQkuVgv26/rzAQ=
+			C7pWqWUuhXD2xozEJZ5f+Jd9GJmJWlpxb+AfL/ad7cg=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/api/__init__.py</key>
@@ -3106,7 +3106,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			ZAeONbAdTw+5ree+GD0b5gbfaUkUeiW2ZT+b+qPXzB0=
+			LFEf1CxeD1YSIKtNMUdwThv36t1vTAKRAsYsadMrFBs=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/api/client.py</key>
@@ -3134,7 +3134,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			cRnoij5FKB2VVBP9HW+Dwj2S8BxVaygOKqODRVGo42E=
+			g/oPJUhivAQ/CjsJEnPrZAGsb2J5JIgoOaKQhRdIwl4=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/core/diff.py</key>
@@ -3232,7 +3232,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			jr+Q0IotcTNYtjJZtXjC5Ylu7rf4FJ4A3DA/4VsFoA4=
+			Hg+wkStFSp1i4Vir+m9fBwCbunZcC0PQzk1tN23Y+9o=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/ui/app_state.py</key>
@@ -3260,7 +3260,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			PLkoPf+ZLu9R14aeJehx/psj+SZgdkXEDbSKKfng/Qc=
+			bys/JkgfRqc/ccMGGxx8UJSPkSf6/jkCHDb4xKfh3bk=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/ui/dialogs/diff_dialog.py</key>
@@ -3316,7 +3316,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			xAFk1SOZ2km+qAR2vKRG8rP7CX58imDm006Dp24BguM=
+			qs6ToMML7rYikAwvLrDFp3SS1eAeumu+hz+dOvmmU+Y=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/ui/pages/base.py</key>
@@ -3330,7 +3330,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			SkxWjPRtqENTZrCxu7BWPHGd4t6qvR71VgTI8mo/FdM=
+			Dm5EAmvpXNvfXx3fWRWIYy9QbPYL58qXmwHiS+M/eOE=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/ui/pages/role_detail.py</key>
@@ -3379,7 +3379,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			mfYOtAE/RMCy3L44qWUkI5/Y6Q7EFty3q8w8zmdDH3I=
+			qOft+4Cq/FGRnUfe7R0mSrJHayG3MWFb0K64nAbuU2k=
 			</data>
 		</dict>
 		<key>Resources/scenario_editor/ui/widgets/block_canvas.py</key>

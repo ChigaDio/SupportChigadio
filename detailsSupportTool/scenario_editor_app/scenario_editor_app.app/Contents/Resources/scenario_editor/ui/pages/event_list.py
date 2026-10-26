@@ -13,7 +13,7 @@ from .base import Page
 class SubRow(QFrame):
     def __init__(self, page, event, sub):
         super().__init__()
-        self.page, self.event, self.sub = page, event, sub
+        self.page, self.event_data, self.sub = page, event, sub
         self.setProperty("card", "flat")
         self._edit = False
         self.lay = QHBoxLayout(self)
@@ -23,7 +23,7 @@ class SubRow(QFrame):
 
     def build(self):
         C.clear_layout(self.lay)
-        ev, sub = self.event, self.sub
+        ev, sub = self.event_data, self.sub
         bar = QFrame()
         bar.setFixedSize(3, 22)
         bar.setStyleSheet("background:#7aa2ff;border-radius:1px;")
@@ -66,13 +66,13 @@ class SubRow(QFrame):
     def commit(self):
         name, desc = self.name.text(), self.desc.text()
         self._edit = False
-        self.page.edit_sub(self.event["id"], self.sub["subId"], name, desc)
+        self.page.edit_sub(self.event_data["id"], self.sub["subId"], name, desc)
 
 
 class EventCard(C.Card):
     def __init__(self, page, event, expanded=True):
         super().__init__()
-        self.page, self.event = page, event
+        self.page, self.event_data = page, event
         self.expanded = expanded
         self._edit = False
         self.body.setSpacing(6)
@@ -89,7 +89,7 @@ class EventCard(C.Card):
     def build(self):
         C.clear_layout(self.head)
         C.clear_layout(self.subs_box)
-        ev = self.event
+        ev = self.event_data
         self.head.addWidget(C.icon_button("down" if self.expanded else "right", "開閉", self.toggle))
         self.head.addWidget(C.Chip(str(ev["id"]), "accent"))
         if self._edit:
@@ -122,7 +122,7 @@ class EventCard(C.Card):
 
     def toggle(self):
         self.expanded = not self.expanded
-        self.page.expanded[self.event["id"]] = self.expanded
+        self.page.expanded[self.event_data["id"]] = self.expanded
         self.build()
 
     def start_edit(self):
@@ -136,7 +136,7 @@ class EventCard(C.Card):
     def commit(self):
         name, desc = self.name.text(), self.desc.text()
         self._edit = False
-        self.page.edit_event(self.event["id"], name, desc)
+        self.page.edit_event(self.event_data["id"], name, desc)
 
 
 class EventListPage(Page):
@@ -144,7 +144,7 @@ class EventListPage(Page):
 
     def __init__(self, state, parent=None):
         super().__init__(state, parent)
-        self.events = []
+        self.event_datas = []
         self.expanded = {}
         self.loading = True
         root = QVBoxLayout(self)
@@ -206,7 +206,7 @@ class EventListPage(Page):
         def ok(data):
             self.loading = False
             if isinstance(data, list):
-                self.events = data
+                self.event_datas = data
             self.state.lookups.invalidate("events")
             self.render()
 
@@ -223,11 +223,11 @@ class EventListPage(Page):
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
-        self.count_chip.setText(f"{len(self.events)} イベント")
-        if self.loading and not self.events:
+        self.count_chip.setText(f"{len(self.event_datas)} イベント")
+        if self.loading and not self.event_datas:
             self.list_lay.insertWidget(0, self._empty("読み込み中..."))
             return
-        shown = E.filter_events(self.events, self.search.text())
+        shown = E.filter_events(self.event_datas, self.search.text())
         if not shown:
             msg = "検索結果がありません" if self.search.text() else "イベントがありません。「イベント追加」から作成してください。"
             self.list_lay.insertWidget(0, self._empty(msg))
@@ -245,7 +245,7 @@ class EventListPage(Page):
 
     # --- 操作
     def add_event_dialog(self):
-        nid = E.next_event_id(self.events)
+        nid = E.next_event_id(self.event_datas)
         dlg = C.FormDialog(self, "新しいイベントを作成", [("name", "イベント名 *", "text", ""), ("description", "説明", "text", "")],
                            info=f"IDは自動で採番されます（現在: {nid}）", ok_text="作成")
         dlg.set_ok_enabled(False)
@@ -259,7 +259,7 @@ class EventListPage(Page):
 
             def ok(res):
                 self.toast((res or {}).get("message") or "イベントを追加しました", "success")
-                self.events = E.add_event(self.events, {"id": nid, "name": name, "description": desc})
+                self.event_datas = E.add_event(self.event_datas, {"id": nid, "name": name, "description": desc})
                 self.state.lookups.invalidate("events")
                 self.render()
             run_async(lambda: self.state.api.create_event({"id": nid, "name": name, "description": desc}), ok,
@@ -267,7 +267,7 @@ class EventListPage(Page):
 
     def edit_event(self, event_id, name, desc):
         def ok(_):
-            self.events = E.edit_event(self.events, event_id, name, desc)
+            self.event_datas = E.edit_event(self.event_datas, event_id, name, desc)
             self.state.lookups.invalidate("events")
             self.toast("更新しました", "success")
             self.render()
@@ -280,7 +280,7 @@ class EventListPage(Page):
 
         def ok(res):
             self.toast((res or {}).get("message") or "削除しました", "success")
-            self.events = E.delete_event(self.events, event_id)
+            self.event_datas = E.delete_event(self.event_datas, event_id)
             self.state.lookups.invalidate("events")
             self.render()
         run_async(lambda: self.state.api.delete_event(event_id), ok, lambda e: self.fail("削除エラー", e), self)
@@ -298,7 +298,7 @@ class EventListPage(Page):
 
             def ok(res):
                 self.toast((res or {}).get("message") or "サブイベントを追加しました", "success")
-                self.events = E.add_sub(self.events, event_id, {"subId": (res or {}).get("subId"), "name": v["name"],
+                self.event_datas = E.add_sub(self.event_datas, event_id, {"subId": (res or {}).get("subId"), "name": v["name"],
                                                                 "description": v["description"]})
                 self.state.lookups.invalidate("events")
                 self.render()
@@ -307,7 +307,7 @@ class EventListPage(Page):
 
     def edit_sub(self, event_id, sub_id, name, desc):
         def ok(_):
-            self.events = E.edit_sub(self.events, event_id, sub_id, name, desc)
+            self.event_datas = E.edit_sub(self.event_datas, event_id, sub_id, name, desc)
             self.state.lookups.invalidate("events")
             self.toast("更新しました", "success")
             self.render()
@@ -320,7 +320,7 @@ class EventListPage(Page):
 
         def ok(res):
             self.toast((res or {}).get("message") or "削除しました", "success")
-            self.events = E.delete_sub(self.events, event_id, sub_id)
+            self.event_datas = E.delete_sub(self.event_datas, event_id, sub_id)
             self.state.lookups.invalidate("events")
             self.render()
         run_async(lambda: self.state.api.delete_sub(event_id, sub_id), ok, lambda e: self.fail("削除エラー", e), self)
@@ -338,7 +338,7 @@ class EventListPage(Page):
                       lambda e: self.fail("コピーエラー", e), self)
 
     def copy_sub_dialog(self, event_id, sub_id):
-        opts = [(e["id"], e.get("name", "") + ("（元の親）" if e["id"] == event_id else "")) for e in self.events]
+        opts = [(e["id"], e.get("name", "") + ("（元の親）" if e["id"] == event_id else "")) for e in self.event_datas]
         dlg = C.FormDialog(self, "サブイベントをコピー", [("target", "コピー先の親イベント", "choice", (event_id, opts))],
                            info="元と同じ親イベントを選ぶと、その親の中に複製されます", ok_text="コピー")
         if dlg.exec():
