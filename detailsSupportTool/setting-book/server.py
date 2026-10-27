@@ -24,10 +24,46 @@ def sha(b):
 
 
 class Store:
-    def __init__(self, root):
+    def __init__(self, root, browse=None):
         self.root = os.path.abspath(root)
         os.makedirs(os.path.join(self.root, "images"), exist_ok=True)
-        self._cache = {}  # path -> (mtime, size, hash)
+        self.browse = [os.path.realpath(b) for b in (browse or []) if os.path.isdir(b)]
+
+    # ---- サーバー上のフォルダ参照（エクスプローラー風UI用）
+    def roots(self):
+        return [{"i": i, "label": os.path.basename(b.rstrip(os.sep)) or b, "abs": b} for i, b in enumerate(self.browse)]
+
+    def inside(self, full):
+        full = os.path.realpath(full)
+        return any(full == b or full.startswith(b + os.sep) for b in self.browse + [os.path.realpath(self.root)])
+
+    def fs_list(self, i, sub):
+        if i < 0 or i >= len(self.browse):
+            return None
+        root = self.browse[i]
+        target = os.path.realpath(os.path.join(root, sub or ""))
+        if not (target == root or target.startswith(root + os.sep)) or not os.path.isdir(target):
+            return None
+        out = []
+        try:
+            names = sorted(os.listdir(target), key=lambda n: n.lower())
+        except OSError:
+            names = []
+        for n in names[:3000]:
+            if n.startswith("."):
+                continue
+            full = os.path.join(target, n)
+            try:
+                if os.path.isdir(full):
+                    out.append({"name": n, "type": "dir"})
+                elif os.path.splitext(n)[1].lower() in IMG_EXT:
+                    out.append({"name": n, "type": "img", "size": os.path.getsize(full),
+                                "ref": os.path.relpath(os.path.realpath(full), self.root).replace(os.sep, "/")})
+            except OSError:
+                pass
+        out.sort(key=lambda e: (e["type"] != "dir",))
+        rel = os.path.relpath(target, root).replace(os.sep, "/")
+        return {"root": i, "sub": "" if rel == "." else rel, "entries": out}
 
     def safe(self, rel):
         if not rel or not PATH_OK.match(rel) or ".." in rel.split("/") or rel.startswith("/"):
@@ -192,6 +228,20 @@ def make_handler(store, token):
                                        "assets": store.assets(), "digest": store.digest()})
             if name == "assets":
                 return self.send(200, {"assets": store.assets(), "digest": store.digest()})
+            if name == "fs/roots":
+                return self.send(200, {"roots": store.roots()})
+            if name == "fs/list":
+                r = store.fs_list(int((q.get("root") or ["0"])[0] or 0), (q.get("sub") or [""])[0])
+                return self.send(200, r) if r is not None else self.send(404, {"error": "not found"})
+            if name == "fs/file":
+                ref = (q.get("p") or [""])[0]
+                full = os.path.realpath(os.path.join(store.root, ref))
+                if (not store.browse and not full.startswith(os.path.realpath(store.root) + os.sep)) or not store.inside(full) \
+                        or os.path.splitext(full)[1].lower() not in IMG_EXT or not os.path.isfile(full):
+                    return self.send(404, b"not found", "text/plain")
+                with open(full, "rb") as f:
+                    data = f.read()
+                return self.send(200, data, MIME.get(os.path.splitext(full)[1].lower(), "application/octet-stream"), {"Cache-Control": "private, max-age=300"})
             self.send(404, {"error": "unknown"})
 
         def do_POST(self):
@@ -216,6 +266,8 @@ def make_handler(store, token):
                     return self.del_file(json.loads(raw.decode("utf-8")))
                 if name == "upload":
                     return self.upload(q, raw)
+                if name == "fs/import":
+                    return self.fs_import(json.loads(raw.decode("utf-8")))
             except Exception as e:  # noqa
                 return self.send(400, {"error": str(e)})
             self.send(404, {"error": "unknown"})
@@ -259,9 +311,8 @@ def make_handler(store, token):
                     pass
             self.send(200, {"ok": True})
 
-        def upload(self, q, raw):
-            folder = re.sub(r"[^a-z0-9_\-]", "", (q.get("folder", ["misc"])[0] or "misc").lower()) or "misc"
-            name = q.get("name", ["image"])[0]
+        def save_image(self, raw, name, folder, tags):
+            folder = re.sub(r"[^a-z0-9_\-]", "", (folder or "misc").lower()) or "misc"
             ext = os.path.splitext(name)[1].lower()
             if raw[:8] == b"\x89PNG\r\n\x1a\n":
                 ext = ".png"
@@ -272,7 +323,7 @@ def make_handler(store, token):
             elif raw[:4] == b"GIF8":
                 ext = ".gif"
             if ext not in IMG_EXT:
-                return self.send(400, {"error": "image only"})
+                return None
             h = sha(raw)[:16]
             rel = f"images/{folder}/{h}{ext}"
             full = store.safe(rel)
@@ -283,11 +334,24 @@ def make_handler(store, token):
                     f.write(raw)
             side = full[: -len(ext)] + ".json"
             if not os.path.exists(side):
-                tags = [t.strip() for t in re.split(r"[,、\s]+", q.get("tags", [""])[0]) if t.strip()]
-                meta = {"added": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), "name": name, "tags": tags}
+                tl = [t.strip() for t in re.split(r"[,、\s]+", tags or "") if t.strip()]
+                meta = {"added": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), "name": name, "tags": tl}
                 with open(side, "w", encoding="utf-8") as f:
                     f.write(json.dumps(meta, ensure_ascii=False, sort_keys=True) + "\n")
-            self.send(200, {"path": rel, "dup": dup})
+            return {"path": rel, "dup": dup}
+
+        def upload(self, q, raw):
+            r = self.save_image(raw, q.get("name", ["image"])[0], q.get("folder", ["misc"])[0], q.get("tags", [""])[0])
+            self.send(200, r) if r else self.send(400, {"error": "image only"})
+
+        def fs_import(self, j):
+            full = os.path.realpath(os.path.join(store.root, j.get("ref", "")))
+            if not store.inside(full) or os.path.splitext(full)[1].lower() not in IMG_EXT or not os.path.isfile(full):
+                return self.send(404, {"error": "not found"})
+            with open(full, "rb") as f:
+                raw = f.read()
+            r = self.save_image(raw, os.path.basename(full), j.get("folder", "misc"), j.get("tags", ""))
+            self.send(200, r) if r else self.send(400, {"error": "image only"})
 
     return H
 
@@ -297,15 +361,19 @@ def main():
     ap.add_argument("--project", default=os.path.join(os.getcwd(), "project"), help="データフォルダ（gitで管理するフォルダ）")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--browse", action="append", help="画像を選べるサーバー側フォルダ（複数指定可・カレントからの相対でも絶対でも）。既定は一つ上の階層")
+    ap.add_argument("--no-browse", action="store_true", help="サーバー側フォルダの参照を無効にする")
     ap.add_argument("--token", default="", help="合言葉（外部公開時は必ず指定）")
     ap.add_argument("--tunnel", action="store_true", help="cloudflared があれば外部URLも発行")
     a = ap.parse_args()
     token = a.token or (secrets.token_urlsafe(9) if a.tunnel else "")
-    store = Store(a.project)
+    browse = [] if a.no_browse else (a.browse or [".."])
+    store = Store(a.project, [os.path.abspath(b) for b in browse])
     srv = http.server.ThreadingHTTPServer((a.host, a.port), make_handler(store, token))
     suffix = f"/?t={token}" if token else "/"
     print("\n設定資料集エディタを起動しました")
     print(f"  データフォルダ : {store.root}")
+    print(f"  画像の参照範囲 : " + (", ".join(b["abs"] for b in store.roots()) or "なし（--no-browse）"))
     print(f"  このPC        : http://localhost:{a.port}{suffix}")
     for ip in lan_ips():
         print(f"  同じWi-Fi内   : http://{ip}:{a.port}{suffix}   （iPadなどはこちら）")
