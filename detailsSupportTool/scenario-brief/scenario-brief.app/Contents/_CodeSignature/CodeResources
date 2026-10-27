@@ -6,11 +6,11 @@
 	<dict>
 		<key>Resources/README.md</key>
 		<data>
-		G0aPSCyHTdmuKw7A8nolde9vleg=
+		GDmdIGwlLRhk1Pp7zJSyVzLGTr4=
 		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		iGUYJoZRvCXkHPZlAd2RqXv4lPE=
+		UIzm0nq4YNfPb0Wyx+bIlzxNfXc=
 		</data>
 		<key>Resources/icon-windowed.icns</key>
 		<data>
@@ -18,7 +18,7 @@
 		</data>
 		<key>Resources/index.html</key>
 		<data>
-		HQ3mJaRUyv7qbdtyB0dfJWP0ZPY=
+		MPqFvJ9Fm6ILSyCHeZJBQuHWRys=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -173,15 +173,6 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"19c01d168e3473d6ad4f732245e338d19c0e2831"</string>
-		</dict>
-		<key>Frameworks/python3__dot__11/lib-dynload/_ctypes.cpython-311-darwin.so</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			sAqRLdrxMHrjLBxBHed6ZmgOMYI=
-			</data>
-			<key>requirement</key>
-			<string>cdhash H"b00a912ddaf1307ae32c1c411de77a66680e3182"</string>
 		</dict>
 		<key>Frameworks/python3__dot__11/lib-dynload/_datetime.cpython-311-darwin.so</key>
 		<dict>
@@ -467,14 +458,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			m3tm7NHcpiPwpaYTDbn62V4xmtBEdl+CByBqIqdF8Z0=
+			iC166NAs9sLe4B4KElikKEKO6q0keSqDjBVJAazwE/o=
 			</data>
 		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			7fJZb1qmMV7kUYWITh9BYk7GhSoUubRFUY5JLoJRw0s=
+			VzneP6bGhkgycvkVB2DK8LNc7+jmqO259F3JobIsBqU=
 			</data>
 		</dict>
 		<key>Resources/icon-windowed.icns</key>
@@ -488,7 +479,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			lWzMyx93Re8x+2Z2DSj7MAzj0t3fVPXvSsPUH6j0+z4=
+			4HiykwFukjTfdqhau6WszHEx0QHq1OrRi9KIx4SUmVc=
 			</data>
 		</dict>
 		<key>Resources/libcrypto.3.dylib</key>
