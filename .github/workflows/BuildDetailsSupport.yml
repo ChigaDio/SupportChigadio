@@ -1,4 +1,3 @@
-
 name: Build all DetailsSupport tools into their tool folders
 
 on:
@@ -20,12 +19,27 @@ permissions:
 
 jobs:
   # ==================================================
-  # macOS build
+  # macOS build (arm64 / x86_64 each on a native runner)
   # ==================================================
   build-macos:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_macos }}
-    runs-on: macos-latest
+    name: build-macos (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (M1/M2/M3/M4)
+          - runner: macos-15
+            arch: arm64
+          # Intel Mac
+          - runner: macos-15-intel
+            arch: x86_64
+
+    env:
+      ARCH: ${{ matrix.arch }}
 
     steps:
       - name: Checkout repository
@@ -34,6 +48,16 @@ jobs:
           repository: ChigaDio/SupportChigadio
           ref: main
           fetch-depth: 0
+
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner arch: $(uname -m) / expected: $ARCH"
+          if [ "$(uname -m)" != "$ARCH" ]; then
+            echo "::error::Runner architecture does not match matrix.arch"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -73,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/detailsSupportTool"
-          TEMP_ROOT="$RUNNER_TEMP/details-support-macos"
+          TEMP_ROOT="$RUNNER_TEMP/details-support-macos-$ARCH"
           rm -rf "$TEMP_ROOT"
           mkdir -p "$TEMP_ROOT"
           built_count=0
@@ -113,14 +137,14 @@ jobs:
             work_dir="$tool_temp/work"
             spec_dir="$tool_temp/spec"
             mkdir -p "$dist_dir" "$work_dir" "$spec_dir"
-
             # Bundle non-Python resources (index.html, static/, templates/ ...).
+            # Previous build outputs (macos-*, *.zip) must NOT be bundled.
             add_data=()
             for item in "$tool_dir"/*; do
               [ -e "$item" ] || continue
               base="$(basename "$item")"
               case "$base" in
-                *.py|*.pyc|*.app|*.exe|*.sh|*.bat|*.spec|requirements.txt|__pycache__|.build_*)
+                *.py|*.pyc|*.app|*.exe|*.sh|*.bat|*.spec|*.zip|macos-*|requirements.txt|__pycache__|.build_*)
                   continue
                   ;;
               esac
@@ -130,9 +154,8 @@ jobs:
                 add_data+=(--add-data "$item:.")
               fi
             done
-
             echo "========================================"
-            echo "Building macOS app: $tool_name"
+            echo "Building macOS app ($ARCH): $tool_name"
             echo "Entry point: $py_script"
             echo "Data args: ${add_data[*]-}"
             echo "========================================"
@@ -148,7 +171,6 @@ jobs:
               ${add_data[@]+"${add_data[@]}"} \
               "$py_script"
             built_app="$dist_dir/$tool_name.app"
-            target_app="$tool_dir/$tool_name.app"
             if [ ! -d "$built_app" ]; then
               echo "::error::App bundle was not generated: $built_app"
               exit 1
@@ -157,52 +179,87 @@ jobs:
               echo "::error::Invalid app bundle: $built_app"
               exit 1
             fi
-            # Replace only the final app bundle.
-            rm -rf "$target_app"
-            ditto "$built_app" "$target_app"
-            if [ ! -f "$target_app/Contents/Info.plist" ]; then
-              echo "::error::App bundle copy failed: $target_app"
+            # Verify the executable really is built for this architecture.
+            app_exe="$built_app/Contents/MacOS/$tool_name"
+            if [ ! -x "$app_exe" ]; then
+              echo "::error::Executable missing or not executable: $app_exe"
               exit 1
             fi
-            echo "Created: $target_app"
-
-            # Generate the launcher shell script.
-            launcher="$tool_dir/run_${tool_name}.sh"
+            archs="$(lipo -archs "$app_exe")"
+            echo "Executable archs: $archs"
+            if ! echo "$archs" | grep -qw "$ARCH"; then
+              echo "::error::Architecture mismatch: expected $ARCH, got $archs"
+              exit 1
+            fi
+            # Ad-hoc sign the whole bundle (required on Apple Silicon).
+            codesign --force --deep --sign - "$built_app"
+            codesign --verify --deep --strict --verbose=2 "$built_app"
+            # Save into an architecture folder as a zip made by ditto,
+            # which keeps permissions, symlinks and the signature intact.
+            out_dir="$tool_dir/macos-$ARCH"
+            zip_name="$tool_name-macos-$ARCH.zip"
+            rm -rf "$out_dir"
+            mkdir -p "$out_dir"
+            ditto -c -k --keepParent "$built_app" "$out_dir/$zip_name"
+            if [ ! -s "$out_dir/$zip_name" ]; then
+              echo "::error::Zip was not created: $out_dir/$zip_name"
+              exit 1
+            fi
+            ls -lh "$out_dir/$zip_name"
+            # Remove the old un-zipped bundle and old launcher from the repo.
+            rm -rf "$tool_dir/$tool_name.app" "$tool_dir/run_${tool_name}.sh"
+            # Generate the launcher shell script (inside the arch folder).
+            launcher="$out_dir/run_${tool_name}.sh"
             cat > "$launcher" <<'LAUNCHER_EOF'
           #!/bin/bash
-          # Auto-generated launcher for __TOOL__ (macOS)
+          # Auto-generated launcher for __TOOL__ (macOS __ARCH__)
           DIR="$(cd "$(dirname "$0")" && pwd)"
-
-          # Install requirements.txt if it exists next to this script.
-          if [ -f "$DIR/requirements.txt" ]; then
+          APP="$DIR/__TOOL__.app"
+          ZIP="$DIR/__TOOL__-macos-__ARCH__.zip"
+          # Unzip next to this script if the app has not been extracted yet.
+          if [ ! -d "$APP" ] && [ -f "$ZIP" ]; then
+            ditto -x -k "$ZIP" "$DIR"
+          fi
+          xattr -cr "$APP" 2>/dev/null || true
+          # Install requirements.txt (tool folder) if it exists.
+          REQ="$DIR/../requirements.txt"
+          if [ -f "$REQ" ]; then
             PY="$(command -v python3 || command -v python || true)"
             if [ -n "$PY" ]; then
               echo "Installing requirements..."
-              "$PY" -m pip install -q -r "$DIR/requirements.txt" \
+              "$PY" -m pip install -q -r "$REQ" \
                 || echo "Warning: failed to install requirements"
             else
               echo "Warning: Python not found; skipping requirements install"
             fi
           fi
-
           # Run the binary inside the bundle directly so logs stay in this
           # terminal and Ctrl+C / closing the terminal stops the server.
-          "$DIR/__TOOL__.app/Contents/MacOS/__TOOL__"
+          "$APP/Contents/MacOS/__TOOL__"
+          code=$?
           echo
-          echo "Exited with code $?."
+          echo "Exited with code $code."
           read -r -p "Press Enter to close..."
           LAUNCHER_EOF
-            sed -i '' "s/__TOOL__/${tool_name}/g" "$launcher"
+            sed -i '' -e "s/__TOOL__/${tool_name}/g" -e "s/__ARCH__/${ARCH}/g" "$launcher"
             chmod +x "$launcher"
             echo "Created: $launcher"
-
             built_count=$((built_count + 1))
           done
           if [ "$built_count" -eq 0 ]; then
             echo "::error::No macOS applications were built."
             exit 1
           fi
-          echo "Successfully built $built_count macOS applications."
+          echo "Successfully built $built_count macOS applications ($ARCH)."
+
+      # Fallback download (the zip is stored as-is, no extra compression).
+      - name: Upload macOS zips as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: detailsSupportTool/*/macos-${{ matrix.arch }}/*.zip
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Commit and push macOS artifacts
         shell: bash
@@ -211,23 +268,37 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
-          # Stage generated apps, launchers and cleanup changes first.
           git add -A -- detailsSupportTool
           # Make sure launcher scripts keep the executable bit in git.
           while IFS= read -r sh_file; do
             git update-index --chmod=+x -- "$sh_file"
-          done < <(find detailsSupportTool -maxdepth 2 -type f -name "run_*.sh" -print)
+          done < <(find detailsSupportTool -maxdepth 3 -type f -name "run_*.sh" -print)
           if git diff --cached --quiet; then
             echo "No macOS changes to commit"
           else
             git diff --cached --stat
-            git commit -m "Build macOS DetailsSupport apps and launchers"
+            git commit -m "Build macOS DetailsSupport apps ($ARCH)"
           fi
-          # Rebase only after the working tree is clean.
-          git fetch origin main
-          git rebase origin/main
-          # Push the resulting commit to main.
-          git push origin HEAD:main
+          # The arm64 and x86_64 jobs push to the same branch, so retry.
+          pushed=0
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              sleep $((RANDOM % 10 + 5))
+              continue
+            fi
+            if git push origin HEAD:main; then
+              pushed=1
+              break
+            fi
+            echo "Push failed (attempt $attempt); retrying..."
+            sleep $((RANDOM % 10 + 5))
+          done
+          if [ "$pushed" -ne 1 ]; then
+            echo "::error::Failed to push macOS artifacts after retries"
+            exit 1
+          fi
 
   # ==================================================
   # Windows build
@@ -328,7 +399,6 @@ jobs:
             -Force `
             -Path $tempRoot | Out-Null
           $builtCount = 0
-
           # Launcher template (.bat). __TOOL__ is replaced per tool.
           $batTemplate = @(
             '@echo off',
@@ -355,7 +425,6 @@ jobs:
             'pause',
             'endlocal'
           )
-
           Get-ChildItem -Path $root -Directory | ForEach-Object {
             $toolDir = $_.FullName
             $toolName = $_.Name
@@ -393,13 +462,15 @@ jobs:
               -Force `
               -Path $distDir, $workDir, $specDir | Out-Null
             # Bundle non-Python resources (index.html, static/, templates/ ...).
+            # macOS outputs (macos-*, *.zip) must NOT be bundled.
             $addData = @()
             Get-ChildItem -LiteralPath $toolDir -Force |
               Where-Object {
-                $_.Name -notmatch '\.(py|pyc|app|exe|sh|bat|spec)$' -and
+                $_.Name -notmatch '\.(py|pyc|app|exe|sh|bat|spec|zip)$' -and
                 $_.Name -ne 'requirements.txt' -and
                 $_.Name -ne '__pycache__' -and
-                $_.Name -notlike '.build_*'
+                $_.Name -notlike '.build_*' -and
+                $_.Name -notlike 'macos-*'
               } |
               ForEach-Object {
                 if ($_.PSIsContainer) {
@@ -410,7 +481,6 @@ jobs:
                   $addData += "$($_.FullName);."
                 }
               }
-
             Write-Host "========================================"
             Write-Host "Building Windows executable: $toolName"
             Write-Host "Entry point: $($script.FullName)"
@@ -441,7 +511,6 @@ jobs:
               -Destination $targetExe `
               -Force
             Write-Host "Created: $targetExe"
-
             # Generate the launcher batch file (CRLF line endings).
             $batPath = Join-Path $toolDir "run_$toolName.bat"
             $batBody = ($batTemplate -join "`r`n") -replace '__TOOL__', $toolName
@@ -451,7 +520,6 @@ jobs:
               (New-Object System.Text.UTF8Encoding($false))
             )
             Write-Host "Created: $batPath"
-
             $builtCount++
           }
           if ($builtCount -eq 0) {
