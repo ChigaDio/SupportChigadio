@@ -15,7 +15,15 @@ IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"}
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
         ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
         ".gif": "image/gif", ".svg": "image/svg+xml", ".avif": "image/avif"}
-PATH_OK = re.compile(r"^[A-Za-z0-9_\-./]+$")
+PATH_OK = re.compile(r"^[\w\-./ ()（）]+$")  # 日本語のフォルダ名もOK（.. は別途拒否）
+SEG_BAD = re.compile(r"[^\w\- ()（）]")
+
+
+def clean_folder(f):
+    """"chars/主人公/表情" のような入れ子フォルダ名を安全な形にする（最大6階層）"""
+    segs = [SEG_BAD.sub("", x).strip() for x in (f or "").replace("\\", "/").split("/")]
+    segs = [x for x in segs if x and x not in (".", "..")][:6]
+    return "/".join(segs)
 LOCK = threading.Lock()
 
 
@@ -128,6 +136,14 @@ class Store:
         out.sort(key=lambda a: a["added"], reverse=True)
         return out
 
+    def folders(self):
+        base = os.path.join(self.root, "images")
+        out = []
+        for d, ds, _ in os.walk(base):
+            for n in ds:
+                out.append(os.path.relpath(os.path.join(d, n), base).replace(os.sep, "/"))
+        return sorted(out)
+
     def digest(self):
         h = hashlib.sha1()
         base = os.path.join(self.root, "images")
@@ -225,9 +241,9 @@ def make_handler(store, token):
                 if name == "stat":
                     return self.send(200, {"files": {k: sha(v) for k, v in files.items()}, "digest": store.digest()})
                 return self.send(200, {"files": {k: {"t": v.decode("utf-8", "replace"), "h": sha(v)} for k, v in files.items()},
-                                       "assets": store.assets(), "digest": store.digest()})
+                                       "assets": store.assets(), "folders": store.folders(), "digest": store.digest()})
             if name == "assets":
-                return self.send(200, {"assets": store.assets(), "digest": store.digest()})
+                return self.send(200, {"assets": store.assets(), "folders": store.folders(), "digest": store.digest()})
             if name == "fs/roots":
                 return self.send(200, {"roots": store.roots()})
             if name == "fs/list":
@@ -266,6 +282,8 @@ def make_handler(store, token):
                     return self.del_file(json.loads(raw.decode("utf-8")))
                 if name == "upload":
                     return self.upload(q, raw)
+                if name in ("mkdir", "rmdir", "move", "folder-rename"):
+                    return self.folder_api(name, json.loads(raw.decode("utf-8")))
                 if name == "fs/import":
                     return self.fs_import(json.loads(raw.decode("utf-8")))
             except Exception as e:  # noqa
@@ -312,7 +330,7 @@ def make_handler(store, token):
             self.send(200, {"ok": True})
 
         def save_image(self, raw, name, folder, tags):
-            folder = re.sub(r"[^a-z0-9_\-]", "", (folder or "misc").lower()) or "misc"
+            folder = clean_folder(folder) or "misc"
             ext = os.path.splitext(name)[1].lower()
             if raw[:8] == b"\x89PNG\r\n\x1a\n":
                 ext = ".png"
@@ -343,6 +361,61 @@ def make_handler(store, token):
         def upload(self, q, raw):
             r = self.save_image(raw, q.get("name", ["image"])[0], q.get("folder", ["misc"])[0], q.get("tags", [""])[0])
             self.send(200, r) if r else self.send(400, {"error": "image only"})
+
+        def folder_api(self, name, j):
+            img = os.path.join(store.root, "images")
+            def fpath(f):
+                f = clean_folder(f)
+                return (f, os.path.join(img, *f.split("/"))) if f else (None, None)
+            with LOCK:
+                if name == "mkdir":
+                    f, full = fpath(j.get("folder"))
+                    if not f:
+                        return self.send(400, {"error": "name"})
+                    os.makedirs(full, exist_ok=True)
+                    return self.send(200, {"folder": f})
+                if name == "rmdir":
+                    f, full = fpath(j.get("folder"))
+                    if not f or not os.path.isdir(full):
+                        return self.send(404, {"error": "not found"})
+                    for d, _, fs in os.walk(full):
+                        if any(os.path.splitext(x)[1].lower() in IMG_EXT for x in fs):
+                            return self.send(409, {"error": "画像が入っているフォルダは削除できません（先に画像を移動してください）"})
+                    shutil.rmtree(full)
+                    return self.send(200, {"ok": True})
+                if name == "folder-rename":
+                    f1, a = fpath(j.get("from"))
+                    f2, b = fpath(j.get("to"))
+                    if not f1 or not f2 or not os.path.isdir(a) or os.path.exists(b):
+                        return self.send(400, {"error": "bad name"})
+                    os.makedirs(os.path.dirname(b), exist_ok=True)
+                    os.rename(a, b)
+                    return self.send(200, {"from": f1, "to": f2})
+                if name == "move":
+                    f, full = fpath(j.get("folder"))
+                    if not f:
+                        return self.send(400, {"error": "folder"})
+                    os.makedirs(full, exist_ok=True)
+                    out = []
+                    for rel in j.get("paths", []):
+                        src = store.safe(rel)
+                        ext = os.path.splitext(rel)[1].lower()
+                        if not src or not rel.startswith("images/") or ext not in IMG_EXT or not os.path.isfile(src):
+                            continue
+                        dst = os.path.join(full, os.path.basename(src))
+                        if os.path.abspath(dst) != os.path.abspath(src):
+                            if os.path.exists(dst):
+                                os.remove(src)
+                            else:
+                                os.replace(src, dst)
+                            ss, ds = os.path.splitext(src)[0] + ".json", os.path.splitext(dst)[0] + ".json"
+                            if os.path.exists(ss):
+                                if os.path.exists(ds):
+                                    os.remove(ss)
+                                else:
+                                    os.replace(ss, ds)
+                        out.append({"from": rel, "to": "images/" + f + "/" + os.path.basename(src)})
+                    return self.send(200, {"moved": out})
 
         def fs_import(self, j):
             full = os.path.realpath(os.path.join(store.root, j.get("ref", "")))
