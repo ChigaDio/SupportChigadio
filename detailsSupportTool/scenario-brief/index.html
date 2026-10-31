@@ -76,6 +76,7 @@ canvas{position:absolute;left:0;top:0;width:793px;height:1122px;touch-action:non
 .xg{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:8px}.th.on{outline:3px solid var(--b)}
 @page port{size:A4 portrait;margin:0}@page land{size:A4 landscape;margin:0}
 @media print{.pg.port{page:port}.pg.land{page:land}}
+body[data-role="view"] #tip,body[data-role="view"] #tn,body[data-role="view"] .tsep{display:none!important}
 body[data-role="memo"] .ed,body[data-role="view"] .ed,body[data-role="view"] .mm{display:none!important}
 #sys{position:fixed;inset:0;z-index:60;background:var(--bg);overflow:auto;padding:28px 16px}
 .sc{max-width:720px;margin:0 auto;display:grid;gap:12px}.sc.wide{max-width:1000px}.sc .r{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -201,7 +202,7 @@ html,body{height:100%;overflow:hidden;overscroll-behavior:none}
 .book.add .cov{justify-content:center}
 .sc input[type=checkbox],.sc input[type=radio],.dlgb input[type=checkbox]{width:auto}
 .chip{display:inline-block;white-space:nowrap;align-self:center;border:1px solid var(--bd);border-radius:20px;padding:0 9px;font-size:11px;line-height:20px;background:var(--pn);color:var(--mute)}
-.chip.edit{border-color:var(--b);color:var(--b)}.chip.view{opacity:.85}.chip.none{border-color:var(--vm);color:var(--vm)}
+.chip.r-edit{border-color:var(--b);color:var(--b)}.chip.r-view{opacity:.85}.chip.r-none{border-color:var(--vm);color:var(--vm)}
 .stamp{border-color:var(--vm);color:var(--vm);background:transparent;font-weight:600}.stamp:hover:not(:disabled){background:var(--vm);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
 .scn{background:var(--pn);border:1px solid var(--bd);border-left:6px solid var(--ink);border-radius:4px 12px 12px 4px;margin:0 0 14px;overflow:hidden}
@@ -237,6 +238,30 @@ button:disabled{opacity:.45;cursor:not-allowed}
  #shell,#sys,#dlg,#toast,#lib,#ex,#bgp{display:none!important}
  #pdfarea{display:block!important}#pdfarea .pg{box-shadow:none;margin:0!important;transform:none!important;break-after:page}
  #pdfarea>:last-child{break-after:auto}.dpg{break-before:page;padding:18mm;color:#222;background:#fff;font:12px/1.7 sans-serif}.dpg h3{margin:14px 0 6px}}
+/* ===== v3: 印鑑・マーカー・章の操作 ===== */
+.stl{position:absolute;inset:0;pointer-events:none}
+.stp{position:absolute;display:flex;align-items:center;justify-content:center;font:700 12px var(--serif);line-height:1;color:var(--c);border:2px solid var(--c);background:transparent;transform:rotate(-3deg);user-select:none;overflow:hidden;box-sizing:border-box}
+.stp i{font-style:normal;writing-mode:vertical-rl;text-orientation:upright;line-height:1;white-space:nowrap;letter-spacing:0}
+.stp.round{border-radius:50%}.stp.sq{border-radius:2px}.stp.rr{border-radius:24%}
+.stp.solid{background:var(--c);color:#fff}
+.pg.dark .stp.ring{background:#ffffffd9}
+.t-sel .stp{pointer-events:auto;cursor:pointer}.t-sel .stp:hover{outline:2px solid var(--b)}
+.t-edit .stl{display:none}
+.lkp{display:flex;gap:26px;align-items:flex-start;background:#fff;color:#222;border:1px solid var(--bd);border-radius:10px;padding:14px 18px;font:15px/30px var(--serif)}
+.lkp .h{position:relative;padding-left:56px;width:300px}.lkp .h .stp{left:6px;top:2px}
+.lkp .v{position:relative;writing-mode:vertical-rl;padding-top:30px;height:150px}.lkp .v .stp{top:2px;left:50%;margin-left:-9px}
+.lkp p{margin:0}.lkp .lkd{border-radius:3px}
+.dlgb label{display:inline-flex;gap:6px;align-items:center}.dlgb label>input:not([type=checkbox]):not([type=color]):not([type=range]){min-width:14em}
+.chl{grid-template-columns:20px 22px auto 1fr auto auto}
+.chl .gh{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--mute);text-align:center;font-size:16px;line-height:1}
+.chl .cb{display:flex;gap:4px}.chl .cb button{padding:1px 7px;font-size:12px;background:transparent}.chl .cb button:hover{border-color:var(--b)}
+.chl.dragging{opacity:.35}.chl.ins-b{box-shadow:inset 0 3px 0 var(--vm)}.chl.ins-a{box-shadow:inset 0 -3px 0 var(--vm)}
+.scn.drop>.body{outline:2px dashed var(--vm);outline-offset:-4px}
+.dgh{position:fixed;z-index:95;pointer-events:none;background:var(--pn);color:var(--tx);border:1px solid var(--vm);border-radius:8px;padding:6px 12px;box-shadow:0 8px 24px #0004;font:15px var(--serif);max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pjpdf{display:grid;gap:8px}.pjpdf .pdfbar{border:0;padding:0;background:none}
+.cvl.pl li::before{content:counter(n,decimal-leading-zero) "　"}
+.scn .st{cursor:text}
+@media(max-width:640px){.chl{grid-template-columns:20px 22px 1fr;gap:4px 10px}.chl .no,.chl .ti,.chl .mt,.chl .cb{grid-column:3}.chl .mt:empty{display:none}.chl .cb{justify-self:start}.chl .gh{grid-row:1/span 2}.chl input[data-pc]{grid-row:1/span 2}}
 </style></head><body>
 <div id="shell">
 <header id="top" class="np"><button id="hm" title="プロジェクト一覧へ">🏠</button>
@@ -255,6 +280,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <select class="mm" id="tp" data-tl="tpl" title="演出指示ラベル。クリックした位置に置け、中の文字は後から書き換えられます"></select>
 <select class="mm" id="em" data-tl="eraser" title="消し方"><option value="part">部分消し(ペイント風)</option><option value="whole">線ごと消す</option></select>
 <select class="mm" id="es" data-tl="eraser"><option value="me">消す：自分の書込のみ</option><option value="all">消す：全員の書込</option></select>
+<button class="mm" id="lkb" data-tl="sel" title="印鑑の形・色・大きさ、セリフのマーカーの色や有無を設定します">🖋 印鑑・マーカー設定</button>
 <button class="mm" id="pok" data-tl="poly" title="折れ線を確定(ダブルクリック/Enterでも可)">折れ線確定</button>
 <span class="hint tip" id="tip"></span><span style="flex:1"></span><button id="sdt" title="パネルを開く/閉じる">☰</button></div>
 <div id="edw"><nav id="tools" class="np"></nav><div id="area"></div>
@@ -270,7 +296,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div class="r"><button id="vprev" title="前のページ">◀</button><span id="pgn" class="hint"></span><button id="vnext" title="次のページ">▶</button><select id="pgj" title="ページ移動" style="flex:1"></select></div>
 <label class="r pj">本文の文字サイズ<select id="fsz"><option>13</option><option>14</option><option>15</option><option>16</option><option>18</option></select></label>
 <label class="r pj">メモ欄の幅<input type="range" id="mw" min="0" max="480" step="10" title="0で全幅"></label>
-<label class="r"><input type="checkbox" id="mr"> メモ欄の罫線を表示</label></div></details>
+<label class="r"><input type="checkbox" id="mr"> メモ欄の罫線を表示</label><div class="r"><button id="lk2" title="話者の印鑑・セリフのマーカーの表示設定">🖋 印鑑・マーカー設定</button></div></div></details>
 <details open><summary>書き込みの表示</summary><div class="bd"><span id="uv" class="uvl"></span></div></details>
 <details><summary>入力・補助</summary><div class="bd"><label class="r mm"><input type="checkbox" id="sn" checked> 吸着（行・図形・余白線に揃える）</label>
 <label class="r mm" title="タッチ画面で指でも描く/操作する。OFFならペン・マウスだけが描き、指はスクロール/ピンチ"><input type="checkbox" id="fg"> 指でも描く</label>
@@ -281,7 +307,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div class="hint">小説をそのまま貼り付け。「---」だけの行で強制改ページ。本文を直すと書き込みの位置がずれることがあります。</div>
 <textarea id="tx" placeholder="ここに小説をコピペ"></textarea></div></section>
 <section id="d" class="np"><div class="wrap"><h2 id="dh"></h2><div class="hint" id="dn"></div><div class="bar"><button id="na"></button>
-<label><input type="checkbox" id="fh" checked> 今の章＋共通のみ</label><input id="fq" placeholder="検索"></div><div id="dl"></div></div></section>
+<label><input type="checkbox" id="fh" checked> 今の章・シナリオ＋共有のみ</label><input id="fq" placeholder="検索"></div><div id="dl"></div></div></section>
 </main></div>
 <div id="pdfarea"></div>
 <div id="sys" class="np" hidden></div>
@@ -315,7 +341,7 @@ const col=()=>$('#co').value,wd=()=>+$('#wi').value;
 const api=(m,u,b)=>fetch(u,{method:m,body:b,headers:PID?{'X-Project':PID}:{}}).then(r=>{if(r.status==401&&SES){SES=null;showLogin()}if(!r.ok)throw Error(r.status);return r});
 const J=o=>JSON.stringify(o,null,1)+'\n';
 const jl=l=>`{\n"erased":${JSON.stringify(l.erased)},\n"speakers":${JSON.stringify(Object.fromEntries(Object.entries(l.speakers).sort()))},\n"done":${JSON.stringify(Object.fromEntries(Object.entries(l.done||{}).sort()))},\n"strokes":[\n${l.strokes.map(s=>JSON.stringify(s)).join(',\n')}\n]\n}\n`;
-function cont(p){if(p=='project.json')return J({name:S.project,memoW:S.memoW,fs:S.fs,imgRefs:S.imgRefs,coverOri:S.coverOri,coverWm:S.coverWm});const[a,b,c]=p.split('/'),k=(b||'').slice(0,-5);
+function cont(p){if(p=='project.json')return J({name:S.project,memoW:S.memoW,fs:S.fs,imgRefs:S.imgRefs,coverOri:S.coverOri,coverWm:S.coverWm,look:S.look});const[a,b,c]=p.split('/'),k=(b||'').slice(0,-5);
  if(a=='chapters')return S.chapters[k]?J(S.chapters[k]):null;if(a=='scenarios')return S.scenarios[k]?J(S.scenarios[k]):null;if(a=='dictionary')return S.dict[k]?J(S.dict[k]):null;const l=S.layers[b]?.[c.slice(0,-5)];return l?jl(l):null}
 function save(){clearTimeout(tm);tm=setTimeout(flush,400);$('#st').textContent='…'}
 async function flush(){try{for(const p of[...dirty]){const t=cont(p);await api(t==null?'DELETE':'PUT','/api/file?path='+encodeURIComponent(p),t);dirty.delete(p)}stamp=await(await api('GET','/api/stamp')).text();$('#st').textContent='保存済み'}catch(e){$('#st').textContent='保存失敗: '+e.message}}
@@ -335,8 +361,8 @@ function init(){chSel();$('#me').value=S.me||'';hdr();applyRole();tab(ct||(cp()?
 function goSc(v){S.sc=v;S.cur=undefined;hist=[];reds=[];chSel();hdr();applyRole();tab(ct)}
 $('#sc').onchange=()=>goSc($('#sc').value);
 $('#ch').onchange=()=>{S.cur=$('#ch').value;hist=[];reds=[];tab(ct)};
-const coverHtml=(sid=S.sc,only)=>{const t=S.project||'無題のプロジェクト',us=Object.keys(S.layers).filter(u=>u),l=S.coverOri=='l',hz=S.coverWm=='h',PW=l?1122:793,PH=l?793:1122,fs=hz?(t.length>(l?22:14)?44:64):(t.length>12?38:54),sc=(S.scenarios||{})[sid],list=chsOf(sid).filter(c=>!only||only.includes(c.id));
- return `<div class="pg cover ${l?'l land':'port'}${hz?' hz':''}" style="width:${PW}px;height:${PH}px"><div class="cvb"><div class="cvt" style="font-size:${fs}px">${esc(t)}</div></div><div class="cvm"><div class="cvs">シナリオスクリプト<br>演出依頼資料集</div>${sc?`<div class="cvx" style="margin-top:26px">${esc(sc.title)}</div>`:''}<ol class="cvl" style="margin-top:${sc?4:60}px">${list.map(c=>`<li>${esc(c.title)}</li>`).join('')}</ol><div class="cvf">${new Date().toLocaleDateString('ja-JP')}<br>${us.map(esc).join(' / ')}</div></div></div>`};
+const coverHtml=(sid=S.sc,only,plan)=>{const t=S.project||'無題のプロジェクト',us=Object.keys(S.layers).filter(u=>u),l=S.coverOri=='l',hz=S.coverWm=='h',PW=l?1122:793,PH=l?793:1122,fs=hz?(t.length>(l?22:14)?44:64):(t.length>12?38:54),pl=plan&&plan.length>1,sc=pl?null:(S.scenarios||{})[sid],list=pl?plan.map(p=>S.scenarios[p.sid]):chsOf(sid).filter(c=>!only||only.includes(c.id));
+ return `<div class="pg cover ${l?'l land':'port'}${hz?' hz':''}" style="width:${PW}px;height:${PH}px"><div class="cvb"><div class="cvt" style="font-size:${fs}px">${esc(t)}</div></div><div class="cvm"><div class="cvs">シナリオスクリプト<br>演出依頼資料集</div>${sc?`<div class="cvx" style="margin-top:26px">${esc(sc.title)}</div>`:''}<ol class="cvl${pl?' pl':''}" style="margin-top:${sc?4:60}px">${list.map(c=>`<li>${esc(c.title)}</li>`).join('')}</ol><div class="cvf">${new Date().toLocaleDateString('ja-JP')}<br>${us.map(esc).join(' / ')}</div></div></div>`};
 $('#cvo').onchange=$('#cvw').onchange=()=>{S.coverOri=$('#cvo').value;S.coverWm=$('#cvw').value;mk('project.json');save();$('#cvr').innerHTML=coverHtml()};
 
 $('#pj').oninput=()=>{S.project=$('#pj').value;mk('project.json');save();$('#cvr').innerHTML=coverHtml()};
@@ -353,16 +379,17 @@ $('#cx').onclick=()=>{const c=cp();if(!c||!confirm(`「${c.title}」を削除し
 /* ---- 世界観・用語・キャラクター ---- */
 const opt=(a,v)=>a.map(x=>`<option${x==v?' selected':''}>${x}</option>`).join('');
 const TT={世界観:'世界観設定',用語:'用語集',キャラクター:'キャラクター設定'},PH={世界観:'舞台・歴史・ルール・雰囲気など',用語:'意味・読み・使われる場面',キャラクター:'一人称・口調・年齢・外見・性格・関係性など'};
-function renderDict(){const q=$('#fq').value;$('#dh').textContent=TT[dcat];$('#dn').textContent=dcat=='キャラクター'?'ここで作ったキャラクターが、資料タブの「👆話者指定」で選べます。':'「全章共通」か、特定の章だけに紐づけられます。';$('#na').textContent='＋'+dcat+'を追加';
- const a=Object.values(S.dict).filter(d=>!d.del&&d.cat==dcat&&(!$('#fh').checked||!d.ch||d.ch==S.cur)&&(!q||(d.name+d.body).includes(q))).sort((x,y)=>x.name.localeCompare(y.name));
- $('#dl').innerHTML=a.map(d=>`<div class="card" data-i="${d.id}"><div class="bar"><input data-f="name" value="${esc(d.name)}" placeholder="名前">${dcat=='キャラクター'?`<input type="color" data-f="col" value="${d.col||'#3b6ea5'}" title="セリフのラベル色">`:''}<select data-f="ch"><option value="">全章共通</option>${scs().map(sc=>`<optgroup label="${esc(sc.title)}">${chsOf(sc.id).map(c=>`<option value="${c.id}"${c.id==d.ch?' selected':''}>${esc(c.title)}</option>`).join('')}</optgroup>`).join('')}</select><button data-x>🗑</button></div><textarea data-f="body" rows="${dcat=='世界観'?8:4}" placeholder="${PH[dcat]}">${esc(d.body)}</textarea></div>`).join('')||'<p>まだありません。右上の「＋追加」から作成します。</p>';if(S.base!='edit')$$('#dl input,#dl textarea,#dl select,#dl button').forEach(x=>x.disabled=true)}
+function renderDict(){const q=$('#fq').value;$('#dh').textContent=TT[dcat];$('#dn').textContent=dcat=='キャラクター'?'ここで作ったキャラクターを、資料タブの「話者（印鑑）」でセリフに指定すると、余白に印鑑が入ります。色と印鑑の文字もここで決めます。':'「プロジェクト全体で共有」にすると、このプロジェクトのすべてのシナリオ・章で使えます。シナリオや章だけに限定もできます。';$('#na').textContent='＋'+dcat+'を追加';
+ const a=Object.values(S.dict).filter(d=>!d.del&&d.cat==dcat&&(!$('#fh').checked||relv(d))&&(!q||(d.name+d.body).includes(q))).sort((x,y)=>x.name.localeCompare(y.name));
+ $('#dl').innerHTML=a.map(d=>`<div class="card" data-i="${d.id}"><div class="bar"><input data-f="name" value="${esc(d.name)}" placeholder="名前">${dcat=='キャラクター'?`<input type="color" data-f="col" value="${d.col||'#3b6ea5'}" title="キャラクターの色（印鑑・ラベルの色）"><input data-f="stamp" value="${esc(d.stamp||'')}" placeholder="印鑑の字" maxlength="3" style="width:6em" title="印鑑に入れる文字（空なら名前の頭文字）">`:''}<select data-f="scope" title="この設定を使える範囲"><option value="">🌐 プロジェクト全体で共有</option>${scs().map(sc=>`<optgroup label="${esc(sc.title)}"><option value="sc:${sc.id}"${d.sc==sc.id&&!d.ch?' selected':''}>このシナリオだけ</option>${chsOf(sc.id).map(c=>`<option value="ch:${c.id}"${c.id==d.ch?' selected':''}>章：${esc(c.title)}</option>`).join('')}</optgroup>`).join('')}</select><button data-x>🗑</button></div><textarea data-f="body" rows="${dcat=='世界観'?8:4}" placeholder="${PH[dcat]}">${esc(d.body)}</textarea></div>`).join('')||'<p>まだありません。右上の「＋追加」から作成します。</p>';if(S.base!='edit')$$('#dl input,#dl textarea,#dl select,#dl button').forEach(x=>x.disabled=true)}
 $('#fq').oninput=$('#fh').onchange=renderDict;
-$('#na').onclick=()=>{const i=id('e');S.dict[i]={id:i,cat:dcat,name:'新規',body:'',ch:''};mk(`dictionary/${i}.json`);save();renderDict()};
-$('#dl').oninput=e=>{const c=e.target.closest('.card'),f=e.target.dataset.f;if(c&&f){S.dict[c.dataset.i][f]=e.target.value;mk(`dictionary/${c.dataset.i}.json`);save()}};
+$('#na').onclick=()=>{const i=id('e');S.dict[i]={id:i,cat:dcat,name:'新規',body:'',ch:'',sc:''};mk(`dictionary/${i}.json`);save();renderDict()};
+$('#dl').oninput=e=>{const c=e.target.closest('.card'),f=e.target.dataset.f;if(c&&f){const d=S.dict[c.dataset.i];if(f=='scope'){const[t,v]=e.target.value.split(':');d.ch=t=='ch'?v:'';d.sc=t=='sc'?v:''}else d[f]=e.target.value;mk(`dictionary/${c.dataset.i}.json`);save();if(f=='scope')renderDict()}};
 $('#dl').onclick=e=>{const c=e.target.closest('.card');if(c&&e.target.dataset.x!=null&&confirm('削除しますか？')){S.dict[c.dataset.i].del=1;mk(`dictionary/${c.dataset.i}.json`);save();renderDict()}};
-const ents=()=>Object.values(S.dict).filter(d=>!d.del&&(!d.ch||d.ch==S.cur));
+const relv=d=>d.ch?d.ch==S.cur:(!d.sc||d.sc==S.sc),ents=()=>Object.values(S.dict).filter(d=>!d.del&&relv(d));
 
 /* ---- 資料ビュー (コンテ風: 左=本文 / 縦線 / 右=記入メモ欄) ---- */
+const LK0={st:1,sh:'round',fl:'ring',sz:26,n:1,cm:'chara',scc:'#c8372d',lb:0,mk:1,mkc:''},lkKey=()=>'look:'+PID,lkMine=()=>{try{return JSON.parse(localStorage.getItem(lkKey())||'null')}catch{return null}},LOOK=()=>({...LK0,...(S.look||{}),...(lkMine()||{})});let LK={...LK0};
 const RULE=()=>{try{return localStorage.getItem('memoRule')!='0'}catch{return true}},MW=()=>S.memoW??260,L0=56,R0=40,T0=84,PGH=960,hide=new Set();
 const spk=()=>{const m={};for(const l of Object.values(S.layers))for(const[k,v]of Object.entries(l[S.cur]?.speakers||{}))if(!m[k]||v[1]>m[k][1])m[k]=v;return m};
 const RB=/｜([^｜《》\n]+)《([^《》\n]+)》|([一-龠々〆ヵヶ]+)《([^《》\n]+)》/g;
@@ -379,7 +406,7 @@ const THEMES={
 const lum=c=>{const m=/^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/i.exec(c||'');if(!m)return 1;const[r,g,b]=[1,2,3].map(i=>parseInt(m[i],16)/255);return .2126*r+.7152*g+.0722*b};
 function themeVars(st){const T=THEMES[st.th]||THEMES.plain;let bg=T.bg,tx=T.tx,ac=T.ac,ru=T.ru,dark=!!T.dark;
  if(st.th=='solid'){bg=st.col||'#f5efe0';dark=lum(bg)<.45;tx=dark?'#f2f2f2':'#222';ac=dark?'#fff':'#1f3a6e';ru=dark?'#ffffff30':'#00000024'}
- if(st.tx)tx=st.tx;return{dark,css:`--pbg:${bg};--ptx:${tx};--pac:${ac};--pru:${ru};--dlb:${dark?'#ffffff26':'#fff3b8'}`}}
+ if(st.tx)tx=st.tx;return{dark,css:`--pbg:${bg};--ptx:${tx};--pac:${ac};--pru:${ru};--dlb:${!LK.mk?'transparent':(LK.mkc||(dark?'#ffffff26':'#fff3b8'))}`}}
 const FLAG_OK=/^(\*|横向き|縦向き|縦書き|横書き|(背景|背景色|文字色)=[^\s,]+)$/;
 const PARSE=l=>{const m=l.trim().match(/^---(.*)$/);if(!m)return null;const t=m[1].trim().split(/[\s,]+/).filter(Boolean);if(!t.every(x=>FLAG_OK.test(x)))return null;
  const v=k=>{const x=t.find(y=>y.startsWith(k+'='));return x?x.slice(k.length+1):null},th=v('背景'),tx=v('文字色');
@@ -390,10 +417,20 @@ function geo(ori,wm,free){const PW=ori=='l'?1122:793,PH=ori=='l'?793:1122,mw=fre
  if(vert){const tw=Math.floor((PW-L0-R0)/30)*30,mh=mw?Math.min(mw,PH-T0-56-120):0,th=PH-T0-56-(mh?24+mh:0);Object.assign(g,{tw,th,pbx:PW-R0-tw,mh,my:T0+th+24,dvy:T0+th+12,mx:-1,dvx:-1})}
  else{const th=Math.floor((PH-T0-56)/30)*30,tw=PW-L0-R0-(mw?24+mw:0);Object.assign(g,{tw,th,pbx:L0,mh:0,mx:L0+tw+24,dvx:L0+tw+12,my:-1,dvy:-1})}
  g.tx1=g.pbx+g.tw;return g}
-const line=(l,cnt,sp)=>rubyH(esc(l).replace(/「[^」]*」/g,m=>{const pm=plain(m),k=h(pm)+'.'+(cnt[pm]=(cnt[pm]||0)+1),d=S.dict[(sp[k]||[])[0]];return(d&&!d.del?`<b class="sp" contenteditable="false" style="background:${d.col||'hsl('+parseInt(h(d.name),36)%360+',55%,38%)'}">${esc(d.name)}</b>`:'')+`<span class="dl${d&&!d.del?' has':''}" data-k="${k}">${m}</span>`}))||'<br>';
+const chCol=d=>d.col||'hsl('+parseInt(h(d.name),36)%360+',55%,38%)';
+const line=(l,cnt,sp)=>rubyH(esc(l).replace(/「[^」]*」/g,m=>{const pm=plain(m),k=h(pm)+'.'+(cnt[pm]=(cnt[pm]||0)+1),d=S.dict[(sp[k]||[])[0]],ok=d&&!d.del;return(ok&&LK.lb?`<b class="sp" contenteditable="false" style="background:${chCol(d)}">${esc(d.name)}</b>`:'')+`<span class="dl${ok?' has':''}" data-k="${k}"${ok?` data-d="${d.id}"`:''}>${m}</span>`}))||'<br>';
+/* 話者の印鑑: 横書きは本文左の余白、縦書きは本文上の余白に置く */
+const stTxt=(d,n)=>{const t=(d.stamp||'').trim()||[...String(d.name||'').trim()].slice(0,n).join('');return[...t].slice(0,3).join('')};
+function stampHtml(d,sz,vert,k,lk=LK){const c=lk.cm=='chara'?chCol(d):lk.scc,t=stTxt(d,vert?Math.min(2,lk.n):lk.n),n=[...t].length||1,fs=sz*({1:.62,2:.42,3:.3}[n]||.3);
+ return`<div class="stp ${lk.sh} ${lk.fl}" data-k="${k||''}" title="${esc(d.name)}" style="width:${sz}px;height:${sz}px;font-size:${fs}px;border-width:${sz<22?1.5:2}px;--c:${c}"><i>${esc(t)}</i></div>`}
+function stamps(pg){pg.querySelector('.stl')?.remove();if(!LK.st||!pg.b)return;const b=pg.b,g=pg.g,vert=g.vert,br=b.getBoundingClientRect(),k=(br.width/b.offsetWidth)||1,sz=vert?18:Math.min(30,LK.sz),used=new Set();let o='';
+ b.querySelectorAll('.dl.has').forEach(sp=>{const d=S.dict[sp.dataset.d],r=sp.getClientRects()[0];if(!d||!r)return;
+  if(vert){const cx=g.pbx+(r.left+r.width/2-br.left)/k,c=Math.round(cx/30);if(used.has(c))return;used.add(c);o+=stampHtml(d,sz,1,sp.dataset.k).replace('style="','style="left:'+(cx-sz/2).toFixed(1)+'px;top:'+(T0-sz)+'px;')}
+  else{const cy=T0+(r.top+r.height/2-br.top)/k,c=Math.round((cy-T0)/30);if(used.has(c))return;used.add(c);o+=stampHtml(d,sz,0,sp.dataset.k).replace('style="','style="left:3px;top:'+(cy-sz/2).toFixed(1)+'px;')}});
+ if(!o)return;const e=document.createElement('div');e.className='stl';e.innerHTML=o;pg.insertBefore(e,pg.querySelector('canvas'))}
 const setText=t=>{if(S.role!='edit')return;const c=cp(),o=c.text;act(()=>{c.text=t},()=>{c.text=o},1,1,`chapters/${c.id}.json`)};
 function uv(){$('#uv').innerHTML=Object.keys(S.layers).filter(u=>S.layers[u][S.cur]).map(u=>`<label title="この人の書き込みの表示/非表示"><input type="checkbox" data-u="${esc(u)}"${hide.has(u)?'':' checked'}>${esc(u)}</label>`).join('')}
-function render(){const a=$('#area'),c=cp(),y=a.scrollTop,x0=a.scrollLeft;a.removeAttribute('data-vm');a.innerHTML='';$('#mw').value=MW();a.style.setProperty('--fs',(S.fs||15)+'px');$('#fsz').value=S.fs||15;
+function render(){LK=LOOK();const a=$('#area'),c=cp(),y=a.scrollTop,x0=a.scrollLeft;a.removeAttribute('data-vm');a.innerHTML='';$('#mw').value=MW();a.style.setProperty('--fs',(S.fs||15)+'px');$('#fsz').value=S.fs||15;
  if(!c){a.innerHTML='<p>「本文」タブで章を作り、小説を貼り付けてください。</p>';return}
  let n=0,pg,cnt={},sp=spk(),st={ori:c.ori||'p',wm:c.wm||'h',free:c.free?1:0,th:c.th||'plain',col:c.col||'#f5efe0',tx:c.tx||''};
  const np=(b=-1)=>{const g=geo(st.ori,st.wm,st.free),iw=g.PW-L0-R0;pg=document.createElement('div');const tv=themeVars(st);pg.className='pg '+(st.ori=='l'?'land':'port')+(tv.dark?' dark':'')+(RULE()?'':' norule');pg.brk=b;pg.st={...st};pg.g=g;
@@ -408,15 +445,15 @@ function render(){const a=$('#area'),c=cp(),y=a.scrollTop,x0=a.scrollLeft;a.remo
   const p=document.createElement('p');p.dataset.l=i;p.dataset.n=l.trim()?i+1:'';p.innerHTML=line(l,cnt,sp);pg.b.append(p);
   if(ov(pg.b)&&pg.b.children.length>1){pg.b.removeChild(p);np();pg.b.append(p)}});
  $$('#area .pb').forEach(b=>{const p=b.children;if(p.length)b.dataset.r=p[0].dataset.l+','+p[p.length-1].dataset.l;b.contentEditable=tool=='edit'});
- $$('#area .pg').forEach(bind);uv();$('#pgj').innerHTML=$$('#area .pg').map((_,i)=>`<option value="${i}">p.${i+1}</option>`).join('');paintAll();hl(1);if(VM=='one'){a.dataset.vm='one';showOne(curPg,1)}else{a.scrollTop=y;a.scrollLeft=x0}}
+ $$('#area .pg').forEach(bind);$$('#area .pg').forEach(stamps);uv();$('#pgj').innerHTML=$$('#area .pg').map((_,i)=>`<option value="${i}">p.${i+1}</option>`).join('');paintAll();hl(1);if(VM=='one'){a.dataset.vm='one';showOne(curPg,1)}else{a.scrollTop=y;a.scrollLeft=x0}}
 $('#area').onclick=e=>{const c=cp(),bt=e.target.closest('.pside button');
  if(bt){if(S.role!='edit')return;const pg=bt.closest('.pgw').querySelector('.pg'),a=bt.dataset.a;
   if(a=='join'){const L=c.text.split('\n');L.splice(pg.brk,1);return setText(L.join('\n'))}
   if(a=='bg')return bgOpen(pg);
   const s0=pg.st;return applyPage(pg,{...s0,ori:a=='ori'?(s0.ori=='l'?'p':'l'):s0.ori,wm:a=='wm'?(s0.wm=='v'?'h':'v'):s0.wm,free:a=='free'?(s0.free?0:1):s0.free})}
  if(tool=='brk'){const p=e.target.closest('.pb p');if(p){const i=+p.dataset.l,L=c.text.split('\n');if(!PARSE(L[i-1]||''))L.splice(i,0,'---');setText(L.join('\n'))}return}
- if(tool!='sel')return;const s=e.target.closest('.dl');if(!s||!need())return;
- const cs=ents().filter(d=>d.cat=='キャラクター');if(!cs.length)return alert('「キャラクター」タブで項目を追加すると、ここから選べます。');
+ if(tool!='sel')return;const st=e.target.closest('.stp'),s=e.target.closest('.dl')||(st&&st.closest('.pg').querySelector(`.dl[data-k="${st.dataset.k}"]`));if(!s||!need())return;
+ const cs=ents().filter(d=>d.cat=='キャラクター');if(!cs.length)return alert('「キャラクター」タブでキャラクターを追加すると、ここから選べます。');
  const dd=document.createElement('select');dd.size=Math.min(9,cs.length+1);dd.style.cssText=`position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:30`;
  dd.innerHTML='<option value="">(指定なし)</option>'+cs.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
  dd.onchange=()=>{const k=s.dataset.k,m=mine().speakers,o=m[k],v=dd.value;dd.remove();act(()=>m[k]=[v,Date.now()],()=>o?m[k]=o:delete m[k],1)};
@@ -561,11 +598,11 @@ function bind(pg){const cv=pg.querySelector('canvas'),g=cv.getContext('2d');cv.g
 /* ---- ツールバー・プロパティパネル ---- */
 /* ツールボックス・オプションバーは setTool 以降で構築 */
 /* ---- ツールボックス(左: アイコン) と オプションバー(上: 選んだツールの設定) ---- */
-const TOOLS=[['move','選択・移動','V'],['sel','話者指定'],['done','対応済みにする','D'],null,['pen','鉛筆','P'],['marker','マーカー','M'],['brush','筆','B'],['hl','文字なぞり','H'],['eraser','消しゴム','E'],null,['line','線','L'],['arrow','矢印','A'],['curve','曲線矢印','C'],['poly','折れ線','G'],['rect','四角','R'],['ellipse','丸','O'],null,['text','文字ボックス','T'],['tpl','演出ラベル'],null,['edit','本文編集'],['brk','改ページ']];
+const TOOLS=[['move','選択・移動','V'],['sel','話者（印鑑）'],['done','対応済みにする','D'],null,['pen','鉛筆','P'],['marker','マーカー','M'],['brush','筆','B'],['hl','文字なぞり','H'],['eraser','消しゴム','E'],null,['line','線','L'],['arrow','矢印','A'],['curve','曲線矢印','C'],['poly','折れ線','G'],['rect','四角','R'],['ellipse','丸','O'],null,['text','文字ボックス','T'],['tpl','演出ラベル'],null,['edit','本文編集'],['brk','改ページ']];
 const IC={move:'M5 3l11 6.5-4.8 1.3L8.6 16z',sel:'M4 4h12v8H9l-4 3.5V12H4z',done:'M4 10.5l4 4 8-9',pen:'M3.5 16.5l1-4 9-9 3 3-9 9zM11.5 5.5l3 3',marker:'M6 16l-2 1 1-2 8-10 3 3zM11 7l3 3',brush:'M5 16c0-2.2 1.2-3 3-3l7-9 1.5 1.5-8 8.5c0 1.8-1 3-3.5 2z',hl:'M5.5 14l4.5-10 4.5 10M7.3 10.5h5.4M3.5 17h13',eraser:'M4 12l7-7 5 5-5 5H7zM8.5 16.5H17',line:'M4 16L16 4',arrow:'M4 16L16 4M9 4h7v7',curve:'M4 15C5 5 13 17 16 5M16 5l-4 .8M16 5l.6 4',poly:'M3 15l5-9 4 6 5-8',rect:'M4 5h12v10H4z',text:'M4 5h12M10 5v11M7.5 16h5',tpl:'M3 6h9l5 4-5 4H3z',edit:'M3 15.5l1-3.5 8-8 2.5 2.5-8 8zM11 5l2.5 2.5',brk:'M3 10h3M8 10h4M14 10h3M6 5v3M14 12v3',un:'M7 7H12.5a3.2 3.2 0 010 6.4H8M7 7l3-3M7 7l3 3',re:'M13 7H7.5a3.2 3.2 0 000 6.4H12M13 7l-3-3M13 7l-3 3',pst:'M7 4h6v2H7zM5 5h10v12H5z',img:'M3 5h14v10H3zM3 13.5l4-4 3.5 3.5 2-2 4.5 4.5M13.5 8.2h.01'};
 const ico=k=>`<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${k=='ellipse'?'<ellipse cx="10" cy="10" rx="7" ry="5"/>':`<path d="${IC[k]}"/>`}</svg>`;
 const TN=Object.fromEntries(TOOLS.filter(Boolean).map(t=>[t[0],t[1]]));
-const TIP={move:'図形をクリックで選択。ドラッグで移動、四隅で拡大縮小（自分の書き込みのみ）',sel:'セリフ(「」)をクリックして、話者を選びます',done:'書き込みをクリックすると「対応済み ✔」になります',pen:'ペン・マウスでなぞって書き込み',marker:'半透明のマーカー',brush:'筆圧に応じて太さが変わる筆',hl:'本文をなぞって蛍光ペンのように色を付けます',eraser:'部分消し/線ごと消しは右の設定で切り替え',line:'ドラッグで直線。Shiftで角度を固定',arrow:'ドラッグで矢印',curve:'ドラッグで曲線矢印',poly:'クリックで点を追加。ダブルクリック・Enterで確定',rect:'ドラッグで四角。Shiftで正方形',ellipse:'ドラッグで丸。Shiftで正円',text:'クリックした位置に文字ボックスを置きます',tpl:'クリックした位置に演出ラベル(BGM・SEなど)を置きます',edit:'本文を直接書き換えます。文字を選んで右の「ルビ」でふりがな',brk:'本文の行をクリックすると、その行の前で改ページします'};
+const TIP={move:'図形をクリックで選択。ドラッグで移動、四隅で拡大縮小（自分の書き込みのみ）',sel:'セリフ(「」)か印鑑をクリックして話者を選ぶと、余白に印鑑が入ります',done:'書き込みをクリックすると「対応済み ✔」になります',pen:'ペン・マウスでなぞって書き込み',marker:'半透明のマーカー',brush:'筆圧に応じて太さが変わる筆',hl:'本文をなぞって蛍光ペンのように色を付けます',eraser:'部分消し/線ごと消しは右の設定で切り替え',line:'ドラッグで直線。Shiftで角度を固定',arrow:'ドラッグで矢印',curve:'ドラッグで曲線矢印',poly:'クリックで点を追加。ダブルクリック・Enterで確定',rect:'ドラッグで四角。Shiftで正方形',ellipse:'ドラッグで丸。Shiftで正円',text:'クリックした位置に文字ボックスを置きます',tpl:'クリックした位置に演出ラベル(BGM・SEなど)を置きます',edit:'本文を直接書き換えます。文字を選んで右の「ルビ」でふりがな',brk:'本文の行をクリックすると、その行の前で改ページします'};
 const tbtn=(k,l,h)=>`<button data-k="${k}" class="${k=='move'?'':'mm'}${k=='edit'||k=='brk'?' ed':''}" title="${l}${h?'（'+h+'）':''}">${ico(k)}${h?`<span class="kb">${h}</span>`:''}</button>`;
 (()=>{let g=[],o='';const fl=()=>{if(g.length)o+=`<div class="tg">${g.join('')}</div>`;g=[]};for(const t of TOOLS){if(!t){fl();o+='<div class="tsep"></div>';continue}g.push(tbtn(...t))}fl();
  o+=`<div class="tsep"></div><div class="tg"><button id="un" class="mm" title="元に戻す（Ctrl+Z）">${ico('un')}</button><button id="re" class="mm" title="やり直し（Ctrl+Shift+Z）">${ico('re')}</button><button id="pst" class="mm" title="コピーした図形を貼り付け（Ctrl+V）">${ico('pst')}</button><button id="img" class="mm" title="画像を貼る・画像ライブラリを開く（貼り付け Ctrl+V / ドラッグ&ドロップも可）">${ico('img')}</button></div><input type="file" id="imf" accept="image/*" multiple hidden>`;
@@ -607,7 +644,7 @@ function setVM(v){VM=v;const a=$('#area');$('#vm').value=v;if(v=='one'){a.datase
 $('#vm').onchange=()=>setVM($('#vm').value);$('#vprev').onclick=()=>VM=='one'&&showOne(curPg-1);$('#vnext').onclick=()=>VM=='one'&&showOne(curPg+1);
 const setK=()=>{const ar=$('#area'),v=$('#zm').value,g=$$('#area .pg')[VM=='one'?curPg:0]?.g||{PW:793,PH:1122},cw=ar.clientWidth||innerWidth,chh=ar.clientHeight||innerHeight,aw=cw-32-(innerWidth>900?134:118),ah=chh-44;
  ar.style.setProperty('--k',v=='fit'?Math.max(.3,Math.min(1.6,aw/g.PW)):v=='fitp'?Math.max(.3,Math.min(1.6,aw/g.PW,ah/g.PH)):v)};
-$('#zm').onchange=setK;new ResizeObserver(()=>/^fit/.test($('#zm').value)&&setK()).observe($('#area'));if(innerWidth<830)$('#zm').value='fit';setK();
+$('#zm').onchange=setK;new ResizeObserver(()=>/^fit/.test($('#zm').value)&&setK()).observe($('#area'));if(innerWidth<1350)$('#zm').value='fit';setK();
 $('#csv').onclick=()=>{const c=cp();if(!c)return;const sp=spk(),cnt={},rows=[['章','行','話者','セリフ']];
  c.text.split('\n').forEach((l,i)=>{for(const m of l.matchAll(/「[^」]*」/g)){const e=plain(esc(m[0])),k=h(e)+'.'+(cnt[e]=(cnt[e]||0)+1);rows.push([c.title,i+1,S.dict[(sp[k]||[])[0]]?.name||'',plain(m[0])])}});
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\r\n')],{type:'text/csv'}));a.download=[S.project,c.title,'セリフ一覧'].filter(Boolean).join('_')+'.csv';a.click()};
@@ -696,29 +733,39 @@ onkeydown=e=>{if(!$('#v').classList.contains('on')||/INPUT|TEXTAREA|SELECT/.test
 const ROLE={view:'閲覧のみ',memo:'閲覧＋メモ',edit:'編集可'};
 let VIEW=()=>{},tmT;
 const toast=(t,ms=2600)=>{const e=$('#toast');e.textContent=t;e.hidden=false;clearTimeout(tmT);tmT=setTimeout(()=>e.hidden=true,ms)};
-const dlgOpen=h=>{$('#dlg .dlgb').innerHTML=h;$('#dlg').hidden=false},dlgClose=()=>{$('#dlg').hidden=true;$('#dlg .dlgb').innerHTML=''};
+let DLGCB=null;
+const dlgOpen=h=>{$('#dlg .dlgb').innerHTML=h;$('#dlg').hidden=false},dlgClose=()=>{const f=DLGCB;DLGCB=null;$('#dlg').hidden=true;$('#dlg .dlgb').innerHTML='';$('#dlg .dlgb').oninput=$('#dlg .dlgb').onkeydown=null;f?.(null)};
+/* prompt()の代わりに画面内で入力させる (null=キャンセル) */
+const askForm=(title,body,collect,ok='OK')=>new Promise(res=>{DLGCB=res;dlgOpen(`<h3>${title}</h3>${body}<div class="r"><button class="on" id="askok">${ok}</button><button id="askno">キャンセル</button></div>`);
+ const b=$('#dlg .dlgb');$('#askok').onclick=()=>{const v=collect();DLGCB=null;dlgClose();res(v)};$('#askno').onclick=()=>dlgClose();
+ b.onkeydown=e=>{if(e.key=='Enter'&&!e.isComposing&&e.target.tagName=='INPUT')$('#askok').click()};const i=b.querySelector('input:not([type=checkbox])');if(i){i.focus();i.select?.()}});
+const ask=(title,val='',hint='')=>askForm(esc(title),`<input id="askv" value="${esc(val)}" style="width:100%">${hint?`<div class="hint">${hint}</div>`:''}`,()=>$('#askv').value.trim()||null);
 const jpost=(u,o)=>fetch(u,{method:'POST',body:JSON.stringify(o||{})}).then(async r=>{const t=await r.text();let j={};try{j=JSON.parse(t)}catch{}if(!r.ok)throw Error(j.error||('エラー '+r.status));return j});
 const adm=(a,o)=>jpost('/api/admin/'+a,o),admUsers=()=>fetch('/api/admin/users').then(r=>r.json());
 const sys=h=>{const e=$('#sys');e.hidden=!h;if(h){e.innerHTML=h;e.scrollTop=0}},msg=t=>{const m=$('#sys .msg');if(m)m.textContent=t;else toast(t)};
 const fmtT=t=>t?new Date(t*1000).toLocaleString('ja-JP',{dateStyle:'short',timeStyle:'short'}):'—';
 const refSes=async()=>{SES=await(await fetch('/api/session')).json()};
-const chip=r=>r?`<span class="chip ${r}">${ROLE[r]||r}</span>`:'<span class="chip none">閲覧不可</span>';
+const chip=r=>r?`<span class="chip r-${r}">${ROLE[r]||r}</span>`:'<span class="chip r-none">閲覧不可</span>';
 const nm1=u=>esc((u||'?').slice(0,1));
 /* ---- PDF出力 (シナリオ単位。ブラウザの印刷→PDFで保存。A4・縦横混在OK) ---- */
-const dpHtml=ids=>{const set=new Set(ids),sc=curSc(),body=CATS.map(k=>{const a=Object.values(S.dict).filter(d=>!d.del&&d.cat==k&&(!d.ch||set.has(d.ch))).sort((x,y)=>x.name.localeCompare(y.name));return a.length?`<h3>${k}</h3>`+a.map(d=>`<p><b>${esc(d.name)}</b>${d.ch?'':'（共通）'}<br>${esc(d.body).replace(/\n/g,'<br>')}</p>`).join(''):''}).join('');
- return body?`<div class="dpg"><h2>${esc(S.project)}${sc?' ／ '+esc(sc.title):''} 設定資料</h2>${body}</div>`:''};
+const dpHtml=(ids,sids)=>{const set=new Set(ids),ss=new Set(sids||[S.sc]),one=ss.size==1?(S.scenarios||{})[[...ss][0]]:null,body=CATS.map(k=>{const a=Object.values(S.dict).filter(d=>!d.del&&d.cat==k&&(d.ch?set.has(d.ch):(!d.sc||ss.has(d.sc)))).sort((x,y)=>x.name.localeCompare(y.name));return a.length?`<h3>${k}</h3>`+a.map(d=>`<p><b>${esc(d.name)}</b>${!d.ch&&!d.sc?'（共通）':!d.ch&&S.scenarios[d.sc]?'（'+esc(S.scenarios[d.sc].title)+'のみ）':''}<br>${esc(d.body).replace(/\n/g,'<br>')}</p>`).join(''):''}).join('');
+ return body?`<div class="dpg"><h2>${esc(S.project)}${one?' ／ '+esc(one.title):''} 設定資料</h2>${body}</div>`:''};
 const pdfBar=(sid,full)=>{const ok=S.pdf?.[sid]!==false;return`<div class="pdfbar"><span class="lb">PDFにする</span><label><input type="checkbox" data-o="cover" checked>表紙</label><label><input type="checkbox" data-o="dict" checked>設定資料（世界観・用語・キャラ）</label><label><input type="checkbox" data-o="rule"${RULE()?' checked':''}>メモ罫線</label><button class="stamp" data-a="pdf" data-sc="${sid}"${ok?'':' disabled title="このシナリオのPDF出力は許可されていません"'}>📄 PDF出力</button>${full?'':'<span class="hint">下の章のチェックがPDFに入ります</span>'}</div>`};
-async function pdfRun(sid,root){const g=k=>root.querySelector(`[data-o=${k}]`)?.checked,ids=[...root.querySelectorAll('[data-pc]:checked')].map(x=>x.value);
- if(!ids.length)return toast('PDFに入れる章を選んでください');if(S.pdf?.[sid]===false)return toast('このシナリオのPDF出力は許可されていません');
- const keep={cur:S.cur,sc:S.sc,tab:ct},out=$('#pdfarea');out.innerHTML='';toast('PDFを作成しています…',60000);
- try{S.sc=sid;sel=null;S.cur=ids[0];tab('v');const pages=[];
-  if(g('cover')){const t=document.createElement('div');t.innerHTML=coverHtml(sid,ids);pages.push(t.firstElementChild)}
-  for(const id of ids){S.cur=id;render();const srcs=new Set();for(const l of Object.values(S.layers))for(const st of l[id]?.strokes||[])if(st.t=='img')srcs.add(st.src);
-   await Promise.all([...srcs].map(x=>getImg(x).decode().catch(()=>{})));paintAll();
-   for(const pg of $$('#area .pg')){const c=pg.cloneNode(true),im=document.createElement('img');im.className='cv';im.src=pg.querySelector('canvas').toDataURL('image/png');c.querySelector('canvas').replaceWith(im);c.style.margin='0';c.classList.remove('cur');c.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));c.classList.toggle('norule',!g('rule'));pages.push(c)}
-   await new Promise(r=>setTimeout(r,0))}
-  if(g('dict')){const h=dpHtml(ids);if(h){const t=document.createElement('div');t.innerHTML=h;pages.push(t.firstElementChild)}}
-  out.append(...pages);document.title=[S.project,S.scenarios[sid]?.title,'演出依頼'].filter(Boolean).join('_')}
+const pdfOpt=root=>{const g=k=>!!root.querySelector(`[data-o=${k}]`)?.checked;return{cover:g('cover'),dict:g('dict'),rule:g('rule'),door:g('door')}};
+const pdfIds=(root,sid)=>[...root.querySelectorAll('[data-pc]:checked')].map(x=>x.value);
+async function pdfRun(sid,root){const ids=pdfIds(root);if(!ids.length)return toast('PDFに入れる章を選んでください');if(S.pdf?.[sid]===false)return toast('このシナリオのPDF出力は許可されていません');return pdfMake([{sid,ids}],pdfOpt(root))}
+/* plan=[{sid,ids}]: 1シナリオならそのシナリオだけ、複数ならプロジェクト全体として1つのPDFにまとめる */
+async function pdfMake(plan,o){plan=plan.filter(p=>p.ids.length&&S.pdf?.[p.sid]!==false);if(!plan.length)return toast('PDFに入れる章がありません（または出力が許可されていません）');
+ const keep={cur:S.cur,sc:S.sc,tab:ct},out=$('#pdfarea'),multi=plan.length>1;out.innerHTML='';toast('PDFを作成しています…',60000);
+ try{sel=null;S.sc=plan[0].sid;S.cur=plan[0].ids[0];tab('v');const pages=[],the=x=>{const t=document.createElement('div');t.innerHTML=x;return t.firstElementChild};
+  if(o.cover)pages.push(the(multi?coverHtml(null,null,plan):coverHtml(plan[0].sid,plan[0].ids)));
+  for(const{sid,ids}of plan){S.sc=sid;if(multi&&o.door)pages.push(the(coverHtml(sid,ids)));
+   for(const id of ids){S.cur=id;render();const srcs=new Set();for(const l of Object.values(S.layers))for(const st of l[id]?.strokes||[])if(st.t=='img')srcs.add(st.src);
+    await Promise.all([...srcs].map(x=>getImg(x).decode().catch(()=>{})));paintAll();
+    for(const pg of $$('#area .pg')){const c=pg.cloneNode(true),im=document.createElement('img');im.className='cv';im.src=pg.querySelector('canvas').toDataURL('image/png');c.querySelector('canvas').replaceWith(im);c.style.margin='0';c.classList.remove('cur');c.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));c.classList.toggle('norule',!o.rule);pages.push(c)}
+    await new Promise(r=>setTimeout(r,0))}}
+  if(o.dict){const x=dpHtml(plan.flatMap(p=>p.ids),plan.map(p=>p.sid));if(x)pages.push(the(x))}
+  out.append(...pages);document.title=[S.project,multi?'全体':S.scenarios[plan[0].sid]?.title,'演出依頼'].filter(Boolean).join('_')}
  finally{S.sc=keep.sc;S.cur=keep.cur;chSel();ct=keep.tab;if(keep.tab)tab(keep.tab);else $$('#main>section').forEach(x=>x.classList.remove('on'))}
  $('#toast').hidden=true;setTimeout(print,250)}
 onafterprint=()=>{$('#pdfarea').innerHTML='';document.title='シナリオ演出依頼資料集'};
@@ -729,7 +776,7 @@ async function showLogin(){PID=null;SES=null;VIEW=showLogin;let tr=[];try{tr=awa
  ${tr.length?`<div class="card"><b>このデバイスで使えるユーザー</b><div class="hint">パスワードなしで入れます</div><div class="r">${tr.map(u=>`<button data-a="tu" data-u="${esc(u)}">👤 ${esc(u)}</button>`).join('')}</div></div>`:''}
  <div class="card"><b>ユーザー名とパスワードでログイン</b><input id="lu" placeholder="ユーザー名" autocomplete="username"><input id="lp" type="password" placeholder="パスワード" autocomplete="current-password"><button data-a="li" class="on">ログイン</button><div class="msg"></div><div class="hint">一度ログインした端末は記憶され、ログアウトしても次回はパスワードなしで入れます。</div></div></div>`)}
 /* ---- プロジェクト一覧 (見られるプロジェクトだけが並ぶ) ---- */
-const topBar=(left)=>`<div class="top2">${left}<span class="sp1"></span><button data-a="my">👤 ${esc(SES.user)}${SES.admin?' <span class="chip edit">管理者</span>':''}</button><button data-a="lo">ログアウト</button></div>`;
+const topBar=(left)=>`<div class="top2">${left}<span class="sp1"></span><button data-a="my">👤 ${esc(SES.user)}${SES.admin?' <span class="chip r-edit">管理者</span>':''}</button><button data-a="lo">ログアウト</button></div>`;
 const bookHtml=p=>`<div class="book"><div class="spine">${esc(p.name)}</div><div class="cov"><div class="go" data-a="op" data-p="${p.id}"><div class="nm">${esc(p.name)}</div><div class="meta"><span>${p.scenarios}シナリオ</span><span>${p.chapters}章</span><span>${p.members}人</span></div><div class="meta">${chip(p.role)}<span>更新 ${fmtT(p.updated)}</span></div></div>
  ${SES.admin?`<div class="tbar2"><button data-a="pr" data-p="${p.id}" title="プロジェクト名を変更">✎ 名前</button><button data-a="perm" data-p="${p.id}" title="ユーザーごとの許可・シナリオごとの詳細許可">👥 権限</button><button data-a="pd" data-p="${p.id}" title="削除（.trash に退避）">🗑 削除</button></div>`:''}</div></div>`;
 function showHome(){PID=null;VIEW=showHome;history.replaceState(0,'','#');
@@ -738,13 +785,14 @@ function showHome(){PID=null;VIEW=showHome;history.replaceState(0,'','#');
  ${SES.projects.length||SES.admin?'':'<div class="card empty">管理者にプロジェクトへの参加を依頼してください。</div>'}<div class="msg"></div></div>`)}
 /* ---- プロジェクトページ → シナリオ(折り畳み) → 章 ---- */
 const OPEN=new Set();
-const scHtml=(sc,i,n)=>{const r=(S.roles||{})[sc.id]||S.base,pe=S.base=='edit',cl=chsOf(sc.id);
- return`<details class="scn" data-sc="${sc.id}"${OPEN.has(sc.id)?' open':''}><summary><span class="ar">▸</span><span class="st">${esc(sc.title)}</span><span class="meta" style="font-size:12px;color:var(--mute)">${cl.length}章</span>${chip(r)}
-  <span class="tb">${SES.admin?`<button data-a="perm" data-p="${PID}" data-sc="${sc.id}" title="このシナリオを見られる人・詳細な許可">🔒 権限</button>`:''}${r=='edit'?`<button data-a="ca" data-sc="${sc.id}">＋ 章</button>`:''}${pe?`<button data-a="sr" data-sc="${sc.id}" title="名前を変更">✎</button><button data-a="su" data-sc="${sc.id}"${i?'':' disabled'} title="上へ">↑</button><button data-a="sdn" data-sc="${sc.id}"${i<n-1?'':' disabled'} title="下へ">↓</button><button data-a="sx" data-sc="${sc.id}" title="このシナリオを削除">🗑</button>`:''}</span></summary>
-  <div class="body">${pdfBar(sc.id)}${cl.map((c,k)=>{const w=Object.values(S.layers).reduce((a,l)=>a+((l[c.id]?.strokes||[]).length),0);return`<div class="chl" data-a="oc" data-sc="${sc.id}" data-c="${c.id}"><input type="checkbox" data-pc value="${c.id}" checked title="PDFに含める"><span class="no">第${k+1}章</span><span class="ti">${esc(c.title)}</span><span class="mt">${w?'書き込み '+w:''}</span></div>`}).join('')||`<div class="empty">まだ章がありません。${r=='edit'?'「＋ 章」から追加できます。':''}</div>`}</div></details>`};
-function showProject(){VIEW=showProject;const ss=scs();
+const scHtml=(sc,i,n)=>{const r=(S.roles||{})[sc.id]||S.base,pe=S.base=='edit',ed=r=='edit',cl=chsOf(sc.id);
+ return`<details class="scn" data-sc="${sc.id}"${OPEN.has(sc.id)?' open':''}><summary><span class="ar">▸</span><span class="st"${pe?' title="ダブルクリックで名前を変更"':''}>${esc(sc.title)}</span><span class="meta" style="font-size:12px;color:var(--mute)">${cl.length}章</span>${chip(r)}
+  <span class="tb">${SES.admin?`<button data-a="perm" data-p="${PID}" data-sc="${sc.id}" title="このシナリオを見られる人・詳細な許可">🔒 権限</button>`:''}${ed?`<button data-a="ca" data-sc="${sc.id}">＋ 章</button>`:''}${pe?`<button data-a="sr" data-sc="${sc.id}" title="シナリオ名を変更">✎ 名前</button><button data-a="su" data-sc="${sc.id}"${i?'':' disabled'} title="上へ">↑</button><button data-a="sdn" data-sc="${sc.id}"${i<n-1?'':' disabled'} title="下へ">↓</button><button data-a="sx" data-sc="${sc.id}" title="このシナリオを削除">🗑</button>`:''}</span></summary>
+  <div class="body">${pdfBar(sc.id)}${cl.map((c,k)=>{const w=Object.values(S.layers).reduce((a,l)=>a+((l[c.id]?.strokes||[]).length),0);return`<div class="chl" data-a="oc" data-sc="${sc.id}" data-c="${c.id}"><span class="gh" ${ed?'data-a="nop" title="ドラッグで並べ替え・他のシナリオへ移動">⠿':'>'}</span><input type="checkbox" data-pc value="${c.id}" checked title="PDFに含める"><span class="no">第${k+1}章</span><span class="ti">${esc(c.title)}</span><span class="mt">${w?'書き込み '+w:''}</span><span class="cb">${ed?`<button data-a="cr" data-c="${c.id}" title="章名を変更">✎</button><button data-a="cd" data-c="${c.id}" title="複製">⧉</button><button data-a="cm" data-c="${c.id}" title="別のシナリオへ移動">➜</button><button data-a="chd" data-c="${c.id}" title="削除">🗑</button>`:''}</span></div>`}).join('')||`<div class="empty">まだ章がありません。${ed?'「＋ 章」から追加できます。':''}</div>`}</div></details>`};
+function showProject(){VIEW=showProject;const ss=scs(),pdfOk=ss.some(s=>S.pdf?.[s.id]!==false),anyCh=allChs().length>0;
  sys(`${topBar('<button data-a="hm">‹ プロジェクト一覧</button>')}<div class="sc wide"><div class="hero"><h1>${esc(S.project)}</h1><div class="sub">${chip(S.base)}　シナリオ ${ss.length}件</div></div>
- <div class="r">${S.base=='edit'?'<button data-a="sa" class="on">＋ シナリオを追加</button>':''}${SES.admin?`<button data-a="perm" data-p="${PID}">👥 プロジェクトの権限</button>`:''}<span class="hint">シナリオを開いて章を選ぶと、編集画面に進みます。</span></div>
+ <div class="r">${S.base=='edit'?'<button data-a="sa" class="on">＋ シナリオを追加</button>':''}${anyCh?'<button data-a="dc" title="世界観・用語・キャラクター。同じプロジェクトのシナリオ・章すべてで共有されます">📚 設定資料（プロジェクト共通）</button>':''}${SES.admin?`<button data-a="perm" data-p="${PID}">👥 プロジェクトの権限</button>`:''}<span class="hint">シナリオを開いて章を選ぶと、編集画面に進みます。章の左の ⠿ をドラッグで並べ替え・他のシナリオへ移動できます。</span></div>
+ ${ss.length?`<div class="card pjpdf"><b>📄 プロジェクト全体を1つのPDFにする</b><div class="pdfbar"><label><input type="checkbox" data-o="cover" checked>プロジェクト表紙</label><label><input type="checkbox" data-o="door" checked>シナリオごとの扉</label><label><input type="checkbox" data-o="dict" checked>設定資料</label><label><input type="checkbox" data-o="rule"${RULE()?' checked':''}>メモ罫線</label><button class="stamp" data-a="pdfall"${pdfOk?'':' disabled title="PDF出力が許可されたシナリオがありません"'}>📄 全体をPDF出力</button></div><div class="hint">各シナリオ内でチェックされた章が対象です（初期はすべて）。 <button data-a="chall" style="padding:1px 8px;font-size:12px">すべて選択</button> <button data-a="chnone" style="padding:1px 8px;font-size:12px">すべて解除</button></div></div>`:''}
  ${ss.map((s,i)=>scHtml(s,i,ss.length)).join('')||'<div class="card empty">このプロジェクトで見られるシナリオはありません。</div>'}<div class="msg"></div></div>`)}
 $('#sys').addEventListener('toggle',e=>{const d=e.target.closest?.('details.scn');if(d)d.open?OPEN.add(d.dataset.sc):OPEN.delete(d.dataset.sc)},true);
 async function goProject(){await flush();await load();chSel();showProject()}
@@ -759,7 +807,7 @@ const admHtml=o=>`<div class="card"><b>🛠 ユーザー追加</b><div class="r"
   ${o.backups.map(b=>`<div class="bk"><span>${esc(b.name.replace(/^backup-|\.zip$/g,''))}　<small class="hint">${fmtT(b.time)}・${(b.size/1024).toFixed(0)}KB</small></span><a href="/api/admin/backup/${encodeURIComponent(b.name)}" download><button>⬇ ダウンロード</button></a></div>`).join('')||'<div class="hint">まだありません</div>'}
   <div class="r"><button data-a="bn">今すぐバックアップ</button></div></div>`;
 async function showMy(force){VIEW=()=>showMy(force);let a='';if(SES.admin){try{a=admHtml(await admUsers())}catch{}}
- sys(`${topBar(force?'':'<button data-a="back">‹ 戻る</button>')}<div class="sc"><div class="me-head"><div class="av">${nm1(SES.user)}</div><div><h2 style="margin:0;font:600 26px var(--serif);color:var(--ink)">${esc(SES.user)}</h2><div class="r" style="margin-top:4px">${SES.admin?'<span class="chip edit">管理者</span>':''}${SES.projects.map(p=>`<span class="chip">${esc(p.name)}・${ROLE[p.role]}</span>`).join('')}</div></div></div>
+ sys(`${topBar(force?'':'<button data-a="back">‹ 戻る</button>')}<div class="sc"><div class="me-head"><div class="av">${nm1(SES.user)}</div><div><h2 style="margin:0;font:600 26px var(--serif);color:var(--ink)">${esc(SES.user)}</h2><div class="r" style="margin-top:4px">${SES.admin?'<span class="chip r-edit">管理者</span>':''}${SES.projects.map(p=>`<span class="chip">${esc(p.name)}・${ROLE[p.role]}</span>`).join('')}</div></div></div>
  <div class="card"><b>ユーザー名の変更</b><input id="un1" placeholder="新しいユーザー名"><input id="un2" type="password" placeholder="現在のパスワード"><button data-a="un">変更する</button><div class="hint">これまでのあなたの書き込み・メモも、新しい名前に引き継がれます。</div></div>
  <div class="card"><b>パスワードの変更</b>${force?'<div style="color:var(--vm)">初期パスワードのままです。新しいパスワードを設定してください。</div>':''}<input id="po1" type="password" placeholder="現在のパスワード" autocomplete="current-password"><input id="pn1" type="password" placeholder="新しいパスワード（6文字以上）" autocomplete="new-password"><input id="pn2" type="password" placeholder="新しいパスワード（確認）" autocomplete="new-password"><button data-a="pw">変更する</button><div class="hint">変更すると、他の端末のログイン・記憶は解除されます。</div></div>
  <div class="card"><b>このデバイス</b><div class="hint">ログインした端末は記憶され、ログアウトしても次回はパスワードなしで入れます。</div><div class="r"><button data-a="fg">このデバイスの記憶を消す</button><button data-a="lo">ログアウト</button></div></div>${a}<div class="msg"></div></div>`)}
@@ -769,7 +817,7 @@ async function permDlg(pid,only){const o=await admUsers(),pj=o.projects.find(x=>
  dlgOpen(`<h3>👥 ${esc(pj.name)}${only?' ／ '+esc(sl[0]?.title||''):''} の権限</h3><div class="hint">${only?'このシナリオを誰がどこまで使えるかを設定します。「閲覧不可」にした人には、このシナリオも章も表示されません。':'ユーザーごとにプロジェクトへの参加と権限を設定します。「シナリオごとの詳細」で、一部のシナリオだけ閲覧不可にしたり、PDF出力を止めたりできます。'}変更はその場で保存されます。</div>
  ${ad.length?`<div class="hint">管理者（すべて可）: ${ad.map(u=>esc(u.user)).join('、')}</div>`:''}
  ${us.map(u=>{const pr=u.projects[pid]||'',row=s=>{const c=(u.scen[pid]||{})[s.id]||{};return`<tr><td class="${only?'':'sub'}">${only?'':'└ '}${esc(s.title)}</td><td><select data-c="ps" data-u="${esc(u.user)}" data-p="${pid}" data-s="${s.id}"${pr?'':' disabled'}>${SCR.map(([k,v])=>`<option value="${k}"${(c.r||'')==k?' selected':''}>${v}</option>`).join('')}</select></td><td><label><input type="checkbox" data-c="pf" data-u="${esc(u.user)}" data-p="${pid}" data-s="${s.id}"${c.pdf===false?'':' checked'}${pr?'':' disabled'}> PDF出力</label></td></tr>`};
-  return`<div class="card pu" data-u="${esc(u.user)}"><div class="r"><b style="flex:1">👤 ${esc(u.user)}</b>${only?(pr?chip(pr):'<span class="chip none">未参加</span>'):`<select data-c="pp" data-u="${esc(u.user)}" data-p="${pid}"><option value="">参加しない</option>${Object.entries(ROLE).map(([k,v])=>`<option value="${k}"${pr==k?' selected':''}>${v}</option>`).join('')}</select>`}</div>
+  return`<div class="card pu" data-u="${esc(u.user)}"><div class="r"><b style="flex:1">👤 ${esc(u.user)}</b>${only?(pr?chip(pr):'<span class="chip r-none">未参加</span>'):`<select data-c="pp" data-u="${esc(u.user)}" data-p="${pid}"><option value="">参加しない</option>${Object.entries(ROLE).map(([k,v])=>`<option value="${k}"${pr==k?' selected':''}>${v}</option>`).join('')}</select>`}</div>
    ${only?`<table class="perm">${sl.map(row).join('')}</table>`:`<details><summary class="hint" style="cursor:pointer">シナリオごとの詳細（${sl.length}件）</summary><table class="perm"><tr><th>シナリオ</th><th>権限</th><th></th></tr>${sl.map(row).join('')}</table></details>`}</div>`}).join('')||'<div class="empty">管理者以外のユーザーがいません。マイページで追加できます。</div>'}
  <div class="r"><button data-a="dx" class="on">閉じる</button></div>`)}
 const CH={
@@ -778,7 +826,7 @@ const CH={
  async pf(t){const c=t.closest('.pu'),s=c.querySelector(`[data-c=ps][data-s="${t.dataset.s}"]`);await adm('perm_set',{user:t.dataset.u,pid:t.dataset.p,scid:t.dataset.s,r:s.value,pdf:t.checked});toast('保存しました')}};
 /* ---- 操作 ---- */
 const ordBetween=(a,i,j)=>{const lo=a[j>i?j:j-1],hi=a[j>i?j+1:j];return lo?(hi?(lo.order+hi.order)/2:lo.order+1):hi.order-1};
-const scSave=async()=>{await flush();showProject()};
+const scSave=async()=>{await flush();if(dirty.size){dirty.clear();await load();chSel();toast('保存できませんでした（権限がないか、通信に失敗しました）')}showProject()};
 const ACT={
  async tu(b){await jpost('/api/login',{user:b.dataset.u,trusted:1});await boot()},
  async li(){await jpost('/api/login',{user:$('#lu').value.trim(),password:$('#lp').value});await boot()},
@@ -797,13 +845,65 @@ const ACT={
  async bn(){await adm('backup_now');await VIEW();msg('バックアップを作成しました')},
  oc(b){openChapter(b.dataset.sc,b.dataset.c)},
  pdf(b){return pdfRun(b.dataset.sc,b.closest('.scn')||b.closest('.dlgb'))},
- async sa(){const t=prompt('シナリオ名（例：本編 / 外伝 / 番外編）');if(!t||!t.trim())return;const i=id('s'),a=scs();S.scenarios[i]={id:i,title:t.trim(),order:a.length?Math.max(...a.map(x=>x.order||0))+1:1};S.roles[i]=S.base;OPEN.add(i);mk(`scenarios/${i}.json`);await scSave()},
- async sr(b){const s=S.scenarios[b.dataset.sc],t=prompt('シナリオ名',s.title);if(!t||!t.trim())return;s.title=t.trim();mk(`scenarios/${s.id}.json`);await scSave()},
+ async sa(){const t=await ask('シナリオを追加','','例：本編 / 外伝 / 番外編');if(!t)return;const i=id('s'),a=scs();S.scenarios[i]={id:i,title:t,order:a.length?Math.max(...a.map(x=>x.order||0))+1:1};S.roles[i]=S.base;OPEN.add(i);mk(`scenarios/${i}.json`);await scSave()},
+ async sr(b){const s=S.scenarios[b.dataset.sc],t=await ask('シナリオ名を変更',s.title);if(!t||t==s.title)return;s.title=t;mk(`scenarios/${s.id}.json`);await scSave();toast('シナリオ名を変更しました')},
  async su(b){await moveSc(b.dataset.sc,-1)},async sdn(b){await moveSc(b.dataset.sc,1)},
  async sx(b){const s=S.scenarios[b.dataset.sc],cl=chsOf(s.id);if(!confirm(`シナリオ「${s.title}」を削除しますか？\n含まれる ${cl.length} 章と、あなたの書き込みも消えます（他の人の書き込みファイルは残ります）`))return;
   for(const c of cl){delete S.chapters[c.id];mk(`chapters/${c.id}.json`);if(S.layers[S.me]?.[c.id]){delete S.layers[S.me][c.id];mk(`users/${S.me}/${c.id}.json`)}}
   delete S.scenarios[s.id];mk(`scenarios/${s.id}.json`);await scSave()},
- async ca(b){const sc=b.dataset.sc,t=prompt('章タイトル');if(!t||!t.trim())return;const i=id('c'),a=chsOf(sc);S.chapters[i]={id:i,title:t.trim(),order:a.length?Math.max(...a.map(x=>x.order||0))+1:1,text:'',sc};OPEN.add(sc);mk(`chapters/${i}.json`);await scSave()}};
+ async ca(b){const sc=b.dataset.sc,t=await ask('章を追加','','章タイトル');if(!t)return;const i=id('c'),a=chsOf(sc);S.chapters[i]={id:i,title:t,order:a.length?Math.max(...a.map(x=>x.order||0))+1:1,text:'',sc};OPEN.add(sc);mk(`chapters/${i}.json`);await scSave()},
+ async cr(b){const c=S.chapters[b.dataset.c],t=await ask('章名を変更',c.title);if(!t||t==c.title)return;c.title=t;mk(`chapters/${c.id}.json`);await scSave()},
+ async chd(b){const c=S.chapters[b.dataset.c];if(!confirm(`章「${c.title}」を削除しますか？\n自分の書き込みも消えます（他の人の書き込みファイルは残ります）`))return;delete S.chapters[c.id];mk(`chapters/${c.id}.json`);if(S.layers[S.me]?.[c.id]){delete S.layers[S.me][c.id];mk(`users/${S.me}/${c.id}.json`)}await scSave()},
+ async cd(b){const c=S.chapters[b.dataset.c],v=await askForm('章を複製',`<label>新しい章名<input id="dn1" value="${esc(c.title)}（コピー）"></label><label>複製先のシナリオ<select id="dn2">${editScs().map(s=>`<option value="${s.id}"${s.id==c.sc?' selected':''}>${esc(s.title)}</option>`).join('')}</select></label><label><input type="checkbox" id="dn3" checked> 書き込み（演出メモ・図形・話者）も複製する</label><div class="hint">同じシナリオなら元の章のすぐ後ろ、別のシナリオなら末尾に入ります。全員の書き込みが複製されます。</div>`,()=>({title:$('#dn1').value.trim(),sc:$('#dn2').value,layers:$('#dn3').checked}),'複製する');
+  if(!v)return;await flush();await(await api('POST','/api/chapter/dup',JSON.stringify({id:c.id,...v}))).json();OPEN.add(v.sc);await load();chSel();showProject();toast('章を複製しました')},
+ async cm(b){const c=S.chapters[b.dataset.c],v=await askForm('章を別のシナリオへ移動',`<div class="hint">「${esc(c.title)}」の移動先を選びます。書き込みもそのまま付いていきます。</div><label>移動先のシナリオ<select id="dn2">${editScs().map(s=>`<option value="${s.id}"${s.id==c.sc?' selected':''}>${esc(s.title)}</option>`).join('')}</select></label>`,()=>$('#dn2').value,'移動する');
+  if(!v||v==c.sc)return;await dropChapter(c.id,v,null)},
+ nop(){},
+ async pdfall(b){const root=b.closest('.pjpdf');return pdfMake(scs().map(s=>({sid:s.id,ids:[...$$(`#sys .scn[data-sc="${s.id}"] [data-pc]:checked`)].map(x=>x.value)})),pdfOpt(root))},
+ chall(){$$('#sys [data-pc]').forEach(x=>x.checked=true)},chnone(){$$('#sys [data-pc]').forEach(x=>x.checked=false)},
+ dc(){const c=allChs()[0];if(!c)return toast('章がありません');openChapter(c.sc,c.id);tab('d1')},
+ lks(){try{localStorage.setItem(lkKey(),JSON.stringify(LKW))}catch{}dlgClose();if(cp()&&ct=='v')render();toast('この端末の表示設定として保存しました')},
+ lkp(){S.look={...LKW};try{localStorage.removeItem(lkKey())}catch{}mk('project.json');save();dlgClose();if(cp()&&ct=='v')render();toast('プロジェクトの標準設定にしました（全員に反映）')},
+ lkr(){try{localStorage.removeItem(lkKey())}catch{}LKW={...LK0,...(S.look||{})};lkFill();if(cp()&&ct=='v')render();toast('プロジェクトの標準に戻しました')}};
+const editScs=()=>scs().filter(s=>(S.roles[s.id]||S.base)=='edit');
+/* 章を指定シナリオの指定位置(ref の前。nullなら末尾)に入れる。orderは前後の中間値 → 書き換わるのは動かした章のファイル1つだけ */
+async function dropChapter(cid,to,ref){const c=S.chapters[cid];if(!c||ref==cid)return;const list=chsOf(to).filter(x=>x.id!=cid);let i=ref?list.findIndex(x=>x.id==ref):list.length;if(i<0)i=list.length;
+ if(c.sc==to&&chsOf(to).findIndex(x=>x.id==cid)==i)return;const lo=list[i-1],hi=list[i],order=lo?(hi?(lo.order+hi.order)/2:(lo.order||0)+1):(hi?(hi.order||0)-1:1),moved=c.sc!=to;
+ c.sc=to;c.order=order;mk(`chapters/${c.id}.json`);OPEN.add(to);await scSave();toast(moved?`「${c.title}」を「${S.scenarios[to]?.title||''}」へ移動しました`:'並べ替えました')}
+/* ⠿ をドラッグして並べ替え・別シナリオへ移動 (マウス・タッチ・ペン対応) */
+let DG=null;
+const dgEnd=()=>{if(!DG)return;DG.ghost?.remove();DG.row.classList.remove('dragging');clearTimeout(DG.t);$$('#sys .ins-b,#sys .ins-a,#sys .drop').forEach(x=>x.classList.remove('ins-b','ins-a','drop'));DG=null};
+$('#sys').addEventListener('pointerdown',e=>{const g=e.target.closest('.gh');if(!g||!g.textContent.trim())return;e.preventDefault();DG={row:g.closest('.chl'),id:g.closest('.chl').dataset.c,x:e.clientX,y:e.clientY,on:0,tg:null};try{g.setPointerCapture(e.pointerId)}catch{}});
+$('#sys').addEventListener('pointermove',e=>{if(!DG)return;
+ if(!DG.on){if(Math.hypot(e.clientX-DG.x,e.clientY-DG.y)<6)return;DG.on=1;DG.row.classList.add('dragging');const gh=document.createElement('div');gh.className='dgh';gh.textContent=S.chapters[DG.id].title;document.body.append(gh);DG.ghost=gh}
+ DG.ghost.style.left=e.clientX+12+'px';DG.ghost.style.top=e.clientY+8+'px';const sy=$('#sys');if(e.clientY<70)sy.scrollTop-=14;else if(e.clientY>innerHeight-70)sy.scrollTop+=14;
+ $$('#sys .ins-b,#sys .ins-a,#sys .drop').forEach(x=>x.classList.remove('ins-b','ins-a','drop'));DG.tg=null;
+ const el=document.elementFromPoint(e.clientX,e.clientY),d=el?.closest?.('.scn');if(!d)return;const sid=d.dataset.sc;if((S.roles[sid]||S.base)!='edit')return;
+ if(!d.open){if(DG.ot!=sid){clearTimeout(DG.t);DG.ot=sid;DG.t=setTimeout(()=>{d.open=true},450)}return}
+ const row=el.closest('.chl');
+ if(row&&row!=DG.row){const r=row.getBoundingClientRect(),bf=e.clientY<r.top+r.height/2,nx=row.nextElementSibling;row.classList.add(bf?'ins-b':'ins-a');DG.tg={sid,ref:bf?row.dataset.c:(nx&&nx.classList.contains('chl')?nx.dataset.c:null)}}
+ else if(!row){d.classList.add('drop');DG.tg={sid,ref:null}}});
+$('#sys').addEventListener('pointerup',async()=>{if(!DG)return;const g=DG;if(!g.on||!g.tg)return dgEnd();const{sid,ref}=g.tg,id=g.id;dgEnd();try{await dropChapter(id,sid,ref)}catch(err){msg(err.message)}});
+$('#sys').addEventListener('pointercancel',dgEnd);
+$('#sys').addEventListener('dblclick',e=>{const t=e.target.closest('.scn .st');if(t&&S.base=='edit')ACT.sr({dataset:{sc:t.closest('.scn').dataset.sc}}).catch(err=>msg(err.message))});
+/* ---- 印鑑・マーカー設定ダイアログ ---- */
+let LKW={...LK0};
+function lkFill(){$$('#dlg [data-lk]').forEach(x=>{const k=x.dataset.lk,v=k=='mkm'?(LKW.mkc?'x':''):LKW[k];x.type=='checkbox'?x.checked=!!v:x.value=v||(x.type=='color'?(k=='mkc'?'#fff3b8':'#c8372d'):'')});lkDraw()}
+function lkDraw(){const d=ents().find(x=>x.cat=='キャラクター')||{name:'田中',col:'#2563eb'},mb=!LKW.mk?'transparent':(LKW.mkc||'#fff3b8'),t='「おはよう、今日もいい天気だね」';
+ const sh=(sz,v)=>LKW.st?stampHtml(d,sz,v,'',LKW):'';
+ $('#lkp').innerHTML=`<div class="h">${sh(Math.min(30,LKW.sz),0)}<p>地の文はここに入ります。</p><p><span class="lkd" style="background:${mb}">${t}</span></p></div><div class="v">${sh(18,1)}<p>縦書きは上の余白<span class="lkd" style="background:${mb}">${t.slice(0,9)}</span></p></div>`}
+function lookDlg(){LKW={...LK0,...(S.look||{}),...(lkMine()||{})};const pe=S.base=='edit';
+ dlgOpen(`<h3>🖋 話者の印鑑・セリフのマーカー</h3><div class="hint">話者を指定したセリフには、本文の左の余白（縦書きは上の余白）に印鑑が入ります。印鑑の色・文字は「キャラクター」タブで決められます。</div>
+ <div class="card"><label><input type="checkbox" data-lk="st"> 印鑑を表示する</label>
+ <div class="r"><label>形 <select data-lk="sh"><option value="round">丸</option><option value="rr">角丸</option><option value="sq">四角</option></select></label><label>塗り <select data-lk="fl"><option value="ring">枠のみ（朱印風）</option><option value="solid">塗りつぶし</option></select></label><label>文字数 <select data-lk="n"><option value="1">1文字</option><option value="2">2文字</option><option value="3">3文字</option></select></label><label>大きさ <input type="range" data-lk="sz" min="18" max="30"></label></div>
+ <div class="r"><label>色 <select data-lk="cm"><option value="chara">キャラクターごとの色</option><option value="fix">全員この色</option></select></label><input type="color" data-lk="scc" title="「全員この色」のときの色"></div>
+ <label><input type="checkbox" data-lk="lb"> セリフの前に名前ラベルも表示する</label><div class="hint">縦書きページの印鑑は、上の余白に収まる大きさ・2文字までになります。同じ行（縦書きは同じ列）に複数のセリフがあるときは、最初のセリフの印鑑だけが入ります。</div></div>
+ <div class="card"><label><input type="checkbox" data-lk="mk"> セリフに色マーカー（蛍光ペン風の下地）を引く</label><div class="r"><label>色 <select data-lk="mkm"><option value="">標準（淡い黄）</option><option value="x">好きな色</option></select></label><input type="color" data-lk="mkc"></div></div>
+ <div id="lkp" class="lkp"></div>
+ <div class="r"><button class="on" data-a="lks" title="この端末（ブラウザ）だけの設定として保存">自分の表示に保存</button>${pe?'<button data-a="lkp" title="全員の標準として保存します">プロジェクトの標準にする</button>':''}<button data-a="lkr">標準に戻す</button><button data-a="dx">閉じる</button></div>`);
+ lkFill();$('#dlg .dlgb').oninput=e=>{const x=e.target.closest('[data-lk]');if(!x)return;const k=x.dataset.lk,v=x.type=='checkbox'?(x.checked?1:0):x.value;
+  if(k=='mkm'){LKW.mkc=v?($('#dlg [data-lk=mkc]').value||'#fff3b8'):''}else if(k=='mkc'){LKW.mkc=v;$('#dlg [data-lk=mkm]').value='x'}else LKW[k]=['sz','n'].includes(k)?+v:v;lkDraw()}}
+$('#lkb').onclick=$('#lk2').onclick=lookDlg;
 async function moveSc(i,d){const a=scs(),k=a.findIndex(x=>x.id==i),j=k+d;if(j<0||j>=a.length)return;a[k].order=ordBetween(a,k,j);mk(`scenarios/${i}.json`);await scSave()}
 $('#sys').onclick=async e=>{const b=e.target.closest('[data-a]');if(!b||e.target.closest('input,label,select')&&b.dataset.a=='oc')return;if(b.tagName=='BUTTON'&&b.closest('summary'))e.preventDefault();if(b.closest('.book.add')&&b.dataset.a!='pa')return;try{await ACT[b.dataset.a]?.(b)}catch(err){msg(err.message)}};
 $('#dlg').onclick=async e=>{if(e.target==$('#dlg'))return dlgClose();const b=e.target.closest('[data-a]');if(!b)return;try{await ACT[b.dataset.a]?.(b)}catch(err){toast(err.message)}};

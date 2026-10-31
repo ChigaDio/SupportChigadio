@@ -251,7 +251,7 @@ def read_all(db, pid, user, role):
     o = {"me": user, "role": role, "base": role, "project": pj.get("name", ""), "imgRefs": pj.get("imgRefs", []),
          "chapters": {}, "dict": {}, "layers": {}, "scenarios": vis,
          "roles": {s: sc_role(db, user, pid, s) for s in vis}, "pdf": {s: sc_pdf(db, user, pid, s) for s in vis}}
-    for k in ("memoW", "fs", "coverOri", "coverWm"):
+    for k in ("memoW", "fs", "coverOri", "coverWm", "look"):
         o[k] = pj.get(k)
     for f in sorted((P / "chapters").glob("*.json")):
         d = rj(f)
@@ -260,7 +260,11 @@ def read_all(db, pid, user, role):
     every = {f.stem for f in (P / "chapters").glob("*.json")}  # 見られない章に紐づく設定は返さない
     for f in sorted((P / "dictionary").glob("*.json")):
         d = rj(f)
-        if d and "id" in d and (not d.get("ch") or d["ch"] in o["chapters"] or d["ch"] not in every):
+        if not (d and "id" in d):
+            continue
+        if d.get("sc") and d["sc"] in scs and d["sc"] not in vis:  # 見られないシナリオ限定の設定は返さない
+            continue
+        if not d.get("ch") or d["ch"] in o["chapters"] or d["ch"] not in every:
             o["dict"][d["id"]] = d
     for ud in sorted((P / "users").glob("*")):
         if ud.is_dir():
@@ -520,6 +524,8 @@ class H(BaseHTTPRequestHandler):
             else:
                 p.unlink(missing_ok=True)
             return self.json({"ok": 1})
+        if path == "/api/chapter/dup" and method == "POST":
+            return self.chapter_dup(db, user, pid, P, self.body())
         if path == "/api/image" and method == "POST":
             if role == "view":
                 return self.err("権限がありません", 403)
@@ -532,6 +538,39 @@ class H(BaseHTTPRequestHandler):
                 wr(P / "images" / fn, self.raw)
             return self.json({"path": "images/" + fn})
         self.send(404)
+
+    def chapter_dup(self, db, user, pid, P, d):
+        """章を複製する。同じシナリオなら元の章の直後、別シナリオへの複製なら末尾に入る。書き込み(各ユーザーのレイヤー)も複製できる"""
+        cid = str(d.get("id", ""))
+        src = rj(P / "chapters" / (cid + ".json")) if re.fullmatch(r"[\w\-]+", cid) else None
+        if not src:
+            return self.err("章が見つかりません", 404)
+        scs = scen_list(P)
+        s0 = src.get("sc") or ""
+        to = d.get("sc") or s0
+        if to not in scs or s0 not in scs:
+            return self.err("シナリオが見つかりません", 404)
+        if sc_role(db, user, pid, s0) != "edit" or sc_role(db, user, pid, to) != "edit":
+            return self.err("この操作の権限がありません", 403)
+        sib = sorted((rj(f) or {}).get("order", 0) for f in (P / "chapters").glob("*.json") if (rj(f) or {}).get("sc") == to and (rj(f) or {}).get("id") != cid)
+        o0 = src.get("order", 0)
+        if to == s0:
+            nx = [x for x in sib if x > o0]
+            order = (o0 + nx[0]) / 2 if nx else o0 + 1
+        else:
+            order = (sib[-1] + 1) if sib else 1
+        nid = "c" + format(int(time.time() * 1000), "x") + secrets.token_hex(2)
+        new = dict(src)
+        new.update({"id": nid, "sc": to, "order": order, "title": str(d.get("title") or (src.get("title", "") + "（コピー）"))[:200]})
+        wr(P / "chapters" / (nid + ".json"), (json.dumps(new, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
+        n = 0
+        if d.get("layers"):
+            for ud in (P / "users").glob("*"):
+                f = ud / (cid + ".json")
+                if ud.is_dir() and f.is_file():
+                    wr(ud / (nid + ".json"), f.read_bytes())
+                    n += 1
+        return self.json({"ok": 1, "id": nid, "layers": n})
 
     def ls(self, q):  # サーバー上のフォルダ一覧(エクスプローラー風UI用)
         p = (DATA / q).resolve() if q else DATA
