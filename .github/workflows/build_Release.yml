@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Release　Command Sh Bat
 
 # リポジトリのルート（SupportChigadio）直下の .github/workflows/ に置く。
 # 実行方法:
