@@ -1,0 +1,361 @@
+
+name: Build Main Support App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: main-support/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build React frontend
+        working-directory: main-support
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install Flask psutil websockets pyinstaller
+
+      - name: Build executable
+        working-directory: main-support
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --add-data "build;build" --collect-submodules pythonSrc app.py
+
+          if (!(Test-Path "dist/MainSupport.exe")) {
+            throw "MainSupport.exe was not generated."
+          }
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-support-windows
+          path: main-support/dist/MainSupport.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  build-macos-arm-primary:
+    name: Build macOS ARM64
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Verify ARM64 runner
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Primary runner is not ARM64: $(uname -m)"
+            exit 1
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: main-support/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build React frontend
+        working-directory: main-support
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install Flask psutil websockets pyinstaller
+
+      - name: Build macOS app
+        working-directory: main-support
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
+          test -d "dist/MainSupport.app"
+          codesign --force --deep --sign - "dist/MainSupport.app"
+          codesign --verify --deep --strict "dist/MainSupport.app"
+
+      - name: Upload ARM64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-support-macos-arm64
+          path: main-support/dist/MainSupport.app
+          if-no-files-found: error
+          compression-level: 0
+
+  build-macos-arm-fallback:
+    name: Build macOS ARM64 fallback
+    needs: build-macos-arm-primary
+    if: needs.build-macos-arm-primary.result == 'failure'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Verify ARM64 runner
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Fallback runner is not ARM64: $(uname -m)"
+            exit 1
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: main-support/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build React frontend
+        working-directory: main-support
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install Flask psutil websockets pyinstaller
+
+      - name: Build macOS app
+        working-directory: main-support
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
+          test -d "dist/MainSupport.app"
+          codesign --force --deep --sign - "dist/MainSupport.app"
+          codesign --verify --deep --strict "dist/MainSupport.app"
+
+      - name: Upload ARM64 fallback app
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-support-macos-arm64
+          path: main-support/dist/MainSupport.app
+          if-no-files-found: error
+          compression-level: 0
+
+  build-macos-x64:
+    name: Build macOS x64
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Verify x64 runner
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64" || {
+            echo "::error::Runner is not x86_64: $(uname -m)"
+            exit 1
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: main-support/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build React frontend
+        working-directory: main-support
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install Flask psutil websockets pyinstaller
+
+      - name: Build macOS app
+        working-directory: main-support
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
+          test -d "dist/MainSupport.app"
+          codesign --force --deep --sign - "dist/MainSupport.app"
+          codesign --verify --deep --strict "dist/MainSupport.app"
+
+      - name: Upload x64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-support-macos-x86_64
+          path: main-support/dist/MainSupport.app
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Move builds to repository root and push
+    needs:
+      - build-windows
+      - build-macos-arm-primary
+      - build-macos-arm-fallback
+      - build-macos-x64
+    if: >-
+      ${{
+        always() &&
+        needs.build-windows.result == 'success' &&
+        (needs.build-macos-arm-primary.result == 'success' || needs.build-macos-arm-fallback.result == 'success') &&
+        needs.build-macos-x64.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download Windows executable
+        uses: actions/download-artifact@v4
+        with:
+          name: main-support-windows
+          path: release/windows
+
+      - name: Download macOS ARM64 app
+        uses: actions/download-artifact@v4
+        with:
+          name: main-support-macos-arm64
+          path: release/macos-arm64
+
+      - name: Download macOS x64 app
+        uses: actions/download-artifact@v4
+        with:
+          name: main-support-macos-x86_64
+          path: release/macos-x86_64
+
+      - name: Move builds and generate launchers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f release/windows/MainSupport.exe
+          test -d release/macos-arm64/MainSupport.app
+          test -d release/macos-x86_64/MainSupport.app
+
+          rm -rf MainSupport-macos-arm64.app MainSupport-macos-x86_64.app
+
+          mv release/windows/MainSupport.exe ./MainSupport.exe
+          mv release/macos-arm64/MainSupport.app ./MainSupport-macos-arm64.app
+          mv release/macos-x86_64/MainSupport.app ./MainSupport-macos-x86_64.app
+
+          cat > MainSupport.sh <<'LAUNCHER'
+          #!/bin/bash
+          set -e
+
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          export SUPPORT_ROOT="$ROOT"
+
+          if [ "$(uname -s)" != "Darwin" ]; then
+            echo "This launcher is for macOS."
+            exit 1
+          fi
+
+          MACHINE="$(uname -m)"
+
+          if [ "$MACHINE" = "arm64" ]; then
+            APP="$ROOT/MainSupport-macos-arm64.app"
+          elif [ "$MACHINE" = "x86_64" ]; then
+            APP="$ROOT/MainSupport-macos-x86_64.app"
+          else
+            echo "Unsupported architecture: $MACHINE"
+            exit 1
+          fi
+
+          if [ ! -d "$APP" ]; then
+            echo "MainSupport app for $MACHINE was not found."
+            read -r -p "Press Enter to close..."
+            exit 1
+          fi
+
+          xattr -cr "$APP" 2>/dev/null || true
+          chmod +x "$APP/Contents/MacOS/MainSupport" 2>/dev/null || true
+          codesign --force --deep --sign - "$APP" 2>/dev/null || true
+
+          "$APP/Contents/MacOS/MainSupport"
+          LAUNCHER
+
+          cp MainSupport.sh MainSupport.command
+          chmod +x MainSupport.sh MainSupport.command
+
+          cat > MainSupport.bat <<'LAUNCHER'
+          @echo off
+          setlocal
+
+          set "SUPPORT_ROOT=%~dp0"
+          cd /d "%SUPPORT_ROOT%"
+
+          if not exist "%SUPPORT_ROOT%MainSupport.exe" (
+            echo MainSupport.exe was not found.
+            pause
+            exit /b 1
+          )
+
+          "%SUPPORT_ROOT%MainSupport.exe"
+          pause
+          LAUNCHER
+
+      - name: Commit and push to main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add MainSupport.exe MainSupport-macos-arm64.app MainSupport-macos-x86_64.app MainSupport.command MainSupport.sh MainSupport.bat
+          git update-index --chmod=+x -- MainSupport.command MainSupport.sh
+
+          git diff --cached --check
+          git diff --cached --stat
+
+          git commit -m "Build Main Support app for Windows and macOS"
+          git push origin HEAD:main
