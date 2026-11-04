@@ -12,22 +12,22 @@ fi
 MACHINE="$(uname -m)"
 
 if [ "$MACHINE" = "arm64" ]; then
-  APP="$ROOT/MainSupport-macos-arm64.app"
+  EXECUTABLE="$ROOT/MainSupport-macos-arm64"
 elif [ "$MACHINE" = "x86_64" ]; then
-  APP="$ROOT/MainSupport-macos-x86_64.app"
+  EXECUTABLE="$ROOT/MainSupport-macos-x86_64"
 else
   echo "Unsupported architecture: $MACHINE"
   exit 1
 fi
 
-if [ ! -d "$APP" ]; then
-  echo "MainSupport app for $MACHINE was not found."
+if [ ! -f "$EXECUTABLE" ]; then
+  echo "MainSupport executable for $MACHINE was not found."
   read -r -p "Press Enter to close..."
   exit 1
 fi
 
-xattr -cr "$APP" 2>/dev/null || true
-chmod +x "$APP/Contents/MacOS/MainSupport" 2>/dev/null || true
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+xattr -cr "$EXECUTABLE" 2>/dev/null || true
+chmod +x "$EXECUTABLE" 2>/dev/null || true
+codesign --force --sign - "$EXECUTABLE" 2>/dev/null || true
 
-"$APP/Contents/MacOS/MainSupport"
+"$EXECUTABLE"
