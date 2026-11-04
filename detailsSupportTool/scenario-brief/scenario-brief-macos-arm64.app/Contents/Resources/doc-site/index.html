@@ -1,0 +1,581 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>演出依頼資料集 ガイド</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* 設計メモ ─ 校正刷りの紙面。紙は青みのある白、墨は藍(ツール本体と同じ)、朱は「朱入れ」= 画像の番号と説明を結ぶ色。
+   左に目次、右に本文。画像は幅広の校正図として扱い、直下に朱の番号つき凡例を置く。 */
+:root{--paper:#f5f6f9;--card:#ffffff;--ink:#1f3a6e;--tx:#1c2231;--mute:#586277;--rule:#dde1e9;--vm:#c8372d;--hl:#fff1b0;--code:#eceff5;--shadow:0 1px 2px #1f3a6e1a,0 8px 24px #1f3a6e14;
+ --serif:"Shippori Mincho B1","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;--sans:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic","Noto Sans JP",system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#10141b;--card:#171d27;--ink:#9db8ff;--tx:#e5e8ee;--mute:#9aa4b6;--rule:#2a3240;--vm:#ff7a6c;--hl:#4b4420;--code:#212936;--shadow:0 1px 2px #0008,0 8px 24px #0006;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#10141b;--card:#171d27;--ink:#9db8ff;--tx:#e5e8ee;--mute:#9aa4b6;--rule:#2a3240;--vm:#ff7a6c;--hl:#4b4420;--code:#212936;--shadow:0 1px 2px #0008,0 8px 24px #0006;color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:20px}
+body{margin:0;background:var(--paper);color:var(--tx);font:16px/1.95 var(--sans);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 80px;-webkit-text-size-adjust:100%}
+a{color:var(--ink);text-underline-offset:3px}
+code,kbd{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.88em;background:var(--code);border-radius:5px;padding:.1em .45em}
+kbd{border:1px solid var(--rule);border-bottom-width:2px;background:var(--card);padding:.05em .5em;white-space:nowrap}
+.wrap{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:250px minmax(0,1fr);gap:56px}
+/* 目次 */
+.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 4px 28px 0;font-size:14px;line-height:1.6}
+.toc .brand{font:800 20px/1.35 var(--serif);color:var(--ink);margin:0 0 4px;letter-spacing:.04em}
+.toc .sub{color:var(--mute);font-size:12px;margin:0 0 18px}
+.toc h2{font:600 12px/1 var(--sans);color:var(--mute);margin:20px 0 6px;letter-spacing:.06em}
+.toc a{display:block;padding:5px 10px;border-left:2px solid var(--rule);color:var(--tx);text-decoration:none}
+.toc a:hover{background:var(--code)}
+.toc a[aria-current=true]{border-left-color:var(--vm);color:var(--ink);font-weight:700;background:var(--code)}
+.tocm{display:none}
+main{min-width:0;padding-top:40px}
+/* 見出し */
+section{padding-top:56px;margin-top:8px;border-top:1px solid var(--rule)}
+section:first-of-type{border-top:0;padding-top:0}
+h1{font:800 clamp(34px,5.4vw,56px)/1.2 var(--serif);color:var(--ink);margin:0 0 14px;letter-spacing:.03em;text-wrap:balance}
+h2{font:800 clamp(26px,3.4vw,34px)/1.4 var(--serif);color:var(--ink);margin:0 0 16px;letter-spacing:.03em;text-wrap:balance}
+h3{font:600 21px/1.5 var(--serif);color:var(--ink);margin:40px 0 8px;letter-spacing:.02em}
+h4{font:700 16px/1.6 var(--sans);margin:26px 0 4px}
+p{margin:0 0 1em;max-width:42em}
+ul,ol{max-width:42em;padding-left:1.4em;margin:0 0 1.2em}
+li{margin:.25em 0}
+.lead{font-size:18px;line-height:1.95;color:var(--tx);max-width:38em}
+/* 画像 (校正図) */
+figure{margin:24px 0 28px}
+.shot{position:relative;display:block;width:100%;padding:0;border:1px solid var(--rule);background:var(--card);border-radius:6px;box-shadow:var(--shadow);cursor:zoom-in;overflow:hidden;text-align:left}
+.shot img{display:block;width:100%;height:auto}
+.shot:focus-visible{outline:3px solid var(--vm);outline-offset:3px}
+.shot::after{content:"拡大";position:absolute;right:8px;bottom:8px;font:700 12px var(--sans);background:#1c2231d9;color:#fff;border-radius:20px;padding:2px 10px;opacity:0;transition:opacity .15s}
+.shot:hover::after,.shot:focus-visible::after{opacity:1}
+figure.narrow{max-width:520px}figure.mid{max-width:720px}
+figcaption{font-size:14px;line-height:1.75;color:var(--mute);margin-top:8px;max-width:46em}
+.leg{list-style:none;counter-reset:l;padding:0;margin:14px 0 0;max-width:46em;display:grid;gap:8px}
+.leg li{counter-increment:l;display:grid;grid-template-columns:28px 1fr;gap:10px;margin:0;font-size:15px;line-height:1.8}
+.leg li::before{content:counter(l);width:24px;height:24px;border-radius:50%;background:var(--vm);color:#fff;font:700 13px/24px var(--sans);text-align:center;margin-top:3px;box-shadow:0 0 0 2px var(--card),0 1px 3px #0004}
+.leg b{color:var(--ink)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}.pair figure{margin:0}
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}.trio figure{margin:0}
+/* 補足ボックス */
+.note{border-left:4px solid var(--ink);background:var(--card);padding:12px 18px;margin:20px 0;border-radius:0 8px 8px 0;max-width:46em;font-size:15px;line-height:1.85}
+.note.warn{border-left-color:var(--vm)}
+.note b.t{display:block;font:700 14px var(--sans);color:var(--ink);margin-bottom:2px}
+.note.warn b.t{color:var(--vm)}
+.note p:last-child,.note ul:last-child{margin-bottom:0}
+/* 流れ */
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:28px 0;counter-reset:f;max-width:880px}
+.flow>div{counter-increment:f;position:relative;background:var(--card);border:1px solid var(--rule);padding:18px 20px 16px 20px}
+.flow>div:not(:last-child){border-right:0}
+.flow>div::before{content:counter(f);font:800 34px/1 var(--serif);color:var(--vm);display:block;margin-bottom:8px}
+.flow>div:not(:last-child)::after{content:"";position:absolute;right:-9px;top:50%;width:16px;height:16px;background:var(--card);border-top:1px solid var(--rule);border-right:1px solid var(--rule);transform:translateY(-50%) rotate(45deg);z-index:1}
+.flow h3{margin:0 0 4px;font-size:18px}.flow p{font-size:14px;line-height:1.75;margin:0}
+.tree{font-size:15px;line-height:1.7;background:var(--card);border:1px solid var(--rule);border-radius:8px;padding:16px 20px;max-width:560px;margin:20px 0}
+.tree ul{list-style:none;margin:0;padding-left:1.4em;border-left:2px solid var(--rule)}.tree>ul{border:0;padding:0}
+.tree li{margin:.1em 0;position:relative}.tree b{color:var(--ink)}.tree .s{color:var(--mute);font-size:13px}
+/* 表 */
+.tw{overflow-x:auto;margin:18px 0 26px;border:1px solid var(--rule);border-radius:8px;background:var(--card);max-width:100%}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.7;min-width:520px}
+th,td{padding:10px 14px;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+th{font-weight:700;color:var(--mute);font-size:13px;background:var(--code);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.c,th.c{text-align:center}
+.ti{display:inline-grid;place-items:center;width:34px;height:34px;border:1px solid var(--rule);border-radius:8px;background:var(--paper);color:var(--ink)}
+.ti svg{width:20px;height:20px}
+.ok{color:#1d7a46;font-weight:700}.ng{color:var(--mute)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .ok{color:#6fd39a}}
+:root[data-theme=dark] .ok{color:#6fd39a}
+/* Q&A */
+details.qa{border-bottom:1px solid var(--rule);max-width:46em}
+details.qa summary{cursor:pointer;padding:14px 0;font-weight:700;list-style:none;display:grid;grid-template-columns:24px 1fr;gap:6px}
+details.qa summary::-webkit-details-marker{display:none}
+details.qa summary::before{content:"Q";font:800 18px var(--serif);color:var(--vm)}
+details.qa[open] summary{color:var(--ink)}
+details.qa .a{padding:0 0 14px 30px;font-size:15px}
+.hero{display:grid;gap:8px;padding-bottom:12px}
+.hero .kick{font:600 14px var(--serif);color:var(--vm);letter-spacing:.08em;margin:0}
+.steps{counter-reset:s;list-style:none;padding:0;max-width:46em;display:grid;gap:10px;margin:18px 0 0}
+.steps>li{counter-increment:s;display:grid;grid-template-columns:36px 1fr;gap:12px;margin:0}
+.steps>li::before{content:counter(s);font:800 28px/1.2 var(--serif);color:var(--vm);text-align:center}
+.foot{margin-top:72px;padding-top:24px;border-top:1px solid var(--rule);color:var(--mute);font-size:13px}
+/* 拡大表示 */
+#zoom{position:fixed;inset:0;z-index:50;background:#0b0f16ee;display:grid;grid-template-rows:auto 1fr;padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+#zoom[hidden]{display:none}
+#zoom .bar{display:flex;gap:12px;align-items:center;color:#fff;font-size:14px;padding-bottom:10px}#zoom .bar span{flex:1}
+#zoom button{font:700 14px var(--sans);border:1px solid #fff6;background:#fff1;color:#fff;border-radius:20px;padding:6px 16px;cursor:pointer}
+#zoom .view{overflow:auto;display:grid;place-items:start center}
+#zoom img{max-width:none;width:min(100%,var(--zw,100%));height:auto;background:#fff;border-radius:4px}
+#zoom.full img{width:var(--nat)}
+:focus-visible{outline:3px solid var(--vm);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.shot::after{transition:none}}
+/* 狭い画面 */
+@media(max-width:1000px){.wrap{display:block}.toc{display:none}.tocm{display:block;position:sticky;top:0;z-index:20;background:var(--paper);margin:0 -16px;padding:8px 16px;border-bottom:1px solid var(--rule)}
+ .tocm summary{cursor:pointer;font:700 14px var(--sans);padding:6px 0;list-style:none;color:var(--ink)}.tocm summary::-webkit-details-marker{display:none}
+ .tocm nav{padding:6px 0 10px;display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;max-height:60vh;overflow:auto}.tocm nav a{padding:6px 0;font-size:14px;text-decoration:none;color:var(--tx)}.tocm nav h2{grid-column:1/-1;font:600 12px var(--sans);color:var(--mute);margin:10px 0 0}
+ main{padding-top:24px}}
+@media(max-width:720px){.pair,.trio{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.flow>div:not(:last-child){border-right:1px solid var(--rule);border-bottom:0}.flow>div:not(:last-child)::after{right:auto;left:50%;top:auto;bottom:-9px;transform:translateX(-50%) rotate(135deg)}body{font-size:15.5px}.lead{font-size:17px}}
+
+.tocm{top:env(safe-area-inset-top,0px)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--paper)}
+.toc nav{display:block}
+.leg li>span{min-width:0}
+h2:target,h3:target{scroll-margin-top:60px}
+</style>
+
+<div class="wrap"><aside class="toc" aria-label="目次"><p class="brand">演出依頼資料集</p><p class="sub">使い方ガイド</p><nav><h2>入門</h2><a href="#top">はじめに</a><a href="#about">このツールでできること</a><a href="#start">はじめる</a><h2>プロジェクトと本文</h2><a href="#projects">プロジェクト・シナリオ・章</a><a href="#text">本文を入れる</a><h2>編集と書き込み</h2><a href="#editor">編集画面の見かた</a><a href="#draw">書き込む</a><a href="#speaker">セリフに話者を付ける</a><a href="#layout">ページのレイアウトを変える</a><a href="#cover">表紙をつくる</a><a href="#images">画像を貼る</a><h2>仕上げ</h2><a href="#pdf">PDFにする</a><h2>活用と管理</h2><a href="#devices">iPadやスマホで使う</a><a href="#admin">管理者向け</a><a href="#faq">困ったとき</a><a href="#keys">キーボードショートカット</a></nav></aside><details class="tocm"><summary>目次 ▾</summary><nav><h2>入門</h2><a href="#top">はじめに</a><a href="#about">このツールでできること</a><a href="#start">はじめる</a><h2>プロジェクトと本文</h2><a href="#projects">プロジェクト・シナリオ・章</a><a href="#text">本文を入れる</a><h2>編集と書き込み</h2><a href="#editor">編集画面の見かた</a><a href="#draw">書き込む</a><a href="#speaker">セリフに話者を付ける</a><a href="#layout">ページのレイアウトを変える</a><a href="#cover">表紙をつくる</a><a href="#images">画像を貼る</a><h2>仕上げ</h2><a href="#pdf">PDFにする</a><h2>活用と管理</h2><a href="#devices">iPadやスマホで使う</a><a href="#admin">管理者向け</a><a href="#faq">困ったとき</a><a href="#keys">キーボードショートカット</a></nav></details><main><section id="top">
+<div class="hero">
+<p class="kick">シナリオスクリプト 演出依頼資料集</p>
+<h1>はじめてでも迷わない<br>使い方ガイド</h1>
+<p class="lead">小説やシナリオを読み込み、ページの上に演出の指示を直接書き込んで、そのままA4のPDFにして渡せるツールです。ブラウザだけで動くので、ソフトのインストールは要りません。このガイドは、画面の写真を見ながら上から順に読めば、ひと通りの操作がわかるように書いています。</p>
+</div>
+<figure><button class="shot" data-zoom type="button"><img src="img/20-editor.webp" width="1920" height="1140" alt="編集画面の全体。本文のページに演出ラベルや矢印が書き込まれている" loading="eager"></button><figcaption>編集画面です。ページに直接、赤ペンで演出の指示を書き込みます。</figcaption></figure>
+<h3>まず3ステップで試す</h3>
+<ol class="steps">
+<li><div><b>本文を入れる。</b>「本文」タブに小説をコピーして貼り付けます。<a href="#text">→ 本文を入れる</a></div></li>
+<li><div><b>書き込む。</b>「資料」タブで、ペンや演出ラベルを使ってページに指示を書きます。<a href="#draw">→ 書き込む</a></div></li>
+<li><div><b>PDFにする。</b>画面右上の「PDF」を押して、表紙と章を選びます。<a href="#pdf">→ PDFにする</a></div></li>
+</ol>
+</section>
+
+<section id="about">
+<h2>このツールでできること</h2>
+<p>小説の本文を、左に本文・右に「演出メモ」欄のあるコンテ風のページに並べます。そのページの上に、絵を描くようにペンで指示を書けます。BGMや効果音のラベル、矢印、付箋、画像も貼れます。書いた内容は、そのまま演出担当へ渡すA4のPDFになります。</p>
+<div class="flow">
+<div><h3>本文を貼る</h3><p>小説をそのまま貼り付けます。ページは自動で区切られます。</p></div>
+<div><h3>書き込む</h3><p>ペンやラベルで、セリフや場面ごとに演出の指示を書きます。</p></div>
+<div><h3>PDFにする</h3><p>表紙つきのA4のPDFを作って、そのまま渡せます。</p></div>
+</div>
+<h3>複数人で使うときの考え方</h3>
+<p>1つのプロジェクトを何人かで使えます。ひとりひとりの書き込みは別々に保存されるので、同時に書いても上書きし合いません。「書き込みの表示」で、見たい人の分だけ表示することもできます。</p>
+<p>できることは、管理者から与えられた権限で決まります。</p>
+<div class="tw"><table>
+<tr><th>権限</th><th>見る</th><th>自分のメモ・書き込み</th><th>本文・設定の編集</th></tr>
+<tr><td><b>閲覧のみ</b></td><td class="ok">できる</td><td class="ng">できない</td><td class="ng">できない</td></tr>
+<tr><td><b>閲覧＋メモ</b></td><td class="ok">できる</td><td class="ok">できる</td><td class="ng">できない</td></tr>
+<tr><td><b>編集可</b></td><td class="ok">できる</td><td class="ok">できる</td><td class="ok">できる</td></tr>
+</table></div>
+<p>権限は、プロジェクトごと、さらにシナリオごとに決められます。見られないシナリオは、その人の画面には出てきません。詳しくは<a href="#admin">管理者向け</a>の章を見てください。</p>
+</section>
+
+<section id="start">
+<h2>はじめる</h2>
+<h3 id="launch">起動する</h3>
+<p>ツールを置いたフォルダで、次のファイルを開きます。黒い画面が開き、しばらくするとブラウザに画面が表示されます。</p>
+<ul><li>Windows: <code>run.bat</code></li><li>Mac・Linux: <code>./run.sh</code></li></ul>
+<div class="note"><b class="t">黒い画面は閉じないでください</b>ツールの本体が動いている画面です。閉じると使えなくなります。使い終わったら閉じて構いません。</div>
+<p>初めて起動したときは、黒い画面に<b>初期管理者のユーザー名 <code>admin</code> とパスワード</b>が表示されます。次のログインで使うので、メモしておきます。</p>
+<h3 id="login">ログインする</h3>
+<figure class="narrow"><button class="shot" data-zoom type="button"><img src="img/01-login.webp" width="900" height="780" alt="ユーザー名とパスワードを入れるログイン画面" loading="lazy"></button><figcaption>ログイン画面です。</figcaption><ol class="leg"><li><span><b>ユーザー名</b>を入れます。初めてなら <code>admin</code> です。</span></li>
+<li><span><b>パスワード</b>を入れます。黒い画面に出ていたものです。</span></li>
+<li><span><b>ログイン</b>を押します。</span></li></ol></figure>
+<p>一度ログインした端末は記憶されます。次からは、ログイン画面に出るユーザー名のボタンを押すだけで、パスワードなしで入れます。共用のパソコンでは、マイページの「このデバイスの記憶を消す」を押してから終わってください。</p>
+<h3 id="firstpw">最初にパスワードを変える</h3>
+<p>初期パスワードや、管理者が作ってくれたパスワードでログインした直後は、マイページが開きます。ここで必ず新しいパスワードに変えます。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/02-first-password.webp" width="1260" height="1140" alt="マイページでパスワードを変更する画面" loading="lazy"></button><figcaption>初めてログインしたときの画面です。</figcaption><ol class="leg"><li><span><b>現在のパスワード</b>を入れます。</span></li>
+<li><span><b>新しいパスワード</b>を6文字以上で決めます。</span></li>
+<li><span>確認のため、<b>同じパスワードをもう一度</b>入れます。</span></li>
+<li><span><b>変更する</b>を押すと、プロジェクト一覧に進みます。</span></li></ol></figure>
+<div class="note warn"><b class="t">パスワードを忘れたら</b>管理者が、マイページの「ユーザーと参加プロジェクト」から新しいパスワードを付け直せます。管理者本人が忘れたときは、黒い画面を出すときのコマンドに <code>--admin-password 新しいパスワード</code> を付けて起動し直します。</div>
+<h3 id="lan">iPadや別のパソコンから使う</h3>
+<p>同じWi-Fiやネットワークにいれば、別の端末からも使えます。黒い画面に <code>http://192.168.…:8765/</code> のようなアドレスが出ているので、それを別の端末のブラウザに入力します。ログインは、ふだんと同じユーザー名とパスワードです。</p>
+<ul><li>開けないときは、Windowsのファイアウォールで、このアプリの通信（プライベートネットワーク）を許可します。</li><li>このパソコンだけで使いたいときは、<code>--local-only</code> を付けて起動します。</li></ul>
+</section>
+
+<section id="projects">
+<h2>プロジェクト・シナリオ・章</h2>
+<p>作品のデータは、3つの入れ物で整理します。大きい順に、プロジェクト、シナリオ、章です。</p>
+<div class="tree"><ul>
+<li><b>プロジェクト</b> <span class="s">作品ひとつぶん。表紙の題名になります</span>
+<ul><li><b>シナリオ</b> <span class="s">本編、外伝、番外編など。PDFはこの単位で作ります</span>
+<ul><li><b>章</b> <span class="s">本文を貼る単位。編集画面で開くのはこれです</span></li></ul></li></ul></li>
+</ul></div>
+<h3 id="plist">プロジェクト一覧</h3>
+<p>ログインすると、自分が入れるプロジェクトだけが本のカードで並びます。入れないプロジェクトは表示されません。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/03-home-viewer.webp" width="1752" height="630" alt="プロジェクトが1つだけ並んだ一覧" loading="lazy"></button><figcaption>管理者以外のユーザーに見える一覧です。</figcaption><ol class="leg"><li><span>カードを押すと、そのプロジェクトのページが開きます。カードの小さな表示は、自分の権限です。</span></li>
+<li><span>右上の自分の名前を押すと、マイページが開きます。</span></li></ol></figure>
+<p>管理者には、カードに「名前」「権限」「削除」のボタンと、「新しいプロジェクト」を作る欄も出ます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/10-home-admin.webp" width="1752" height="660" alt="管理用のボタンが付いた一覧" loading="lazy"></button><figcaption>管理者に見える一覧です。</figcaption><ol class="leg"><li><span>プロジェクトを開きます。</span></li>
+<li><span><b>名前</b>で、プロジェクト名を変えます。</span></li>
+<li><span><b>権限</b>で、ユーザーごとの許可を決めます。</span></li>
+<li><span><b>削除</b>で、プロジェクトを片づけます。データは <code>.trash</code> フォルダに移るだけなので、あとから手で戻せます。</span></li>
+<li><span>名前を入れて<b>作成</b>を押すと、新しいプロジェクトができます。</span></li>
+<li><span>マイページを開きます。</span></li></ol></figure>
+<h3 id="ppage">プロジェクトページ</h3>
+<p>プロジェクトを開くと、シナリオが折り畳みで並びます。ここが、章を選ぶための入口であり、シナリオや章を整理する場所でもあります。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/11-project-closed.webp" width="1752" height="1140" alt="プロジェクト全体PDFのカードと、3つのシナリオが折り畳まれて並んでいる" loading="lazy"></button><figcaption>シナリオが閉じた状態の、管理者の画面です。</figcaption><ol class="leg"><li><span><b>シナリオを追加</b>します。名前を入力するだけです。</span></li>
+<li><span><b>設定資料</b>（世界観・用語・キャラクター）を開きます。プロジェクト内のすべてのシナリオで共通です。<a href="#shared">→ 設定の共有</a></span></li>
+<li><span><b>プロジェクトの権限</b>を開きます。</span></li>
+<li><span><b>プロジェクト全体を1つのPDF</b>にします。<a href="#pdf">→ PDFにする</a></span></li>
+<li><span>そのシナリオだけの<b>権限</b>を決めます。</span></li>
+<li><span>そのシナリオに<b>章を足し</b>ます。</span></li>
+<li><span>シナリオの<b>名前を変え</b>ます。</span></li>
+<li><span><b>順番を上げ下げ</b>します。</span></li>
+<li><span>シナリオごと<b>削除</b>します。中の章も消えます。</span></li></ol></figure>
+<div class="note"><b class="t">シナリオの名前を変えるには</b>シナリオの「✎ 名前」を押すか、シナリオの名前をダブルクリックします。入力欄が開くので、新しい名前を入れて Enter を押します。プロジェクトの編集権限が必要です。</div>
+<h3 id="chapters">章を並べ替える・複製する・移す</h3>
+<p>シナリオの名前を押すと開きます。開くと、そのシナリオの章の一覧が出ます。章の名前を押すと、編集画面に進みます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/12-project-open.webp" width="1752" height="930" alt="シナリオを開いて章の一覧が見える。章の左にドラッグの取っ手、右に操作ボタンがある" loading="lazy"></button><figcaption>シナリオを開いたところです。章の行の左右に、整理のための操作があります。</figcaption><ol class="leg"><li><span>シナリオの見出しです。押すと開閉します。</span></li>
+<li><span>このシナリオを<b>PDFにする</b>ための設定です。</span></li>
+<li><span><b>⠿ の取っ手</b>をドラッグすると、章を並べ替えたり、別のシナリオへ移したりできます。</span></li>
+<li><span>PDFに入れる章に、チェックを付けます。</span></li>
+<li><span><b>章の名前</b>を押すと、その章の編集画面が開きます。</span></li>
+<li><span><b>章の名前を変え</b>ます。</span></li>
+<li><span>章を<b>複製</b>します。</span></li>
+<li><span>章を<b>別のシナリオへ移し</b>ます。</span></li>
+<li><span>章を<b>削除</b>します。あなた自身の書き込みも消えます。</span></li></ol></figure>
+<h4>ドラッグで並べ替える・別のシナリオへ移す</h4>
+<p>章の左の「⠿」を押したまま動かします。入れたい場所に赤い線が出るので、そこで指（マウス）を離します。別のシナリオの上へ持っていくと、そのシナリオの章の間に入れられます。閉じているシナリオの上で少し待つと、自動で開きます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/16-chapter-drag.webp" width="1752" height="1140" alt="章の名前が浮かんで運ばれ、移動先のシナリオに赤い線が出ている" loading="lazy"></button><figcaption>章をドラッグしている途中です。入れる位置に赤い線が出ます。</figcaption></figure>
+<p>マウスでも、iPadやスマホの指でも同じ操作です。書き込み（演出メモ）は、章といっしょに移ります。</p>
+<h4>章を複製する</h4>
+<p>章の行の「⧉」を押すと、複製のダイアログが開きます。同じ内容の章を、新しい章名で作ります。たとえば、本編の章を元に、別バージョンの演出案を作りたいときに使います。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/15-chapter-dup.webp" width="1920" height="1140" alt="新しい章名、複製先のシナリオ、書き込みも複製するかを選ぶダイアログ" loading="lazy"></button><figcaption>章を複製するダイアログです。</figcaption><ol class="leg"><li><span>新しい<b>章名</b>です。初期値は「元の名前（コピー）」です。</span></li>
+<li><span><b>複製先のシナリオ</b>です。同じシナリオなら元の章のすぐ後ろ、別のシナリオなら末尾に入ります。</span></li>
+<li><span>チェックを付けると、<b>演出メモ・図形・話者の指定</b>（全員の分）もいっしょに複製します。外すと、本文だけの新しい章になります。</span></li>
+<li><span><b>複製する</b>を押します。</span></li></ol></figure>
+<div class="note"><b class="t">移したり複製したりできる条件</b>章の操作には、<b>元のシナリオと移し先のシナリオの両方で「編集可」</b>の権限が必要です。権限のないシナリオには、ドロップできません。</div>
+<div class="note"><b class="t">見えないシナリオがあるときは</b>管理者が、あなたにそのシナリオを見せない設定にしています。故障ではありません。そのシナリオは、プロジェクトページにも、章の一覧にも、設定資料にも出ません。見せてほしいときは、管理者に相談します。</div>
+<h3 id="shared">設定資料はプロジェクトで共有される</h3>
+<p>「世界観」「用語」「キャラクター」の設定資料は、<b>プロジェクトに1つ</b>です。本編でも外伝でも、同じプロジェクトのシナリオなら、同じキャラクターや用語がそのまま使えます。1度登録すれば、シナリオごとに作り直す必要はありません。</p>
+<p>設定ごとに、使える範囲を選べます。</p>
+<div class="tw"><table>
+<tr><th>共有範囲</th><th>使える場所</th><th>使いどころ</th></tr>
+<tr><td><b>🌐 プロジェクト全体で共有</b>（初期値）</td><td>プロジェクト内のすべてのシナリオ・章</td><td>主人公や、作品全体の世界観</td></tr>
+<tr><td><b>このシナリオだけ</b></td><td>選んだシナリオの章すべて</td><td>外伝にだけ出てくる人物</td></tr>
+<tr><td><b>章：○○</b></td><td>選んだ章だけ</td><td>その章だけの用語</td></tr>
+</table></div>
+<p>範囲の選び方は、<a href="#speaker">「セリフに話者を付ける」</a>の章の「キャラクター」タブの写真に載っています。シナリオを見られない人には、そのシナリオだけの設定も見えません。ネタばれになる設定は、「このシナリオだけ」にしておくと安心です。</p>
+</section>
+
+<section id="text">
+<h2>本文を入れる</h2>
+<p>章を作ったら、まず本文を入れます。「本文」タブを開き、小説をコピーして、大きな入力欄に貼り付けます。貼ったあと、書き換えるたびに自動で保存されます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/30-text-tab.webp" width="1920" height="1140" alt="本文タブ。章の題名や並べ替えのボタン、大きな本文入力欄がある" loading="lazy"></button><figcaption>「本文」タブです。この画面は、編集権限のある人だけが書き換えられます。</figcaption><ol class="leg"><li><span><b>新しい章</b>を作ります。題名を聞かれるので入力します。</span></li>
+<li><span>この章の<b>題名</b>です。書き換えると、その場で反映されます。</span></li>
+<li><span>章の<b>順番</b>を、ひとつ前、またはひとつ後ろにします。</span></li>
+<li><span>この章を<b>削除</b>します。あなた自身の書き込みも消えます。確認が出ます。</span></li>
+<li><span>この章の<b>用紙の向き</b>（縦・横）を決めます。</span></li>
+<li><span>この章の<b>書字方向</b>（横書き・縦書き）を決めます。縦書きでは、メモ欄がページの下に来ます。</span></li>
+<li><span>この章の<b>背景の模様と文字の色</b>を決めます。</span></li>
+<li><span>選んだ文字に<b>ルビ</b>（ふりがな）を付けます。</span></li>
+<li><span>ここに小説を貼ります。</span></li></ol></figure>
+<h3>ページを区切りたいところに「---」</h3>
+<p>本文は、ページがいっぱいになると自動で次のページへ送られます。好きな場所で区切りたいときは、<b>その行に半角のハイフン3つ「<code>---</code>」だけを書きます</b>。そこから次のページになります。</p>
+<p>「---」のあとに指定を並べると、そのページ以降の見た目も変えられます。たとえば <code>--- 横向き 背景=blueprint</code> と書くと、そこから横向きの青い図面風ページになります。この指定は、画面のボタンで選ぶと自動で書き換わるので、覚えなくても使えます。<a href="#layout">→ ページのレイアウト</a></p>
+<h3>ふりがな（ルビ）の書き方</h3>
+<p>本文の中に、次のどちらかの形で書きます。</p>
+<div class="tw"><table>
+<tr><th>書き方</th><th>表示</th><th>使いどき</th></tr>
+<tr><td><code>｜星降る町《ほしふるまち》</code></td><td><ruby>星降る町<rt>ほしふるまち</rt></ruby></td><td>ひらがなやカタカナを含む語や、長い語に付けるとき。｜から《 の前までにルビが付きます。</td></tr>
+<tr><td><code>灯守《ともしもり》</code></td><td><ruby>灯守<rt>ともしもり</rt></ruby></td><td>漢字だけの語のとき。｜は省けます。</td></tr>
+</table></div>
+<p>書くのが面倒なときは、「本文」タブで文字を選んで、「ルビ」ボタンを押します。ふりがなを聞かれるので入力すると、上の書き方に自動で直されます。</p>
+</section>
+
+<section id="editor">
+<h2>編集画面の見かた</h2>
+<p>章の名前を押すか、上の「資料」タブを押すと編集画面になります。ページの上に書き込みをするのが、この画面です。まず、どこに何があるかを覚えましょう。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/20-editor.webp" width="1920" height="1140" alt="編集画面。番号付きの赤い枠で各部分が示されている" loading="lazy"></button><figcaption>編集画面の各部分です。</figcaption><ol class="leg"><li><span><b>いまの場所。</b>プロジェクト › シナリオ › 章の順に並んでいます。プロジェクト名を押すとプロジェクトページに戻り、シナリオと章はその場で切り替えられます。</span></li>
+<li><span><b>タブ。</b>表紙、資料（この画面）、本文、世界観、用語、キャラクターを切り替えます。</span></li>
+<li><span><b>設定バー。</b>選んでいる道具の色や太さなどが出ます。道具を変えると中身が入れ替わります。</span></li>
+<li><span><b>道具箱。</b>ペンや消しゴムなどの道具が、アイコンで並びます。</span></li>
+<li><span><b>ページ。</b>本文が並ぶ紙面です。左が本文、右が「演出メモ」欄です。</span></li>
+<li><span><b>ページの操作ボタン。</b>そのページの向きや背景などを変えます。ページの右の外側にあります。</span></li>
+<li><span><b>右のパネル。</b>表示の倍率、ページ移動、書き込みの表示などを切り替えます。</span></li>
+<li><span><b>パネルの開閉。</b>押すと、右のパネルをしまって、ページを広く使えます。</span></li>
+<li><span><b>PDF。</b>このシナリオをPDFにします。</span></li></ol></figure>
+<div class="note"><b class="t">スクロールするのはページの部分だけです</b>画面全体は動きません。ページを上下に動かすときは、ページの上でスクロールします。</div>
+<div class="note"><b class="t">保存は自動です</b>書き込むたびに、上の「保存済み」の表示で保存されます。保存ボタンはありません。他の人が書き込んだ内容は、しばらく操作がないときに自動で反映されます。すぐ見たいときは、上の「🔄」ボタンを押します。</div>
+<h3 id="toolbox">道具箱と設定バー</h3>
+<p>道具を押すと、上の設定バーにその道具の設定が出ます。マウスを道具に乗せると、名前とショートカットキーが見えます。</p>
+<div class="pair">
+<figure class="narrow"><button class="shot" data-zoom type="button"><img src="img/22-toolbox.webp" width="144" height="1014" alt="アイコンが並んだ道具箱" loading="lazy"></button><figcaption>道具箱です。右下に小さく出ているのがショートカットキーです。</figcaption></figure>
+<div>
+<p>道具箱は、似た道具ごとに区切られています。</p>
+<ul><li>一番上: 選択・移動、話者（印鑑）、対応済み</li><li>描く道具: 鉛筆、マーカー、筆、文字なぞり、消しゴム</li><li>図形: 線、矢印、曲線矢印、折れ線、四角、丸</li><li>文字: 文字ボックス、演出ラベル</li><li>本文: 本文編集、改ページ</li><li>一番下: 元に戻す、やり直し、貼り付け、画像</li></ul>
+</div></div>
+<p>設定バーは、選んだ道具によって中身が変わります。</p>
+<figure><button class="shot" data-zoom><img src="img/21-opt-pen.webp" width="1920" height="69" alt="鉛筆を選んだときの設定バー" loading="lazy"></button><figcaption>鉛筆: 色と太さを選べます。</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/21-opt-line.webp" width="1920" height="69" alt="線を選んだときの設定バー" loading="lazy"></button><figcaption>線: 色と太さに加えて、実線・破線・点線と、矢じりの向きを選べます。</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/21-opt-tpl.webp" width="1920" height="69" alt="演出ラベルを選んだときの設定バー" loading="lazy"></button><figcaption>演出ラベル: 置きたいラベルの種類（BGM、SEなど）を選べます。</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/21-opt-eraser.webp" width="1920" height="69" alt="消しゴムを選んだときの設定バー" loading="lazy"></button><figcaption>消しゴム: 部分消しか線ごとか、自分の書き込みだけか全員分かを選べます。</figcaption></figure>
+</section>
+
+<section id="draw">
+<h2>書き込む</h2>
+<p>道具を選んで、ページの上をなぞるだけです。迷ったら、まず「鉛筆」と「演出ラベル」だけ使ってみてください。たいていの指示は、この2つで書けます。</p>
+<h3>道具の一覧</h3>
+<div class="tw"><table>
+<tr><th class="c">道具</th><th>名前</th><th>キー</th><th>こんなときに</th></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3l11 6.5-4.8 1.3L8.6 16z"/></svg></span></td><td><b>選択・移動</b></td><td><kbd>V</kbd></td><td>図形をクリックで選択。ドラッグで移動、四隅で拡大縮小（自分の書き込みのみ）</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12v8H9l-4 3.5V12H4z"/></svg></span></td><td><b>話者（印鑑）</b></td><td>—</td><td>セリフ(「」)か印鑑をクリックして話者を選ぶと、余白に印鑑が入ります</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg></span></td><td><b>対応済みにする</b></td><td><kbd>D</kbd></td><td>書き込みをクリックすると「対応済み ✔」になります</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.5l1-4 9-9 3 3-9 9zM11.5 5.5l3 3"/></svg></span></td><td><b>鉛筆</b></td><td><kbd>P</kbd></td><td>ペン・マウスでなぞって書き込み</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16l-2 1 1-2 8-10 3 3zM11 7l3 3"/></svg></span></td><td><b>マーカー</b></td><td><kbd>M</kbd></td><td>半透明のマーカー</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16c0-2.2 1.2-3 3-3l7-9 1.5 1.5-8 8.5c0 1.8-1 3-3.5 2z"/></svg></span></td><td><b>筆</b></td><td><kbd>B</kbd></td><td>筆圧に応じて太さが変わる筆</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 14l4.5-10 4.5 10M7.3 10.5h5.4M3.5 17h13"/></svg></span></td><td><b>文字なぞり</b></td><td><kbd>H</kbd></td><td>本文をなぞって蛍光ペンのように色を付けます</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l7-7 5 5-5 5H7zM8.5 16.5H17"/></svg></span></td><td><b>消しゴム</b></td><td><kbd>E</kbd></td><td>部分消し/線ごと消しは右の設定で切り替え</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16L16 4"/></svg></span></td><td><b>線</b></td><td><kbd>L</kbd></td><td>ドラッグで直線。Shiftで角度を固定</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16L16 4M9 4h7v7"/></svg></span></td><td><b>矢印</b></td><td><kbd>A</kbd></td><td>ドラッグで矢印</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15C5 5 13 17 16 5M16 5l-4 .8M16 5l.6 4"/></svg></span></td><td><b>曲線矢印</b></td><td><kbd>C</kbd></td><td>ドラッグで曲線矢印</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15l5-9 4 6 5-8"/></svg></span></td><td><b>折れ線</b></td><td><kbd>G</kbd></td><td>クリックで点を追加。ダブルクリック・Enterで確定</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h12v10H4z"/></svg></span></td><td><b>四角</b></td><td><kbd>R</kbd></td><td>ドラッグで四角。Shiftで正方形</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="10" cy="10" rx="7" ry="5"/></svg></span></td><td><b>丸</b></td><td><kbd>O</kbd></td><td>ドラッグで丸。Shiftで正円</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h12M10 5v11M7.5 16h5"/></svg></span></td><td><b>文字ボックス</b></td><td><kbd>T</kbd></td><td>クリックした位置に文字ボックスを置きます</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h9l5 4-5 4H3z"/></svg></span></td><td><b>演出ラベル</b></td><td>—</td><td>クリックした位置に演出ラベル(BGM・SEなど)を置きます</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15.5l1-3.5 8-8 2.5 2.5-8 8zM11 5l2.5 2.5"/></svg></span></td><td><b>本文編集</b></td><td>—</td><td>本文を直接書き換えます。文字を選んで右の「ルビ」でふりがな</td></tr>
+<tr><td class="c"><span class="ti"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h3M8 10h4M14 10h3M6 5v3M14 12v3"/></svg></span></td><td><b>改ページ</b></td><td>—</td><td>本文の行をクリックすると、その行の前で改ページします</td></tr>
+
+</table></div>
+<h3>演出ラベルを置く</h3>
+<p>演出の指示は、決まった種類のラベルで書くと、読む人が探しやすくなります。「演出ラベル」を選び、設定バーでラベルの種類を決めて、置きたい場所をクリックします。中の文字は、あとから自由に書き換えられます。</p>
+<div class="tw"><table>
+<tr><th>ラベル</th><th>使い方</th></tr>
+<tr><td>BGM／SE</td><td>音楽・効果音の指示。曲名や雰囲気を書きます。</td></tr>
+<tr><td>背景／暗転／立ち絵／表情</td><td>画面に出すものの指示。</td></tr>
+<tr><td>カメラ／演出／動き／ウェイト</td><td>見せ方や間の取り方の指示。</td></tr>
+<tr><td>カット番号</td><td>クリックするたびに、C1、C2…と自動で番号が増えます。</td></tr>
+<tr><td>付箋</td><td>黄色いメモ。長い相談や補足に向いています。</td></tr>
+<tr><td>自由メモ…</td><td>決まった種類に当てはまらないとき。</td></tr>
+</table></div>
+<h3 id="select">置いたものを選んで直す</h3>
+<p>「選択・移動」で図形をクリックすると、右のパネルの一番上に、その図形の設定が出ます。文字を書き換えたり、色や大きさを変えたりできます。四隅の白い四角をドラッグすると、大きさが変わります。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/25-select.webp" width="1920" height="1140" alt="付箋を選択し、右に設定パネルが出ている" loading="lazy"></button><figcaption>付箋を選んだところです。右のパネルに、文字や色の設定が出ています。</figcaption><ol class="leg"><li><span><b>文字</b>を、ここで書き換えます。改行もできます。</span></li>
+<li><span><b>文字の種類</b>（ゴシック、明朝、手書き風、等幅）、大きさ、太字、横書き・縦書き、左右の寄せを選べます。</span></li>
+<li><span>下の段で、枠線、塗りの色、線の種類、前面へ・背面へ、コピー、複製、削除ができます。</span></li></ol></figure>
+<div class="note"><b class="t">他の人の書き込みは動かせません</b>選んで動かせるのは、自分が書いたものだけです。他の人の書き込みを見たくないときは、右のパネルの「書き込みの表示」で、その人のチェックを外します。</div>
+<h3>間違えたとき</h3>
+<ul><li>道具箱の下の <b>戻す</b> 、または <kbd>Ctrl</kbd>+<kbd>Z</kbd> で、ひとつ前に戻ります。</li><li><b>やり直し</b> は <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> です。</li><li>選んだ図形は、<kbd>Delete</kbd> で消せます。矢印キーで1ピクセルずつ、<kbd>Shift</kbd>を押しながらなら10ピクセルずつ動かせます。</li><li>消しゴムは、自分の書き込みだけを消すか、全員分を消すかを選べます。全員分でも、元に戻せます。</li></ul>
+<h3>対応済みにする</h3>
+<p>演出の指示を受け取った人が、「対応した」と印を付けるための道具です。「対応済み」を選んで書き込みをクリックすると、書き込みが薄くなって緑のチェックが付きます。もう一度クリックすると、元に戻ります。</p>
+</section>
+
+<section id="speaker">
+<h2>セリフに話者を付ける</h2>
+<p>本文の「」で囲んだセリフに、誰が話したかを指定できます。指定すると、本文の<b>左の余白に、そのキャラクターの印鑑</b>が入ります（縦書きのページでは、<b>上の余白</b>）。ハンコの色でひと目で話者がわかるので、ページをめくりながら読みやすくなります。</p>
+<h3>1. キャラクターを登録する</h3>
+<p>編集権限のある人が、「キャラクター」タブで登録します。名前、説明、印鑑に使う色と文字を決めます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/31-dict-chara.webp" width="1920" height="1140" alt="キャラクターの一覧。名前、色、印鑑の字、共有範囲を選べる" loading="lazy"></button><figcaption>「キャラクター」タブです。登録したキャラクターが、話者の候補になります。</figcaption><ol class="leg"><li><span><b>追加</b>を押すと、新しい項目ができます。</span></li>
+<li><span>「今の章・シナリオ＋共有のみ」にチェックを付けると、いま見ている章に関係するものだけに絞れます。</span></li>
+<li><span>名前や説明で絞り込めます。</span></li>
+<li><span>キャラクターの<b>色</b>です。印鑑の色になります。</span></li>
+<li><span><b>印鑑の字</b>です。空のままなら、名前の頭文字が入ります。</span></li>
+<li><span>この設定を<b>使える範囲</b>です。初期値は「プロジェクト全体で共有」です。</span></li>
+<li><span>項目を<b>削除</b>します。</span></li></ol></figure>
+<p>「世界観」「用語」のタブも使い方は同じです。舞台のルールや、作品の中だけで使う言葉をメモしておくと、PDFの最後の「設定資料」にまとめて載せられます。</p>
+<h3>2. セリフをクリックして話者を選ぶ</h3>
+<p>「資料」タブで、道具箱の「話者（印鑑）」を選びます。セリフ、または印鑑をクリックすると、候補の一覧が出るので、話した人を選びます。</p>
+<figure class="mid"><button class="shot" data-zoom><img src="img/26-speaker-pick.webp" width="1350" height="630" alt="セリフをクリックして話者を選ぶ一覧が出ている" loading="lazy"></button>
+<figcaption>セリフをクリックすると、登録したキャラクターの一覧が出ます。</figcaption>
+<ol class="leg"><li><span><b>(指定なし)</b>を選ぶと、印鑑が外れます。</span></li></ol></figure>
+<h3>3. 余白に印鑑が入る</h3>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/27-speaker-done.webp" width="1350" height="1014" alt="セリフの行の左の余白に、キャラクターの色の丸い印鑑が入ったページ" loading="lazy"></button><figcaption>話者を指定したあとです。セリフの行の左の余白に印鑑が入ります。</figcaption><ol class="leg"><li><span>話者の<b>印鑑</b>です。そのセリフの行の高さに入ります。印刷されるPDFにも付きます。</span></li>
+<li><span>セリフの<b>マーカー</b>（黄色い下地）です。なくしたり、色を変えたりできます。次の項を見てください。</span></li></ol></figure>
+<p>縦書きのページでは、印鑑はセリフの列の<b>上の余白</b>に入ります。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/36-vertical.webp" width="1250" height="1014" alt="縦書きのページで、セリフの列の上に丸い印鑑が入っている" loading="lazy"></button><figcaption>縦書きのページです。印鑑は、本文の上の余白にあります。</figcaption><ol class="leg"><li><span>縦書きでは、印鑑が列の<b>上</b>に入ります。</span></li></ol></figure>
+<div class="note"><b class="t">印鑑が出ないとき</b>同じ行（縦書きでは同じ列）に、別の話者のセリフが続くときは、最初のセリフの印鑑だけが入ります。縦書きの印鑑は、上の余白に収まる小さめの大きさ（2文字まで）になります。</div>
+<p>同じセリフが何度も出てくるときは、1つ目、2つ目…と別々に指定できます。話者の指定は、一覧を<b>「セリフCSV」</b>ボタン（右のパネルの「入力・補助」）でCSVとして書き出せます。</p>
+<h3 id="look">印鑑とマーカーの見た目を変える</h3>
+<p>右のパネルの「ページ・表示」にある<b>「🖋 印鑑・マーカー設定」</b>（道具箱で「話者（印鑑）」を選んだときは、上の設定バーにも出ます）を押します。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/28-look-dialog.webp" width="1920" height="1140" alt="印鑑の形や色、マーカーの設定ダイアログ。下に横書きと縦書きの見本がある" loading="lazy"></button><figcaption>印鑑・マーカー設定です。下の見本で、変えた結果をすぐ確かめられます。</figcaption><ol class="leg"><li><span>印鑑を<b>表示する</b>かどうか。外すと、印鑑はすべて消えます。</span></li>
+<li><span>印鑑の<b>形</b>（丸・角丸・四角）、<b>塗り</b>（枠のみ・塗りつぶし）、<b>文字数</b>、<b>大きさ</b>を選びます。</span></li>
+<li><span>印鑑の<b>色</b>です。「キャラクターごとの色」か、「全員この色」を選べます。</span></li>
+<li><span>セリフの<b>マーカー</b>を引くかどうか。外すと、黄色い下地がなくなります。</span></li>
+<li><span>マーカーの<b>色</b>です。標準は淡い黄色で、好きな色にも変えられます。</span></li>
+<li><span><b>見本</b>です。横書き（左の余白）と縦書き（上の余白）の見え方を確認できます。</span></li>
+<li><span><b>自分の表示に保存</b>は、このパソコン（ブラウザ）だけの設定になります。</span></li>
+<li><span><b>プロジェクトの標準にする</b>は、全員の標準になります。編集権限のある人だけが使えます。</span></li></ol></figure>
+<div class="note"><b class="t">「自分の表示」と「プロジェクトの標準」</b>見やすさの好みは人によって違うので、まず「自分の表示に保存」で試すのがおすすめです。みんなで揃えたいときだけ、編集権限のある人が「プロジェクトの標準にする」を押します。「標準に戻す」を押すと、自分だけの設定を消して、プロジェクトの標準に戻ります。</div>
+</section>
+
+<section id="layout">
+<h2>ページのレイアウトを変える</h2>
+<p>用紙の向き、書字の方向、背景などは、<b>章ごとの初期設定</b>と、<b>ページごとの指定</b>の2段階で決まります。章の初期設定は「本文」タブで、ページごとの指定は、各ページの右の外側にあるボタンで変えます。ページの指定は、<b>そのページから先</b>に効きます。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/23-pageside.webp" width="450" height="300" alt="ページの右に並んだ4つのボタン" loading="lazy"></button><figcaption>ページの右の外側にあるボタンです。編集権限のある人に表示されます。</figcaption><ol class="leg"><li><span><b>用紙 縦⇄横</b>。このページ以降の用紙の向きを切り替えます。</span></li>
+<li><span><b>書字 横⇄縦</b>。横書きと縦書きを切り替えます。縦書きでは、メモ欄がページの下に来ます。</span></li>
+<li><span><b>背景・文字色</b>。背景の模様と、本文の文字の色を選びます。</span></li>
+<li><span><b>コンテ枠 ⇄ 全幅</b>。メモ欄をなくして、本文を全幅にします。もう一度押すと戻ります。</span></li></ol></figure>
+<p>2ページ目以降には、「改ページ解除」ボタンも出ます。手動で入れた改ページを、取り消せます。</p>
+<h3>用紙を横向きにする・背景を変える</h3>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/34-bg-dialog.webp" width="780" height="780" alt="背景の候補が並ぶダイアログ" loading="lazy"></button><figcaption>背景を選ぶダイアログです。</figcaption><ol class="leg"><li><span>8種類の<b>背景の模様</b>から選びます。標準（白）、単色、ブループリント、モダン、方眼紙、和紙、ナイト、ドットです。</span></li>
+<li><span>文字の色は、背景に合わせて<b>自動</b>にできます。外すと、好きな色を選べます。</span></li>
+<li><span><b>この設定にする</b>を押すと、ページに反映されます。</span></li></ol></figure>
+<figure><button class="shot" data-zoom><img src="img/35-landscape-blueprint.webp" width="1920" height="1140" alt="横向きで、青い図面風の背景のページ" loading="lazy"></button><figcaption>横向きのページに、ブループリントの背景を指定した例です。暗い背景では、書き込みが見やすいように表示が自動で調整されます。</figcaption></figure>
+<h3>縦書きのページ</h3>
+<p>書字を縦書きにすると、本文は右から左へ縦に流れ、「演出メモ」欄はページの下に移ります。小説の本文が縦書きのときに便利です。縦書きでの印鑑の位置は、<a href="#speaker">話者の章</a>に書いています。</p>
+<h3>右のパネルで見やすさを整える</h3>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/24-sidepanel.webp" width="495" height="600" alt="表示のしかた、倍率、ページ移動、文字サイズなどの設定" loading="lazy"></button><figcaption>右のパネルの「ページ・表示」です。</figcaption><ol class="leg"><li><span><b>表示のしかた</b>。「全ページ（スクロール）」か「1ページずつ」を選びます。</span></li>
+<li><span><b>倍率</b>。「幅に合わせる」や「ページ全体」にすると、画面に収まるように自動で調整されます。</span></li>
+<li><span><b>ページ移動</b>。ページを選んで、そこへ飛びます。</span></li>
+<li><span><b>本文の文字サイズ</b>。13から18まで選べます。</span></li>
+<li><span><b>メモ欄の幅</b>。0にすると、本文が全幅になります。</span></li>
+<li><span><b>メモ欄の罫線</b>の表示を切り替えます。</span></li></ol></figure>
+<h3>メモ欄の罫線を出す・消す</h3>
+<p>「演出メモ」欄の横線は、書き込みの目安になりますが、邪魔になることもあります。右のパネルの「メモ欄の罫線を表示」で、出したり消したりできます。この設定は、使っている端末に記憶されます。PDFにするときは、PDFの設定でも選べます。</p>
+<div class="pair">
+<figure><button class="shot" data-zoom><img src="img/42-rule-on.webp" width="408" height="540" alt="罫線がある演出メモ欄" loading="lazy"></button><figcaption>罫線あり</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/43-rule-off.webp" width="408" height="540" alt="罫線がない演出メモ欄" loading="lazy"></button><figcaption>罫線なし</figcaption></figure>
+</div>
+</section>
+
+<section id="cover">
+<h2>表紙をつくる</h2>
+<p>「表紙」タブでは、PDFの1枚目になる表紙を整えます。プロジェクト名とシナリオ名、章の一覧から、自動で表紙ができます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/32-cover-v.webp" width="1920" height="1140" alt="青い帯に縦書きの題名がある表紙" loading="lazy"></button><figcaption>縦向きで、縦書きの題名の表紙です。</figcaption><ol class="leg"><li><span><b>プロジェクト名</b>です。表紙の題名になります。</span></li>
+<li><span>表紙の<b>用紙の向き</b>（縦・横）を選びます。</span></li>
+<li><span>題名を<b>縦書き</b>にするか、<b>横書き</b>にするかを選びます。</span></li></ol></figure>
+<figure class="mid"><button class="shot" data-zoom><img src="img/33-cover-landscape.webp" width="1920" height="1140" alt="横向きで、横書きの題名の表紙" loading="lazy"></button><figcaption>用紙を横向き、題名を横書きにした例です。青い帯がページの幅いっぱいに広がります。</figcaption></figure>
+</section>
+
+<section id="images">
+<h2>画像を貼る</h2>
+<p>参考にしたい絵や写真、背景の指定などを、ページの上に貼れます。貼った画像は、拡大・縮小や移動ができます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/40-image-library.webp" width="1920" height="1140" alt="画像ライブラリ。アップロードとサーバーから選ぶボタン、画像の一覧がある" loading="lazy"></button><figcaption>画像ライブラリです。道具箱の一番下の画像のボタンで開きます。</figcaption><ol class="leg"><li><span><b>アップロード</b>します。パソコンやiPadの画像を、プロジェクトに保存します。</span></li>
+<li><span><b>サーバーから選び</b>ます。ツールを動かしているパソコンにある画像を、コピーせずに選べます。編集権限のある人だけが使えます。</span></li>
+<li><span>画像を<b>クリック</b>すると、いま見ているページに置かれます。ドラッグして、好きな場所に置くこともできます。</span></li></ol></figure>
+<ul>
+<li>コピーした画像は、ページの上で <kbd>Ctrl</kbd>+<kbd>V</kbd> でも貼れます。</li>
+<li>パソコンの画像ファイルを、ページへドラッグして落としても貼れます。</li>
+<li>貼った画像を「選択・移動」で選ぶと、右のパネルで比率やトリミング、透明度を変えられます。</li>
+</ul>
+<figure class="mid"><button class="shot" data-zoom><img src="img/41-image-placed.webp" width="1920" height="1140" alt="ページに貼られた画像" loading="lazy"></button><figcaption>画像を貼ったページです。</figcaption></figure>
+</section>
+
+<section id="pdf">
+<h2>PDFにする</h2>
+<p>書き込みが終わったら、A4のPDFにして渡せます。PDFは、<b>1つのシナリオ</b>か、<b>プロジェクト全体</b>のどちらかの単位で作ります。</p>
+<h3>シナリオ1つぶんをPDFにする</h3>
+<p>プロジェクトページの、各シナリオの「PDFにする」の欄か、編集画面の上の「PDF」ボタンから作ります。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/50-pdf-dialog.webp" width="1920" height="1140" alt="PDFに入れるものと章を選ぶダイアログ" loading="lazy"></button><figcaption>編集画面の「PDF」ボタンを押したときのダイアログです。</figcaption><ol class="leg"><li><span><b>表紙</b>を付けるかどうか。</span></li>
+<li><span><b>設定資料</b>（世界観・用語・キャラクター）を、PDFの最後に付けるかどうか。</span></li>
+<li><span><b>メモ罫線</b>を入れるかどうか。</span></li>
+<li><span><b>PDF出力</b>を押すと、印刷の画面が開きます。</span></li>
+<li><span>PDFに入れる<b>章</b>を選びます。チェックを外した章は入りません。</span></li></ol></figure>
+<h3>プロジェクト全体を1つのPDFにする</h3>
+<p>プロジェクトページの上にある「プロジェクト全体を1つのPDFにする」から、すべてのシナリオをまとめて、1つのPDFにできます。</p>
+<ul>
+<li><b>プロジェクト表紙</b>。プロジェクトの題名と、シナリオの一覧が載る表紙です。</li>
+<li><b>シナリオごとの扉</b>。各シナリオの始まりに、シナリオ名と章の一覧の扉が入ります。</li>
+<li><b>設定資料</b>。PDFの最後に、世界観・用語・キャラクターがまとまります。</li>
+<li>入る章は、各シナリオの中でチェックされたものです。「すべて選択」「すべて解除」で、まとめて切り替えられます。</li>
+</ul>
+<div class="note"><b class="t">PDFにならないシナリオ</b>管理者が「PDF出力」を許可していないシナリオは、プロジェクト全体のPDFにも入りません。また、見られないシナリオは、そもそも対象にならないので、ほかの人のPDFに紛れ込むことはありません。</div>
+<h3>印刷の画面での設定</h3>
+<p>「PDF出力」を押すと、ブラウザの印刷画面が開きます。次の設定にしてから、保存します。</p>
+<div class="tw"><table>
+<tr><th>項目</th><th>設定</th></tr>
+<tr><td>送信先（プリンター）</td><td><b>PDFに保存</b></td></tr>
+<tr><td>用紙サイズ</td><td><b>A4</b></td></tr>
+<tr><td>余白</td><td><b>なし</b></td></tr>
+<tr><td>背景のグラフィック</td><td><b>オン</b>（背景の色や模様、印鑑の色が出ます）</td></tr>
+</table></div>
+<p>縦向きのページと横向きのページが混ざっていても、1つのPDFになります。</p>
+</section>
+
+<section id="devices">
+<h2>iPadやスマホで使う</h2>
+<p>iPadやスマホのブラウザでも、パソコンと同じように使えます。ペンで描くときと、指でスクロールするときが、ぶつからないようにしてあります。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/73-ipad-editor.webp" width="1230" height="1770" alt="iPadの画面で編集している様子" loading="lazy"></button><figcaption>iPadの縦向きです。道具箱が左に、右のパネルは☰で開閉します。</figcaption><ol class="leg"><li><span><b>道具箱</b>は、パソコンと同じく左にあります。</span></li>
+<li><span><b>パネルの開閉</b>で、右のパネルをしまって、ページを広くします。</span></li></ol></figure>
+<h3>指とペンの使い分け</h3>
+<ul>
+<li><b>Apple Pencilや液晶タブレットのペン</b>で描き、<b>指</b>はスクロールと拡大縮小に使います。描いている途中でページが動くことはありません。</li>
+<li>指でも描きたいときは、右のパネルの「入力・補助」で<b>「指でも描く」</b>をオンにします。ペンが使えないスマホでは、最初からオンです。</li>
+<li>「指でも描く」がオンのときは、<b>2本指のスワイプ</b>でスクロール、<b>2本指のピンチ</b>で拡大縮小ができます。</li>
+<li>ペンを使っている間は、手のひらが画面に触れても無視されます。</li>
+<li>ペンの<b>消しゴム側</b>（対応するペンのみ）で、そのまま消せます。</li>
+</ul>
+<figure class="narrow"><button class="shot" data-zoom type="button"><img src="img/44-side-input.webp" width="495" height="450" alt="吸着、指でも描く、ルビ、セリフCSVの設定" loading="lazy"></button><figcaption>右のパネルの「入力・補助」です。</figcaption><ol class="leg"><li><span><b>吸着</b>。行や図形、余白線にぴたっと揃えます。</span></li>
+<li><span><b>指でも描く</b>。タッチ画面で、指でも描けるようにします。</span></li>
+<li><span><b>ルビ</b>。「本文編集」で選んだ文字にふりがなを付けます。</span></li>
+<li><span><b>セリフCSV</b>。セリフと話者の一覧を、表計算ソフトで開ける形で書き出します。</span></li></ol></figure>
+<h3>スマホの画面</h3>
+<div class="trio">
+<figure><button class="shot" data-zoom><img src="img/70-phone-home.webp" width="780" height="1688" alt="スマホのプロジェクト一覧" loading="lazy"></button><figcaption>プロジェクト一覧</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/71-phone-project.webp" width="780" height="1688" alt="スマホのプロジェクトページ" loading="lazy"></button><figcaption>プロジェクトページ</figcaption></figure>
+<figure><button class="shot" data-zoom><img src="img/72-phone-editor.webp" width="780" height="1688" alt="スマホの編集画面" loading="lazy"></button><figcaption>編集画面</figcaption></figure>
+</div>
+<p>スマホでは、細かい書き込みよりも、書き込みを見る・確認するのに向いています。細かく書き込むときは、iPadやパソコンがおすすめです。</p>
+</section>
+
+<section id="admin">
+<h2>管理者向け</h2>
+<p>管理者は、ユーザーの追加、プロジェクトへの参加、権限、バックアップを管理します。管理者は、すべてのプロジェクトのすべてのシナリオを、編集できます。</p>
+<h3>ユーザーを追加する</h3>
+<p>マイページの一番上に、管理者だけの欄があります。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/60-mypage.webp" width="920" height="1700" alt="ユーザー追加、ユーザー一覧、バックアップの欄があるマイページ" loading="lazy"></button><figcaption>管理者のマイページです。</figcaption><ol class="leg"><li><span>自分の<b>名前と権限</b>の表示です。</span></li>
+<li><span><b>ユーザー名</b>を変えます。これまでの書き込みも、新しい名前に引き継がれます。</span></li>
+<li><span><b>パスワード</b>を変えます。</span></li>
+<li><span>この端末の<b>「記憶」を消し</b>ます。共用のパソコンでは、終わったときに押します。</span></li>
+<li><span>新しい<b>ユーザーを追加</b>します。ユーザー名と、最初のパスワード（6文字以上）を決めます。</span></li>
+<li><span>ユーザーごとに、<b>参加するプロジェクトと権限</b>を選び、パスワードを付け直せます。</span></li>
+<li><span>自動で作られた<b>バックアップ</b>の一覧です。ダウンロードできます。</span></li>
+<li><span><b>今すぐバックアップ</b>を作ります。</span></li></ol></figure>
+<div class="note"><b class="t">最初のパスワード</b>追加したユーザーが初めてログインすると、マイページが開き、パスワードの変更を求められます。最初のパスワードは、本人にだけ伝えます。</div>
+<h3>権限を決める</h3>
+<p>権限は、<b>プロジェクト</b>と<b>シナリオ</b>の2段階で決めます。プロジェクトの権限は、そのプロジェクトのシナリオの初期値になります。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/14-perm-project.webp" width="1920" height="1140" alt="ユーザーごとに参加と権限を選ぶダイアログ" loading="lazy"></button><figcaption>プロジェクトの権限のダイアログです。</figcaption><ol class="leg"><li><span>ユーザーごとに、「参加しない」「閲覧のみ」「閲覧＋メモ」「編集可」から選びます。変更はその場で保存されます。</span></li></ol></figure>
+<p>シナリオごとに、権限を変えることもできます。たとえば、「この人は本編は編集できるが、番外編は見せない」といった指定です。</p>
+<figure class="mid"><button class="shot" data-zoom type="button"><img src="img/13-perm-scenario.webp" width="1920" height="1140" alt="ユーザーごとの権限とPDF出力の可否を選ぶ" loading="lazy"></button><figcaption>シナリオごとの権限のダイアログです。</figcaption><ol class="leg"><li><span>ユーザーごとのカードです。</span></li>
+<li><span>このシナリオの権限を、「プロジェクトに合わせる」「閲覧不可」「閲覧のみ」「閲覧＋メモ」「編集可」から選びます。</span></li>
+<li><span>このシナリオを<b>PDFにしてよいか</b>を決めます。</span></li></ol></figure>
+<div class="note"><b class="t">「閲覧不可」にしたシナリオ</b>その人には、プロジェクトページにも、章の一覧にも、PDFにも、設定資料にも出ません。見られるシナリオが1つもなくなると、そのプロジェクト自体が一覧から消えます。</div>
+<p>閲覧のみの人には、こう見えます。</p>
+<figure><button class="shot" data-zoom type="button"><img src="img/04-project-viewer.webp" width="1752" height="840" alt="シナリオに閲覧のみの表示があり、PDFのボタンが付いている" loading="lazy"></button><figcaption>閲覧のみの人のプロジェクトページです。</figcaption><ol class="leg"><li><span>自分の<b>権限</b>の表示です。</span></li>
+<li><span>PDF出力が許可されているシナリオでは、PDFのボタンが使えます。</span></li></ol></figure>
+<h3>バックアップ</h3>
+<ul>
+<li>ツールが動いている間、<b>毎日1回</b>、全プロジェクトとアカウントの情報が、zipで自動保存されます。新しい<b>7つ</b>だけが残り、古いものは自動で消えます。</li>
+<li>パソコンを使わない日は、作られません。日数ではなく、世代の数で7つ残ります。</li>
+<li>戻したいときは、zipをダウンロードして展開し、<code>projects</code> フォルダを置き換えます。</li>
+<li>保存場所は、<code>scenario-data/.local/backups</code> です。</li>
+</ul>
+</section>
+
+<section id="faq">
+<h2>困ったとき</h2>
+<details class="qa"><summary>プロジェクトやシナリオが見えません</summary><div class="a">管理者が、あなたに見せない設定にしている可能性があります。必要なときは、管理者に権限を相談してください。</div></details>
+<details class="qa"><summary>書き込もうとすると「閲覧のみ」と出ます</summary><div class="a">そのシナリオに、書き込みの権限がありません。管理者に、「閲覧＋メモ」か「編集可」にしてもらいます。</div></details>
+<details class="qa"><summary>章を移したり複製したりできません</summary><div class="a">元と移し先の、両方のシナリオで「編集可」の権限が必要です。「編集可」でないシナリオには、章を入れられません。</div></details>
+<details class="qa"><summary>話者を指定したのに、印鑑が出ません</summary><div class="a">右のパネルの「🖋 印鑑・マーカー設定」で、「印鑑を表示する」がオンか確かめます。また、同じ行（縦書きは同じ列）に別の話者が続くと、最初のセリフの印鑑だけが入ります。</div></details>
+<details class="qa"><summary>セリフの黄色いマーカーをなくしたい</summary><div class="a">「🖋 印鑑・マーカー設定」で、「セリフに色マーカーを引く」のチェックを外します。みんなの標準にするときは、編集権限のある人が「プロジェクトの標準にする」を押します。</div></details>
+<details class="qa"><summary>PDFに背景や印鑑の色が出ません</summary><div class="a">印刷の画面で、「背景のグラフィック」をオンにします。余白は「なし」にします。</div></details>
+<details class="qa"><summary>他の人が書いた内容が表示されません</summary><div class="a">操作がしばらくないときに、自動で反映されます。すぐ見たいときは、上の「🔄」を押します。右のパネルの「書き込みの表示」で、その人のチェックが外れていないかも確かめます。</div></details>
+<details class="qa"><summary>本文を直したら、書き込みの位置がずれました</summary><div class="a">書き込みは、ページの上の位置で保存されています。本文の長さが変わって、ページの区切りが動くと、ずれることがあります。大きく直すときは、直してから書き込むのがおすすめです。</div></details>
+<details class="qa"><summary>別の端末から開けません</summary><div class="a">ツールを動かしているパソコンと、同じネットワークにいるかを確かめます。Windowsでは、ファイアウォールで、このアプリの通信を許可します。</div></details>
+<details class="qa"><summary>パスワードを忘れました</summary><div class="a">管理者に、新しいパスワードを付け直してもらいます。管理者本人が忘れたときは、起動のコマンドに <code>--admin-password 新しいパスワード</code> を付けます。</div></details>
+</section>
+
+<section id="keys">
+<h2>キーボードショートカット</h2>
+<p>パソコンで使うときの、おもなキーです。道具のキーは、道具箱のアイコンの右下にも出ています。</p>
+<div class="tw"><table>
+<tr><th>キー</th><th>はたらき</th></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>ひとつ前に戻す</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>やり直し</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd></td><td>選んだ図形のコピー・切り取り・貼り付け（画像をコピーしているときの <kbd>Ctrl</kbd>+<kbd>V</kbd> は、画像を貼る）</td></tr>
+<tr><td><kbd>Delete</kbd></td><td>選んだ図形を消す</td></tr>
+<tr><td>矢印キー / <kbd>Shift</kbd>+矢印キー</td><td>選んだ図形を、1ピクセル / 10ピクセルずつ動かす</td></tr>
+<tr><td><kbd>Enter</kbd> / <kbd>Esc</kbd></td><td>折れ線を確定する / やめる</td></tr>
+<tr><td><kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>「1ページずつ」の表示で、前後のページへ</td></tr>
+</table></div>
+<p>道具のキーは、「道具の一覧」の表にまとめています。</p>
+</section>
+<div class="foot">演出依頼資料集 使い方ガイド</div>
+
+</main></div>
+<div id="zoom" hidden role="dialog" aria-modal="true" aria-label="画像の拡大"><div class="bar"><span id="zcap"></span><button id="zfit" type="button">原寸で見る</button><button id="zcl" type="button">閉じる</button></div><div class="view"><img id="zimg" alt=""></div></div>
+<script>
+(()=>{const z=document.getElementById('zoom'),zi=document.getElementById('zimg'),zc=document.getElementById('zcap'),zf=document.getElementById('zfit');let last=null;
+const open=b=>{const i=b.querySelector('img');last=b;zi.src=i.currentSrc||i.src;zi.alt=i.alt;zc.textContent=i.alt;zi.style.setProperty('--nat',i.naturalWidth+'px');z.classList.remove('full');zf.textContent='原寸で見る';z.hidden=false;document.documentElement.style.overflow='hidden';document.getElementById('zcl').focus()};
+const close=()=>{z.hidden=true;document.documentElement.style.overflow='';if(last)last.focus()};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-zoom]');if(b)open(b)});
+document.getElementById('zcl').onclick=close;zf.onclick=()=>{z.classList.toggle('full');zf.textContent=z.classList.contains('full')?'幅に合わせる':'原寸で見る'};
+z.addEventListener('click',e=>{if(e.target===z||e.target.classList.contains('view'))close()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!z.hidden)close()});
+const links=[...document.querySelectorAll('.toc a,.tocm a')],map={};links.forEach(a=>{(map[a.getAttribute('href').slice(1)]??=[]).push(a)});
+const secs=[...document.querySelectorAll('main section')];
+const set=id=>links.forEach(a=>a.setAttribute('aria-current',a.getAttribute('href')==='#'+id?'true':'false'));
+if('IntersectionObserver' in window){const vis=new Map();const io=new IntersectionObserver(es=>{es.forEach(e=>vis.set(e.target.id,e.isIntersecting?e.boundingClientRect.top:null));let best=null;for(const[i,t]of vis){if(t!==null&&(best===null||t<vis.get(best)))best=i}
+ if(best)set(best)},{rootMargin:'0px 0px -65% 0px'});secs.forEach(s=>io.observe(s))}
+set('top');
+document.querySelectorAll('.tocm a').forEach(a=>a.addEventListener('click',()=>{a.closest('details').open=false}));
+})();
+</script>
+</body></html>
