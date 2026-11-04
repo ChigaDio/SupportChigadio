@@ -104,6 +104,7 @@ jobs:
           for tool_dir in "$ROOT"/*; do
             [ -d "$tool_dir" ] || continue
             tool_name="$(basename "$tool_dir")"
+
             # Find Python entry point.
             py_script=""
             for candidate in \
@@ -132,19 +133,21 @@ jobs:
               echo "Skipping $tool_name: no Python entry point found"
               continue
             fi
+
             tool_temp="$TEMP_ROOT/$tool_name"
             dist_dir="$tool_temp/dist"
             work_dir="$tool_temp/work"
             spec_dir="$tool_temp/spec"
             mkdir -p "$dist_dir" "$work_dir" "$spec_dir"
+
             # Bundle non-Python resources (index.html, static/, templates/ ...).
-            # Previous build outputs (macos-*, *.zip) must NOT be bundled.
+            # Previous build outputs (macos-*, *.zip, launchers) must NOT be bundled.
             add_data=()
             for item in "$tool_dir"/*; do
               [ -e "$item" ] || continue
               base="$(basename "$item")"
               case "$base" in
-                *.py|*.pyc|*.app|*.exe|*.sh|*.bat|*.spec|*.zip|macos-*|requirements.txt|__pycache__|.build_*)
+                *.py|*.pyc|*.app|*.exe|*.sh|*.command|*.bat|*.spec|*.zip|macos-*|requirements.txt|__pycache__|.build_*)
                   continue
                   ;;
               esac
@@ -154,11 +157,13 @@ jobs:
                 add_data+=(--add-data "$item:.")
               fi
             done
+
             echo "========================================"
             echo "Building macOS app ($ARCH): $tool_name"
             echo "Entry point: $py_script"
             echo "Data args: ${add_data[*]-}"
             echo "========================================"
+
             python -m PyInstaller \
               --noconfirm \
               --clean \
@@ -170,6 +175,7 @@ jobs:
               --windowed \
               ${add_data[@]+"${add_data[@]}"} \
               "$py_script"
+
             built_app="$dist_dir/$tool_name.app"
             if [ ! -d "$built_app" ]; then
               echo "::error::App bundle was not generated: $built_app"
@@ -179,6 +185,7 @@ jobs:
               echo "::error::Invalid app bundle: $built_app"
               exit 1
             fi
+
             # Verify the executable really is built for this architecture.
             app_exe="$built_app/Contents/MacOS/$tool_name"
             if [ ! -x "$app_exe" ]; then
@@ -191,9 +198,11 @@ jobs:
               echo "::error::Architecture mismatch: expected $ARCH, got $archs"
               exit 1
             fi
+
             # Ad-hoc sign the whole bundle (required on Apple Silicon).
             codesign --force --deep --sign - "$built_app"
             codesign --verify --deep --strict --verbose=2 "$built_app"
+
             # Save into an architecture folder as a zip made by ditto,
             # which keeps permissions, symlinks and the signature intact.
             out_dir="$tool_dir/macos-$ARCH"
@@ -206,23 +215,97 @@ jobs:
               exit 1
             fi
             ls -lh "$out_dir/$zip_name"
-            # Remove the old un-zipped bundle and old launcher from the repo.
-            rm -rf "$tool_dir/$tool_name.app" "$tool_dir/run_${tool_name}.sh"
-            # Generate the launcher shell script (inside the arch folder).
-            launcher="$out_dir/run_${tool_name}.sh"
-            cat > "$launcher" <<'LAUNCHER_EOF'
+
+            # Remove the old un-zipped bundle and old launchers from the repo.
+            rm -rf "$tool_dir/$tool_name.app"
+            rm -f "$tool_dir/run_${tool_name}.sh" "$tool_dir/run_${tool_name}.command"
+
+            # Generate the launcher in the TOOL FOLDER (the parent of
+            # macos-arm64 / macos-x86_64), not inside the arch folder.
+            # The content does not depend on $ARCH (it detects the Mac's
+            # architecture at run time), so the arm64 and x86_64 jobs
+            # produce byte-identical files and never conflict on push.
+            launcher_sh="$tool_dir/run_${tool_name}.sh"
+            launcher_cmd="$tool_dir/run_${tool_name}.command"
+            cat > "$launcher_sh" <<'LAUNCHER_EOF'
           #!/bin/bash
-          # Auto-generated launcher for __TOOL__ (macOS __ARCH__)
+          # Auto-generated launcher for __TOOL__ (macOS)
+          # Lives in the tool folder (parent of macos-arm64 / macos-x86_64).
+          # 1) picks the zip that matches this Mac
+          # 2) extracts it and moves the .app into this folder
+          # 3) clears the quarantine flag / re-signs so macOS does not ask
+          # 4) installs requirements.txt (if any) and runs the app
+          TOOL="__TOOL__"
           DIR="$(cd "$(dirname "$0")" && pwd)"
-          APP="$DIR/__TOOL__.app"
-          ZIP="$DIR/__TOOL__-macos-__ARCH__.zip"
-          # Unzip next to this script if the app has not been extracted yet.
-          if [ ! -d "$APP" ] && [ -f "$ZIP" ]; then
-            ditto -x -k "$ZIP" "$DIR"
+          cd "$DIR" || exit 1
+          APP="$DIR/$TOOL.app"
+          STAMP="$DIR/.$TOOL.extracted"
+
+          # Apple Silicon prefers arm64 (x86_64 via Rosetta as fallback).
+          # Intel Macs can only run x86_64.
+          if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+            ARCH_LIST="arm64 x86_64"
+          else
+            ARCH_LIST="x86_64"
           fi
+          ZIP=""
+          for a in $ARCH_LIST; do
+            cand="$DIR/macos-$a/$TOOL-macos-$a.zip"
+            if [ -f "$cand" ]; then
+              ZIP="$cand"
+              break
+            fi
+          done
+
+          # Clear quarantine on everything in this folder first
+          # (zip downloaded from a browser carries the flag).
+          xattr -dr com.apple.quarantine "$DIR" 2>/dev/null || true
+
+          NEED_SIGN=""
+          if [ -n "$ZIP" ]; then
+            # Extract when the app is missing, the zip changed or is newer
+            # than the last extraction, or the architecture differs.
+            if [ ! -d "$APP" ] || [ ! -f "$STAMP" ] \
+              || [ "$(cat "$STAMP" 2>/dev/null)" != "$ZIP" ] \
+              || [ "$ZIP" -nt "$STAMP" ]; then
+              echo "Extracting $(basename "$ZIP") ..."
+              TMP="$(mktemp -d "$DIR/.extract.XXXXXX")" || exit 1
+              if ! ditto -x -k "$ZIP" "$TMP"; then
+                echo "Error: failed to extract $ZIP"
+                rm -rf "$TMP"
+                read -r -p "Press Enter to close..."
+                exit 1
+              fi
+              if [ ! -d "$TMP/$TOOL.app" ]; then
+                echo "Error: $TOOL.app not found in $ZIP"
+                rm -rf "$TMP"
+                read -r -p "Press Enter to close..."
+                exit 1
+              fi
+              # Move the extracted app into the tool folder (replace old one).
+              rm -rf "$APP"
+              mv "$TMP/$TOOL.app" "$APP"
+              rm -rf "$TMP"
+              echo "$ZIP" > "$STAMP"
+              NEED_SIGN=1
+            fi
+          elif [ ! -d "$APP" ]; then
+            echo "Error: no zip found in macos-arm64 / macos-x86_64 and no $TOOL.app here."
+            read -r -p "Press Enter to close..."
+            exit 1
+          fi
+
+          # Remove quarantine / extended attributes from the app so that
+          # Gatekeeper does not show "unidentified developer" or "damaged".
           xattr -cr "$APP" 2>/dev/null || true
+          chmod +x "$APP/Contents/MacOS/$TOOL" 2>/dev/null || true
+          # Re-sign ad hoc on this Mac after a fresh extraction.
+          if [ -n "$NEED_SIGN" ]; then
+            codesign --force --deep --sign - "$APP" 2>/dev/null || true
+          fi
+
           # Install requirements.txt (tool folder) if it exists.
-          REQ="$DIR/../requirements.txt"
+          REQ="$DIR/requirements.txt"
           if [ -f "$REQ" ]; then
             PY="$(command -v python3 || command -v python || true)"
             if [ -n "$PY" ]; then
@@ -233,17 +316,23 @@ jobs:
               echo "Warning: Python not found; skipping requirements install"
             fi
           fi
+
           # Run the binary inside the bundle directly so logs stay in this
           # terminal and Ctrl+C / closing the terminal stops the server.
-          "$APP/Contents/MacOS/__TOOL__"
+          "$APP/Contents/MacOS/$TOOL"
           code=$?
           echo
           echo "Exited with code $code."
           read -r -p "Press Enter to close..."
           LAUNCHER_EOF
-            sed -i '' -e "s/__TOOL__/${tool_name}/g" -e "s/__ARCH__/${ARCH}/g" "$launcher"
-            chmod +x "$launcher"
-            echo "Created: $launcher"
+            sed -i '' -e "s/__TOOL__/${tool_name}/g" "$launcher_sh"
+            # .command opens in Terminal when double-clicked in Finder
+            # (a .sh just opens in an editor). Same content.
+            cp "$launcher_sh" "$launcher_cmd"
+            chmod +x "$launcher_sh" "$launcher_cmd"
+            echo "Created: $launcher_sh"
+            echo "Created: $launcher_cmd"
+
             built_count=$((built_count + 1))
           done
           if [ "$built_count" -eq 0 ]; then
@@ -269,16 +358,22 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A -- detailsSupportTool
+
           # Make sure launcher scripts keep the executable bit in git.
-          while IFS= read -r sh_file; do
-            git update-index --chmod=+x -- "$sh_file"
-          done < <(find detailsSupportTool -maxdepth 3 -type f -name "run_*.sh" -print)
+          while IFS= read -r launcher_file; do
+            git update-index --chmod=+x -- "$launcher_file"
+          done < <(
+            find detailsSupportTool -maxdepth 3 -type f \
+              \( -name "run_*.sh" -o -name "run_*.command" \) -print
+          )
+
           if git diff --cached --quiet; then
             echo "No macOS changes to commit"
           else
             git diff --cached --stat
             git commit -m "Build macOS DetailsSupport apps ($ARCH)"
           fi
+
           # The arm64 and x86_64 jobs push to the same branch, so retry.
           pushed=0
           for attempt in 1 2 3 4 5; do
@@ -399,6 +494,7 @@ jobs:
             -Force `
             -Path $tempRoot | Out-Null
           $builtCount = 0
+
           # Launcher template (.bat). __TOOL__ is replaced per tool.
           $batTemplate = @(
             '@echo off',
@@ -425,10 +521,12 @@ jobs:
             'pause',
             'endlocal'
           )
+
           Get-ChildItem -Path $root -Directory | ForEach-Object {
             $toolDir = $_.FullName
             $toolName = $_.Name
             $script = $null
+
             # Prefer main.py, then server.py.
             foreach ($name in @("main.py", "server.py")) {
               $candidate = Join-Path $toolDir $name
@@ -437,6 +535,7 @@ jobs:
                 break
               }
             }
+
             # Fall back to another Python file in the tool folder.
             if (-not $script) {
               $script = Get-ChildItem `
@@ -453,6 +552,7 @@ jobs:
               Write-Host "Skipping ${toolName}: no Python entry point found"
               return
             }
+
             $toolTemp = Join-Path $tempRoot $toolName
             $distDir = Join-Path $toolTemp "dist"
             $workDir = Join-Path $toolTemp "work"
@@ -461,15 +561,17 @@ jobs:
               -ItemType Directory `
               -Force `
               -Path $distDir, $workDir, $specDir | Out-Null
+
             # Bundle non-Python resources (index.html, static/, templates/ ...).
-            # macOS outputs (macos-*, *.zip) must NOT be bundled.
+            # macOS outputs (macos-*, *.zip, *.command) must NOT be bundled.
             $addData = @()
             Get-ChildItem -LiteralPath $toolDir -Force |
               Where-Object {
-                $_.Name -notmatch '\.(py|pyc|app|exe|sh|bat|spec|zip)$' -and
+                $_.Name -notmatch '\.(py|pyc|app|exe|sh|command|bat|spec|zip|extracted)$' -and
                 $_.Name -ne 'requirements.txt' -and
                 $_.Name -ne '__pycache__' -and
                 $_.Name -notlike '.build_*' -and
+                $_.Name -notlike '.extract.*' -and
                 $_.Name -notlike 'macos-*'
               } |
               ForEach-Object {
@@ -481,11 +583,13 @@ jobs:
                   $addData += "$($_.FullName);."
                 }
               }
+
             Write-Host "========================================"
             Write-Host "Building Windows executable: $toolName"
             Write-Host "Entry point: $($script.FullName)"
             Write-Host "Data args: $($addData -join ' ')"
             Write-Host "========================================"
+
             # No --windowed: keep the console so server logs are visible.
             python -m PyInstaller `
               --noconfirm `
@@ -501,6 +605,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               throw "PyInstaller failed for $toolName"
             }
+
             $generatedExe = Join-Path $distDir "$toolName.exe"
             $targetExe = Join-Path $toolDir "$toolName.exe"
             if (-not (Test-Path -LiteralPath $generatedExe -PathType Leaf)) {
@@ -511,6 +616,7 @@ jobs:
               -Destination $targetExe `
               -Force
             Write-Host "Created: $targetExe"
+
             # Generate the launcher batch file (CRLF line endings).
             $batPath = Join-Path $toolDir "run_$toolName.bat"
             $batBody = ($batTemplate -join "`r`n") -replace '__TOOL__', $toolName
@@ -522,6 +628,7 @@ jobs:
             Write-Host "Created: $batPath"
             $builtCount++
           }
+
           if ($builtCount -eq 0) {
             throw "No Windows executables were built."
           }
