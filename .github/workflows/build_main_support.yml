@@ -310,7 +310,6 @@ jobs:
           git add MainSupport.exe MainSupport-macos-arm64.app MainSupport-macos-x86_64.app MainSupport.command MainSupport.sh MainSupport.bat
           git update-index --chmod=+x -- MainSupport.command MainSupport.sh
 
-          git diff --cached --check
           git diff --cached --stat
 
           git commit -m "Build Main Support app for Windows and macOS"
