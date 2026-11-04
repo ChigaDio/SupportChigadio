@@ -1,4 +1,5 @@
 
+
 name: Build Main Support App
 
 on:
@@ -18,12 +19,10 @@ jobs:
         with:
           ref: main
 
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
 
       - name: Install Python dependencies
         run: |
@@ -76,19 +75,21 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install Flask psutil websockets pyinstaller
 
-      - name: Build macOS app
+      - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
-          test -d "dist/MainSupport.app"
-          codesign --force --deep --sign - "dist/MainSupport.app"
-          codesign --verify --deep --strict "dist/MainSupport.app"
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
 
-      - name: Upload ARM64 app
+          test -f "dist/MainSupport"
+          chmod +x "dist/MainSupport"
+          codesign --force --sign - "dist/MainSupport"
+          codesign --verify --strict "dist/MainSupport"
+
+      - name: Upload ARM64 executable
         uses: actions/upload-artifact@v4
         with:
           name: main-support-macos-arm64
-          path: main-support/dist/MainSupport.app
+          path: main-support/dist/MainSupport
           if-no-files-found: error
           compression-level: 0
 
@@ -112,8 +113,6 @@ jobs:
             exit 1
           }
 
-
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -124,19 +123,21 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install Flask psutil websockets pyinstaller
 
-      - name: Build macOS app
+      - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
-          test -d "dist/MainSupport.app"
-          codesign --force --deep --sign - "dist/MainSupport.app"
-          codesign --verify --deep --strict "dist/MainSupport.app"
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
 
-      - name: Upload ARM64 fallback app
+          test -f "dist/MainSupport"
+          chmod +x "dist/MainSupport"
+          codesign --force --sign - "dist/MainSupport"
+          codesign --verify --strict "dist/MainSupport"
+
+      - name: Upload ARM64 fallback executable
         uses: actions/upload-artifact@v4
         with:
           name: main-support-macos-arm64
-          path: main-support/dist/MainSupport.app
+          path: main-support/dist/MainSupport
           if-no-files-found: error
           compression-level: 0
 
@@ -163,25 +164,26 @@ jobs:
         with:
           python-version: '3.11'
 
-
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install Flask psutil websockets pyinstaller
 
-      - name: Build macOS app
+      - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
-          test -d "dist/MainSupport.app"
-          codesign --force --deep --sign - "dist/MainSupport.app"
-          codesign --verify --deep --strict "dist/MainSupport.app"
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --add-data "build:build" --collect-submodules pythonSrc app.py
 
-      - name: Upload x64 app
+          test -f "dist/MainSupport"
+          chmod +x "dist/MainSupport"
+          codesign --force --sign - "dist/MainSupport"
+          codesign --verify --strict "dist/MainSupport"
+
+      - name: Upload x64 executable
         uses: actions/upload-artifact@v4
         with:
           name: main-support-macos-x86_64
-          path: main-support/dist/MainSupport.app
+          path: main-support/dist/MainSupport
           if-no-files-found: error
           compression-level: 0
 
@@ -213,13 +215,13 @@ jobs:
           name: main-support-windows
           path: release/windows
 
-      - name: Download macOS ARM64 app
+      - name: Download macOS ARM64 executable
         uses: actions/download-artifact@v4
         with:
           name: main-support-macos-arm64
           path: release/macos-arm64
 
-      - name: Download macOS x64 app
+      - name: Download macOS x64 executable
         uses: actions/download-artifact@v4
         with:
           name: main-support-macos-x86_64
@@ -231,19 +233,21 @@ jobs:
           set -euo pipefail
 
           test -f release/windows/MainSupport.exe
-          test -d release/macos-arm64/Contents
-          test -d release/macos-x86_64/Contents
+          test -f release/macos-arm64/MainSupport
+          test -f release/macos-x86_64/MainSupport
 
-          rm -rf MainSupport-macos-arm64.app MainSupport-macos-x86_64.app
+          # 古い.app形式の成果物を削除
+          rm -rf MainSupport-macos-arm64.app
+          rm -rf MainSupport-macos-x86_64.app
 
+          # 実行ファイルをリポジトリ直下へ配置
           mv release/windows/MainSupport.exe ./MainSupport.exe
+          mv release/macos-arm64/MainSupport ./MainSupport-macos-arm64
+          mv release/macos-x86_64/MainSupport ./MainSupport-macos-x86_64
 
-          mkdir -p MainSupport-macos-arm64.app
-          mkdir -p MainSupport-macos-x86_64.app
+          chmod +x MainSupport-macos-arm64 MainSupport-macos-x86_64
 
-          mv release/macos-arm64/Contents MainSupport-macos-arm64.app/Contents
-          mv release/macos-x86_64/Contents MainSupport-macos-x86_64.app/Contents
-
+          # macOS起動スクリプト
           cat > MainSupport.sh <<'LAUNCHER'
           #!/bin/bash
           set -e
@@ -259,30 +263,31 @@ jobs:
           MACHINE="$(uname -m)"
 
           if [ "$MACHINE" = "arm64" ]; then
-            APP="$ROOT/MainSupport-macos-arm64.app"
+            EXECUTABLE="$ROOT/MainSupport-macos-arm64"
           elif [ "$MACHINE" = "x86_64" ]; then
-            APP="$ROOT/MainSupport-macos-x86_64.app"
+            EXECUTABLE="$ROOT/MainSupport-macos-x86_64"
           else
             echo "Unsupported architecture: $MACHINE"
             exit 1
           fi
 
-          if [ ! -d "$APP" ]; then
-            echo "MainSupport app for $MACHINE was not found."
+          if [ ! -f "$EXECUTABLE" ]; then
+            echo "MainSupport executable for $MACHINE was not found."
             read -r -p "Press Enter to close..."
             exit 1
           fi
 
-          xattr -cr "$APP" 2>/dev/null || true
-          chmod +x "$APP/Contents/MacOS/MainSupport" 2>/dev/null || true
-          codesign --force --deep --sign - "$APP" 2>/dev/null || true
+          xattr -cr "$EXECUTABLE" 2>/dev/null || true
+          chmod +x "$EXECUTABLE" 2>/dev/null || true
+          codesign --force --sign - "$EXECUTABLE" 2>/dev/null || true
 
-          "$APP/Contents/MacOS/MainSupport"
+          "$EXECUTABLE"
           LAUNCHER
 
           cp MainSupport.sh MainSupport.command
           chmod +x MainSupport.sh MainSupport.command
 
+          # Windows起動スクリプト
           cat > MainSupport.bat <<'LAUNCHER'
           @echo off
           setlocal
@@ -299,6 +304,7 @@ jobs:
           "%SUPPORT_ROOT%MainSupport.exe"
           pause
           LAUNCHER
+
       - name: Commit and push to main
         shell: bash
         run: |
@@ -307,10 +313,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add MainSupport.exe MainSupport-macos-arm64.app MainSupport-macos-x86_64.app MainSupport.command MainSupport.sh MainSupport.bat
+          git add -A -- \
+            MainSupport.exe \
+            MainSupport-macos-arm64 \
+            MainSupport-macos-x86_64 \
+            MainSupport-macos-arm64.app \
+            MainSupport-macos-x86_64.app \
+            MainSupport.command \
+            MainSupport.sh \
+            MainSupport.bat
+
           git update-index --chmod=+x -- MainSupport.command MainSupport.sh
 
           git diff --cached --stat
 
-          git commit -m "Build Main Support app for Windows and macOS"
+          git commit -m "Build Main Support executable for Windows and macOS"
           git push origin HEAD:main
+
