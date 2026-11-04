@@ -7,7 +7,7 @@ name: Build and Release
 #
 # ビルド成果物は
 #   - GitHub Release に添付
-#   - SupportChigadio リポジトリ本体の releases/ にも commit & push
+#   - SupportChigadio リポジトリのルート直下にも commit & push
 # の両方に反映される。
 on:
   push:
@@ -27,7 +27,6 @@ env:
   APP_NAME: SupportChigadio
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
-  COMMIT_DIR: releases # zip をリポジトリ本体に置くフォルダ（リポジトリルートからの相対パス）
 
 jobs:
   build:
@@ -206,6 +205,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
+    if: ${{ !cancelled() }} # buildが一部失敗しても、成功した分だけでリリースする
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -259,6 +259,7 @@ jobs:
   commit-to-repo:
     name: Commit & Push to repository
     needs: build
+    if: ${{ !cancelled() }} # buildが一部失敗しても、成功した分だけ commit する
     runs-on: ubuntu-latest
     concurrency:
       group: commit-to-repo
@@ -288,15 +289,119 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
 
-          # 常に最新版のみを置く（古いzipは削除して置き換え）
-          mkdir -p "$COMMIT_DIR"
-          rm -f "$COMMIT_DIR"/*.zip
-          cp artifacts/*.zip "$COMMIT_DIR/"
-          echo "$TAG" > "$COMMIT_DIR/VERSION"
+          # リポジトリのルート直下に置く（同名のzipを上書き。ビルドに失敗したOSの分は前回のzipが残る）
+          cp artifacts/*.zip ./
+          echo "$TAG" > VERSION
+
+          # ---- 解凍して起動するランチャー（ルート直下に置く）----
+          #   Windows : run_<APP>.bat
+          #   macOS   : run_<APP>.command（ダブルクリック） / run_<APP>.sh（ターミナル用・同じ内容）
+          # 初回、または VERSION が変わったときだけ zip を解凍し、そのまま起動する。
+          # 解凍先は zip と同じ場所（<APP>-<suffix>/main-support/）。data/ は上書きされず残る。
+          BAT="run_${APP_NAME}.bat"
+          SH="run_${APP_NAME}.sh"
+          CMD="run_${APP_NAME}.command"
+
+          cat > "$BAT" <<'BAT_EOF'
+          @echo off
+          setlocal
+          rem Auto-generated launcher for __APP__ (Windows)
+          rem Extracts the zip next to this file (first run / when VERSION changes), then starts the app.
+          cd /d "%~dp0"
+
+          set "PKG=__APP__-windows-x64"
+          set "ZIP=%PKG%.zip"
+          set "EXE=%~dp0%PKG%\main-support\__APP__.exe"
+
+          if not exist "%ZIP%" (
+            echo Error: %ZIP% not found.
+            pause
+            exit /b 1
+          )
+
+          set "NEWVER=unknown"
+          if exist "VERSION" set /p NEWVER=<"VERSION"
+          set "OLDVER="
+          if exist "%PKG%\.version" set /p OLDVER=<"%PKG%\.version"
+
+          if not exist "%EXE%" goto extract
+          if not "%NEWVER%"=="%OLDVER%" goto extract
+          goto run
+
+          :extract
+          echo Extracting %ZIP% ...
+          tar -xf "%ZIP%" >nul 2>&1
+          if errorlevel 1 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '.' -Force"
+          if errorlevel 1 (
+            echo Extract failed.
+            pause
+            exit /b 1
+          )
+          > "%PKG%\.version" echo %NEWVER%
+
+          :run
+          cd /d "%~dp0%PKG%\main-support"
+          "%EXE%"
+          echo.
+          echo Exited with code %errorlevel%.
+          pause
+          endlocal
+          BAT_EOF
+          sed -i "s/__APP__/${APP_NAME}/g" "$BAT"
+          sed -i 's/$/\r/' "$BAT"   # .bat は CRLF にする
+
+          cat > "$SH" <<'SH_EOF'
+          #!/bin/bash
+          # Auto-generated launcher for __APP__ (macOS)
+          # Extracts the zip that matches this Mac (first run / when VERSION changes),
+          # then runs the packaged launcher (which clears quarantine and signs the binary).
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          cd "$DIR" || exit 1
+
+          # Apple Silicon (also when Terminal runs under Rosetta) -> arm64 build, otherwise Intel build
+          if [ "$(uname -m)" = "arm64" ] || [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+            SUFFIX="macos-arm64"
+          else
+            SUFFIX="macos-x64"
+          fi
+
+          PKG="__APP__-$SUFFIX"
+          ZIP="$DIR/$PKG.zip"
+          INNER="$DIR/$PKG/run___APP__.sh"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "Error: $ZIP not found."
+            read -r -p "Press Enter to close..."
+            exit 1
+          fi
+
+          NEWVER="unknown"
+          [ -f "$DIR/VERSION" ] && NEWVER="$(head -n 1 "$DIR/VERSION")"
+          OLDVER=""
+          [ -f "$DIR/$PKG/.version" ] && OLDVER="$(head -n 1 "$DIR/$PKG/.version")"
+
+          if [ ! -f "$INNER" ] || [ "$NEWVER" != "$OLDVER" ]; then
+            echo "Extracting $PKG.zip ..."
+            xattr -c "$ZIP" 2>/dev/null || true
+            if ! ditto -x -k "$ZIP" "$DIR"; then
+              echo "Extract failed."
+              read -r -p "Press Enter to close..."
+              exit 1
+            fi
+            echo "$NEWVER" > "$DIR/$PKG/.version"
+          fi
+
+          chmod +x "$INNER" 2>/dev/null || true
+          exec bash "$INNER"
+          SH_EOF
+          sed -i "s/__APP__/${APP_NAME}/g" "$SH"
+          cp "$SH" "$CMD"
+          chmod +x "$SH" "$CMD"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$COMMIT_DIR"
+          # zip・VERSION・ランチャーだけを追加する（他のファイルは触らない）
+          git add -- ./*.zip VERSION "$BAT" "$SH" "$CMD"
 
           if git diff --cached --quiet; then
             echo "変更なし。コミットをスキップします"
