@@ -15,7 +15,7 @@ if exist "%~dp0requirements.txt" (
   )
 )
 
-rem Run in this console so logs stay visible; closing it stops the server.
+rem Run in this console so logs stay visible.
 "%~dp0ScenarioToolKit.exe"
 echo.
 echo Exited with code %errorlevel%.
