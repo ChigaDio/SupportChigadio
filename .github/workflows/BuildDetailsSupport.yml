@@ -1,11 +1,12 @@
 
+
 name: Build all DetailsSupport tools into their tool folders
 
 on:
   workflow_dispatch:
     inputs:
       build_macos:
-        description: Build macOS app bundles
+        description: Build macOS executables
         required: false
         default: true
         type: boolean
@@ -52,7 +53,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           echo "Runner arch: $(uname -m) / expected: $ARCH"
+
           if [ "$(uname -m)" != "$ARCH" ]; then
             echo "::error::Runner architecture does not match matrix.arch"
             exit 1
@@ -67,13 +70,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install pyinstaller
 
           while IFS= read -r req; do
             [ -n "$req" ] || continue
+
             echo "Installing requirements from: $req"
             python -m pip install -r "$req"
+
           done < <(
             find detailsSupportTool \
               -type f \
@@ -86,14 +92,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           find detailsSupportTool \
             -depth \
             -type d \
             -name ".build_*" \
             -exec rm -rf {} +
 
-
-      - name: Build macOS applications
+      - name: Build macOS executables
         shell: bash
         run: |
           set -euo pipefail
@@ -117,18 +123,22 @@ jobs:
             for candidate in \
               "$tool_dir/main.py" \
               "$tool_dir/server.py"; do
+
               if [ -f "$candidate" ]; then
                 py_script="$candidate"
                 break
               fi
+
             done
 
             if [ -z "$py_script" ]; then
               while IFS= read -r candidate; do
                 [ -f "$candidate" ] || continue
                 [ "$(basename "$candidate")" = "__init__.py" ] && continue
+
                 py_script="$candidate"
                 break
+
               done < <(
                 find "$tool_dir" \
                   -maxdepth 1 \
@@ -170,10 +180,13 @@ jobs:
               else
                 add_data+=(--add-data "$item:.")
               fi
+
             done
 
+            executable_name="$tool_name-macos-$ARCH"
+
             echo "========================================"
-            echo "Building macOS app ($ARCH): $tool_name"
+            echo "Building macOS executable ($ARCH): $tool_name"
             echo "Entry point: $py_script"
             echo "Data args: ${add_data[*]-}"
             echo "========================================"
@@ -181,36 +194,26 @@ jobs:
             python -m PyInstaller \
               --noconfirm \
               --clean \
-              --name "$tool_name" \
+              --name "$executable_name" \
               --distpath "$dist_dir" \
               --workpath "$work_dir" \
               --specpath "$spec_dir" \
-              --onedir \
-              --windowed \
+              --onefile \
+              --console \
               ${add_data[@]+"${add_data[@]}"} \
               "$py_script"
 
-            built_app="$dist_dir/$tool_name.app"
+            built_exe="$dist_dir/$executable_name"
 
-            if [ ! -d "$built_app" ]; then
-              echo "::error::App bundle was not generated: $built_app"
+            if [ ! -f "$built_exe" ]; then
+              echo "::error::Executable was not generated: $built_exe"
               exit 1
             fi
 
-            if [ ! -f "$built_app/Contents/Info.plist" ]; then
-              echo "::error::Invalid app bundle: $built_app"
-              exit 1
-            fi
+            chmod +x "$built_exe"
 
             # Verify executable architecture.
-            app_exe="$built_app/Contents/MacOS/$tool_name"
-
-            if [ ! -x "$app_exe" ]; then
-              echo "::error::Executable missing or not executable: $app_exe"
-              exit 1
-            fi
-
-            archs="$(lipo -archs "$app_exe")"
+            archs="$(lipo -archs "$built_exe")"
 
             echo "Executable archs: $archs"
 
@@ -219,18 +222,18 @@ jobs:
               exit 1
             fi
 
-            # Ad-hoc sign the whole bundle.
-            codesign --force --deep --sign - "$built_app"
-            codesign --verify --deep --strict --verbose=2 "$built_app"
+            # Ad-hoc sign the executable.
+            codesign --force --sign - "$built_exe"
+            codesign --verify --strict --verbose=2 "$built_exe"
 
-            # Keep the existing ZIP output format.
+            # Keep the existing ZIP output format and location.
             out_dir="$tool_dir/macos-$ARCH"
             zip_name="$tool_name-macos-$ARCH.zip"
 
             rm -rf "$out_dir"
             mkdir -p "$out_dir"
 
-            ditto -c -k --keepParent "$built_app" "$out_dir/$zip_name"
+            ditto -c -k --keepParent "$built_exe" "$out_dir/$zip_name"
 
             if [ ! -s "$out_dir/$zip_name" ]; then
               echo "::error::Zip was not created: $out_dir/$zip_name"
@@ -239,8 +242,10 @@ jobs:
 
             ls -lh "$out_dir/$zip_name"
 
-            # Remove old extracted app and old launchers.
-            rm -rf "$tool_dir/$tool_name.app"
+            # Remove the old extracted executable for this architecture.
+            rm -f "$tool_dir/$executable_name"
+
+            # Remove old launchers before regenerating them.
             rm -f "$tool_dir/run_${tool_name}.sh"
             rm -f "$tool_dir/run_${tool_name}.command"
 
@@ -275,9 +280,8 @@ jobs:
             exit 1
           fi
 
-          APP="$TOOL_DIR/$TOOL_NAME.app"
-          APP_EXE="$APP/Contents/MacOS/$TOOL_NAME"
-
+          EXECUTABLE_NAME="$TOOL_NAME-macos-$ARCH"
+          EXECUTABLE="$TOOL_DIR/$EXECUTABLE_NAME"
           ZIP="$TOOL_DIR/macos-$ARCH/$TOOL_NAME-macos-$ARCH.zip"
 
           if [ ! -f "$ZIP" ]; then
@@ -287,42 +291,39 @@ jobs:
             exit 1
           fi
 
-          # Check whether an existing app supports this Mac architecture.
-          if [ -d "$APP" ] && [ -x "$APP_EXE" ]; then
-            EXISTING_ARCHS="$(lipo -archs "$APP_EXE" 2>/dev/null || true)"
+          # Check whether an existing executable supports this Mac architecture.
+          if [ -f "$EXECUTABLE" ] && [ -x "$EXECUTABLE" ]; then
+            EXISTING_ARCHS="$(lipo -archs "$EXECUTABLE" 2>/dev/null || true)"
 
             if ! echo "$EXISTING_ARCHS" | grep -qw "$ARCH"; then
-              echo "Existing app does not support $ARCH."
-              echo "Re-extracting the correct application..."
-              rm -rf "$APP"
+              echo "Existing executable does not support $ARCH."
+              echo "Re-extracting the correct executable..."
+              rm -f "$EXECUTABLE"
             fi
           else
-            rm -rf "$APP"
+            rm -f "$EXECUTABLE"
           fi
 
           # Extract the selected ZIP directly into the tool folder.
-          if [ ! -d "$APP" ]; then
+          if [ ! -f "$EXECUTABLE" ]; then
             echo "Extracting $TOOL_NAME for $ARCH..."
 
             ditto -x -k "$ZIP" "$TOOL_DIR"
 
-            if [ ! -d "$APP" ]; then
-              echo "Failed to extract application:"
-              echo "$APP"
+            if [ ! -f "$EXECUTABLE" ]; then
+              echo "Failed to extract executable:"
+              echo "$EXECUTABLE"
               read -r -p "Press Enter to close..."
               exit 1
             fi
           fi
 
-          if [ ! -x "$APP_EXE" ]; then
-            echo "Application executable was not found:"
-            echo "$APP_EXE"
-            read -r -p "Press Enter to close..."
-            exit 1
+          if [ ! -x "$EXECUTABLE" ]; then
+            chmod +x "$EXECUTABLE"
           fi
 
-          # Remove macOS quarantine attributes from the extracted app.
-          xattr -cr "$APP" 2>/dev/null || true
+          # Remove macOS quarantine attributes.
+          xattr -cr "$EXECUTABLE" 2>/dev/null || true
 
           # Install requirements.txt if available.
           REQ="$TOOL_DIR/requirements.txt"
@@ -340,7 +341,7 @@ jobs:
           fi
 
           # Run the application in this terminal.
-          "$APP_EXE"
+          "$EXECUTABLE"
           CODE=$?
 
           echo
@@ -369,12 +370,11 @@ jobs:
           done
 
           if [ "$built_count" -eq 0 ]; then
-            echo "::error::No macOS applications were built."
+            echo "::error::No macOS executables were built."
             exit 1
           fi
 
-          echo "Successfully built $built_count macOS applications ($ARCH)."
-
+          echo "Successfully built $built_count macOS executables ($ARCH)."
 
       # Existing ZIP artifact upload.
       - name: Upload macOS zips as artifact
@@ -397,8 +397,8 @@ jobs:
           git add -A -- detailsSupportTool
 
           # Keep launcher scripts executable.
-          while IFS= read -r sh_file; do
-            git update-index --chmod=+x -- "$sh_file"
+          while IFS= read -r launcher_file; do
+            git update-index --chmod=+x -- "$launcher_file"
           done < <(
             find detailsSupportTool \
               -maxdepth 4 \
@@ -411,7 +411,7 @@ jobs:
             echo "No macOS changes to commit"
           else
             git diff --cached --stat
-            git commit -m "Build macOS DetailsSupport apps ($ARCH)"
+            git commit -m "Build macOS DetailsSupport executables ($ARCH)"
           fi
 
           # ARM64 and x86_64 jobs push to the same branch.
