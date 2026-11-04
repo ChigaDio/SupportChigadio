@@ -24,11 +24,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Build React frontend
-        working-directory: main-support
-        run: |
-          npm ci
-          npm run build
 
       - name: Install Python dependencies
         run: |
@@ -70,13 +65,6 @@ jobs:
             echo "::error::Primary runner is not ARM64: $(uname -m)"
             exit 1
           }
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: main-support/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -124,23 +112,12 @@ jobs:
             exit 1
           }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: main-support/package-lock.json
+
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Build React frontend
-        working-directory: main-support
-        run: |
-          npm ci
-          npm run build
 
       - name: Install Python dependencies
         run: |
@@ -181,23 +158,11 @@ jobs:
             exit 1
           }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: main-support/package-lock.json
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Build React frontend
-        working-directory: main-support
-        run: |
-          npm ci
-          npm run build
 
       - name: Install Python dependencies
         run: |
