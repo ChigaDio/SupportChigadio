@@ -231,14 +231,18 @@ jobs:
           set -euo pipefail
 
           test -f release/windows/MainSupport.exe
-          test -d release/macos-arm64/MainSupport.app
-          test -d release/macos-x86_64/MainSupport.app
+          test -d release/macos-arm64/Contents
+          test -d release/macos-x86_64/Contents
 
           rm -rf MainSupport-macos-arm64.app MainSupport-macos-x86_64.app
 
           mv release/windows/MainSupport.exe ./MainSupport.exe
-          mv release/macos-arm64/MainSupport.app ./MainSupport-macos-arm64.app
-          mv release/macos-x86_64/MainSupport.app ./MainSupport-macos-x86_64.app
+
+          mkdir -p MainSupport-macos-arm64.app
+          mkdir -p MainSupport-macos-x86_64.app
+
+          mv release/macos-arm64/Contents MainSupport-macos-arm64.app/Contents
+          mv release/macos-x86_64/Contents MainSupport-macos-x86_64.app/Contents
 
           cat > MainSupport.sh <<'LAUNCHER'
           #!/bin/bash
@@ -295,7 +299,6 @@ jobs:
           "%SUPPORT_ROOT%MainSupport.exe"
           pause
           LAUNCHER
-
       - name: Commit and push to main
         shell: bash
         run: |
