@@ -4,6 +4,8 @@ python server.py [--data DIR] [--port 8765] [--no-browser] [--local-only] [--adm
 (1プロジェクト = 複数シナリオ、1シナリオ = 複数章。章ファイルの "sc" がシナリオIDです)
 バックアップは <DATA>/.local/backups/backup-YYYY-MM-DD.zip に毎日1つ作られ、新しい7日分だけ残ります。
 アカウント情報(パスワードのハッシュ等)は <DATA>/.local/auth.json (Git管理しない) に保存されます。
+ユーザーごとの設定(表示テーマ・表示設定・既読の記録・マイページの色)とアイコン画像は <DATA>/userdata/<ユーザー名>/ に保存されます。
+(ブラウザのローカルストレージは使いません。端末を替えても、同じユーザーなら同じ設定になります)
 """
 import argparse, datetime, hashlib, hmac, json, mimetypes, os, re, secrets, shutil, socket, sys, threading, time, traceback, webbrowser, zipfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -37,9 +39,12 @@ LOCAL = DATA / ".local"
 LOCAL.mkdir(exist_ok=True)
 ROOT = DATA / "projects"
 ROOT.mkdir(exist_ok=True)
+UD = DATA / "userdata"  # ユーザーごとの設定とアイコン
+UD.mkdir(exist_ok=True)
 TRASH = DATA / ".trash"
 BASE = Path(args.image_base).resolve() if args.image_base else None
 IMG_OK = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+AUD_OK = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".opus", ".webm")
 ROLES = ("view", "memo", "edit")  # 閲覧のみ / 閲覧+メモ / 編集可
 LOCK = threading.RLock()
 FAILS = {}
@@ -47,6 +52,11 @@ PID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 USER_RE = re.compile(r"^[^\s/\\:.~;,'\"<>|?*%&=+#]{1,32}$")
 REL_RE = re.compile(r"^(project\.json|(chapters|dictionary|scenarios)/[\w\-]+\.json|users/[^/\\]+/[\w\-]+\.json)$")
 SC_ROLES = ROLES + ("none",)  # シナリオ別の上書き: none=閲覧不可
+PREF_TOP = {"theme": ("auto", "light", "dark"), "side": ("0", "1"), "memoRule": ("0", "1"), "hero": dict}  # ユーザー設定のトップ項目
+PREF_PJ = ("look", "tm", "seen")  # プロジェクトごとの設定
+HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+AV_MAX = 700_000
+AV_TYPES = ((b"\x89PNG", "png", "image/png"), (b"\xff\xd8\xff", "jpg", "image/jpeg"), (b"GIF8", "gif", "image/gif"))
 BAK = LOCAL / "backups"
 BAK_KEEP = 7  # 日数(世代数)
 BAK_REFRESH = 6 * 3600  # 同じ日のバックアップを更新する最短間隔(秒)
@@ -77,6 +87,52 @@ def sha(t):
 def hpw(pw, salt=None):
     salt = salt or secrets.token_hex(16)
     return salt, hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), bytes.fromhex(salt), 200_000).hex()
+
+
+def prefs_get(user):
+    d = rj(UD / user / "prefs.json")
+    return d if isinstance(d, dict) else {}
+
+
+def prefs_patch(user, st):
+    """{"theme": "dark", "pj/<PID>/look": {...}|None} の形で部分更新する(None=その項目を消す)"""
+    if not isinstance(st, dict) or len(st) > 40:
+        return None
+    with LOCK:
+        p = prefs_get(user)
+        for k, v in st.items():
+            ks = str(k).split("/")
+            if len(ks) == 1 and ks[0] in PREF_TOP:
+                ok = PREF_TOP[ks[0]]
+                if v is None:
+                    p.pop(ks[0], None)
+                elif ks[0] == "hero":
+                    if isinstance(v, dict) and all(isinstance(v.get(c), str) and HEX_RE.match(v[c]) for c in ("c1", "c2")):
+                        p["hero"] = {"c1": v["c1"].lower(), "c2": v["c2"].lower()}
+                elif isinstance(ok, tuple) and v in ok:
+                    p[ks[0]] = v
+            elif len(ks) == 3 and ks[0] == "pj" and PID_RE.match(ks[1]) and ks[2] in PREF_PJ:
+                pj = p.setdefault("pj", {}).setdefault(ks[1], {})
+                if v is None:
+                    pj.pop(ks[2], None)
+                elif isinstance(v, (dict, list)):
+                    pj[ks[2]] = v
+                if not pj:
+                    p["pj"].pop(ks[1], None)
+        if not p.get("pj"):
+            p.pop("pj", None)
+        raw = json.dumps(p, ensure_ascii=False).encode("utf-8")
+        if len(raw) > 1_500_000:
+            return None
+        wr(UD / user / "prefs.json", raw)
+        return p
+
+
+def av_file(user):
+    for f in (UD / user).glob("avatar.*"):
+        if f.suffix[1:] in ("png", "jpg", "gif", "webp"):
+            return f
+    return None
 
 
 def user_new(pw, admin=False):
@@ -240,7 +296,9 @@ def info(db, user):
                        "scenarios": len(vis), "chapters": nch,
                        "updated": stamp_of(P) / 1e9,
                        "members": sum(1 for x in db["users"].values() if x.get("admin") or pid in x.get("projects", {}))})
-    return {"user": user, "admin": bool(u.get("admin")), "mustChange": bool(u.get("must_change")), "projects": ps}
+    af = av_file(user)
+    return {"user": user, "admin": bool(u.get("admin")), "mustChange": bool(u.get("must_change")), "projects": ps,
+            "prefs": prefs_get(user), "av": int(af.stat().st_mtime) if af else 0}
 
 
 def read_all(db, pid, user, role):
@@ -305,6 +363,42 @@ def img_path(P, rel, role):
         p = (DATA / rel).resolve()
         ok = within(p) and (role == "edit" or any(p == rp or rp in p.parents for rp in ((DATA / r).resolve() for r in pj_of(P).get("imgRefs", []))))
     return p if ok and p.is_file() and p.suffix.lower() in IMG_OK else None
+
+
+def hist_dir(P, cid):
+    return P / "history" / cid
+
+
+def hist_list(P, cid):
+    d = hist_dir(P, cid)
+    return sorted(d.glob("*.hist")) if d.is_dir() else []
+
+
+def hist_snap(P, cid, by, label="", data=None):
+    """章の版を履歴に残す。通常は5分以内の連続保存をまとめ、名前付き(label)や削除前は必ず残す"""
+    cur = P / "chapters" / (cid + ".json")
+    if data is None:
+        data = rj(cur)
+    if not data:
+        return None
+    fl = hist_list(P, cid)
+    now = int(time.time() * 1000)
+    if not label and fl:
+        try:
+            if now - int(fl[-1].stem) < 300_000:
+                return None
+        except ValueError:
+            pass
+        last = rj(fl[-1])
+        if last and last.get("data") == data:
+            return None
+    ent = {"ts": now, "by": by, "label": label, "data": data}
+    wr(hist_dir(P, cid) / (str(now) + ".hist"), (json.dumps(ent, ensure_ascii=False) + "\n").encode("utf-8"))
+    fl = hist_list(P, cid)
+    auto = [f for f in fl if not (rj(f) or {}).get("label")]
+    for f in auto[:-80]:
+        f.unlink(missing_ok=True)
+    return now
 
 
 def can_write(db, user, pid, rel, raw=b""):
@@ -480,6 +574,33 @@ class H(BaseHTTPRequestHandler):
             return self.change_password(user, self.body())
         if path == "/api/username" and method == "POST":
             return self.rename_user(user, self.body())
+        if path == "/api/prefs":  # 自分の設定(ユーザーごとにサーバーへ保存)
+            if method == "GET":
+                return self.json(prefs_get(user))
+            p = prefs_patch(user, self.body().get("set"))
+            return self.json(p) if p is not None else self.err("設定を保存できませんでした")
+        if path == "/api/avatar":  # アイコン画像
+            if method == "GET":
+                u = q.get("u", [""])[0]
+                f = av_file(u) if u in db["users"] else None
+                if not f:
+                    return self.send(404)
+                return self.send(200, f.read_bytes(), {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}[f.suffix[1:]])
+            if method == "POST":
+                b = self.raw
+                ext = "webp" if b[:4] == b"RIFF" and b[8:12] == b"WEBP" else next((e for m, e, _ in AV_TYPES if b.startswith(m)), None)
+                if not ext or len(b) > AV_MAX:
+                    return self.err("画像（PNG / JPEG / WebP / GIF・700KBまで）を選んでください")
+                with LOCK:
+                    for f in (UD / user).glob("avatar.*"):
+                        f.unlink(missing_ok=True)
+                    wr(UD / user / ("avatar." + ext), b)
+                return self.json({"av": int(av_file(user).stat().st_mtime)})
+            if method == "DELETE":
+                with LOCK:
+                    for f in (UD / user).glob("avatar.*"):
+                        f.unlink(missing_ok=True)
+                return self.json({"av": 0})
         if path.startswith("/api/admin/"):
             if not db["users"][user].get("admin"):
                 return self.err("管理者のみ", 403)
@@ -519,11 +640,48 @@ class H(BaseHTTPRequestHandler):
             p = (P / rel).resolve()
             if P not in p.parents:
                 return self.err("bad path")
+            m = re.fullmatch(r"chapters/([\w\-]+)\.json", rel)
+            body = self.raw
+            if m:
+                try:
+                    old = rj(p) if p.is_file() else None
+                    if method == "DELETE":
+                        if old:
+                            hist_snap(P, m.group(1), user, "削除前")
+                    else:
+                        new = json.loads(self.raw)
+                        strip = lambda d: {k: v for k, v in (d or {}).items() if k not in ("upd", "upby")}
+                        if old is None or strip(old) != strip(new):
+                            if old:
+                                hist_snap(P, m.group(1), user)
+                            new["upd"] = int(time.time() * 1000)
+                            new["upby"] = user
+                        else:
+                            new["upd"] = (old or {}).get("upd", new.get("upd"))
+                            new["upby"] = (old or {}).get("upby", new.get("upby"))
+                        body = (json.dumps({k: v for k, v in new.items() if v is not None}, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
+                except Exception:
+                    traceback.print_exc()
             if method == "PUT":
-                wr(p, self.raw)
+                wr(p, body)
             else:
                 p.unlink(missing_ok=True)
             return self.json({"ok": 1})
+        if path == "/api/history":
+            return self.history(db, user, pid, P, method, q)
+        if path == "/api/audio" and method == "POST":
+            if role == "view":
+                return self.err("権限がありません", 403)
+            name = q.get("name", ["audio.mp3"])[0]
+            ext = Path(name).suffix.lower()
+            if ext not in AUD_OK or len(self.raw) > 80_000_000:
+                return self.err("音声ファイルのみ(80MBまで)")
+            fn = hashlib.sha1(self.raw).hexdigest()[:10] + "_" + re.sub(r"[^\w\-]", "_", Path(name).stem)[:40] + ext
+            if not (P / "audio" / fn).exists():
+                wr(P / "audio" / fn, self.raw)
+            return self.json({"path": "audio/" + fn})
+        if path == "/api/aud" and method == "GET":
+            return self.audio(P, q.get("p", [""])[0])
         if path == "/api/chapter/dup" and method == "POST":
             return self.chapter_dup(db, user, pid, P, self.body())
         if path == "/api/image" and method == "POST":
@@ -538,6 +696,116 @@ class H(BaseHTTPRequestHandler):
                 wr(P / "images" / fn, self.raw)
             return self.json({"path": "images/" + fn})
         self.send(404)
+
+    def history(self, db, user, pid, P, method, q):
+        """章の版履歴。一覧/1件取得は見える章なら誰でも、名前付き保存は編集権限が必要。復元はクライアントが章を書き戻す(その権限チェックは通常の保存と同じ)"""
+        scs = scen_list(P)
+        if method == "GET" and q.get("deleted"):
+            return self.json(self.deleted_list(db, user, pid, P, scs))
+        if method == "POST":
+            d = self.body()
+            if d.get("restore"):
+                return self.restore_deleted(db, user, pid, P, scs, d)
+            cid = str(d.get("c", ""))
+        else:
+            cid = q.get("c", [""])[0]
+        ch = rj(P / "chapters" / (cid + ".json")) if re.fullmatch(r"[\w\-]+", cid) else None
+        if not ch or not ch_visible(db, user, pid, ch, scs):
+            return self.err("章が見つかりません", 404)
+        if method == "POST":
+            if sc_role(db, user, pid, ch.get("sc") or "") != "edit":
+                return self.err("この操作の権限がありません", 403)
+            ts = hist_snap(P, cid, user, (str(d.get("label") or "手動保存"))[:60])
+            return self.json({"ok": 1, "ts": ts})
+        ts = q.get("ts", [""])[0]
+        if ts:
+            f = hist_dir(P, cid) / (re.sub(r"\D", "", ts) + ".hist")
+            e = rj(f) if f.is_file() else None
+            return self.json(e) if e else self.err("履歴がありません", 404)
+        out = []
+        for f in reversed(hist_list(P, cid)):
+            e = rj(f) or {}
+            dd = e.get("data") or {}
+            out.append({"ts": e.get("ts"), "by": e.get("by", ""), "label": e.get("label", ""), "title": dd.get("title", ""), "len": len(dd.get("text", ""))})
+        return self.json(out)
+
+    def deleted_list(self, db, user, pid, P, scs):
+        """削除された章(履歴に「削除前」が残っているもの)。元のシナリオの編集権限がある人にだけ見える"""
+        out = []
+        hd = P / "history"
+        if not hd.is_dir():
+            return out
+        for d in sorted(hd.iterdir()):
+            cid = d.name
+            if not d.is_dir() or not re.fullmatch(r"[\w\-]+", cid) or (P / "chapters" / (cid + ".json")).exists():
+                continue
+            ents = [(f, rj(f) or {}) for f in sorted(d.glob("*.hist"))]
+            dels = [x for x in ents if x[1].get("label") == "削除前"]
+            if not dels:
+                continue
+            f, e = dels[-1]
+            data = e.get("data") or {}
+            sc = data.get("sc") or ""
+            ok = sc_role(db, user, pid, sc) == "edit" if sc in scs else role_of(db, user, pid) == "edit"
+            if ok:
+                out.append({"c": cid, "title": data.get("title", ""), "sc": sc, "scTitle": (scs.get(sc) or {}).get("title", ""), "scOk": sc in scs,
+                            "ts": e.get("ts"), "by": e.get("by", ""), "len": len(data.get("text", ""))})
+        return sorted(out, key=lambda x: -(x["ts"] or 0))
+
+    def restore_deleted(self, db, user, pid, P, scs, d):
+        cid = str(d.get("restore", ""))
+        if not re.fullmatch(r"[\w\-]+", cid) or (P / "chapters" / (cid + ".json")).exists():
+            return self.err("復元できません", 404)
+        dels = [rj(f) or {} for f in hist_list(P, cid)]
+        dels = [e for e in dels if e.get("label") == "削除前"]
+        if not dels:
+            return self.err("履歴がありません", 404)
+        data = dict(dels[-1].get("data") or {})
+        to = str(d.get("sc") or data.get("sc") or "")
+        if to not in scs:
+            return self.err("復元先のシナリオを選んでください", 400)
+        if sc_role(db, user, pid, to) != "edit" or (data.get("sc") in scs and sc_role(db, user, pid, data.get("sc")) != "edit"):
+            return self.err("この操作の権限がありません", 403)
+        sib = [(rj(f) or {}).get("order", 0) for f in (P / "chapters").glob("*.json") if (rj(f) or {}).get("sc") == to]
+        data.update({"id": cid, "sc": to, "order": (max(sib) + 1) if sib else 1, "upd": int(time.time() * 1000), "upby": user})
+        wr(P / "chapters" / (cid + ".json"), (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
+        return self.json({"ok": 1, "id": cid})
+
+    def audio(self, P, rel):
+        p = (P / rel).resolve()
+        if not rel.startswith("audio/") or (P / "audio") not in p.parents or not p.is_file() or p.suffix.lower() not in AUD_OK:
+            return self.send(404)
+        size = p.stat().st_size
+        ctype = {".m4a": "audio/mp4", ".opus": "audio/ogg", ".oga": "audio/ogg"}.get(p.suffix.lower()) or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        a, b = 0, size - 1
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "") or "")
+        code = 200
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                a = int(m.group(1))
+                b = int(m.group(2)) if m.group(2) else size - 1
+            else:
+                a = max(0, size - int(m.group(2)))
+            b = min(b, size - 1)
+            if a > b:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            code = 206
+        with open(p, "rb") as fh:
+            fh.seek(a)
+            body = fh.read(b - a + 1)
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(body)))
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {a}-{b}/{size}")
+        self.send_header("Cache-Control", "max-age=300")
+        self.end_headers()
+        self.wfile.write(body)
 
     def chapter_dup(self, db, user, pid, P, d):
         """章を複製する。同じシナリオなら元の章の直後、別シナリオへの複製なら末尾に入る。書き込み(各ユーザーのレイヤー)も複製できる"""
@@ -666,8 +934,10 @@ class H(BaseHTTPRequestHandler):
                 return self.err("パスワードが違います", 401)
             if new == user:
                 return self.err("今と同じユーザー名です")
-            if new in db["users"] or any((ROOT / p / "users" / new).exists() for p in list_projects()):
+            if new in db["users"] or (UD / new).exists() or any((ROOT / p / "users" / new).exists() for p in list_projects()):
                 return self.err("そのユーザー名はすでに使われています")
+            if (UD / user).exists():  # 設定・アイコンも新しい名前に
+                (UD / user).rename(UD / new)
             for p in list_projects():  # 書き込みデータのフォルダも新しい名前に
                 if (ROOT / p / "users" / user).exists():
                     (ROOT / p / "users" / user).rename(ROOT / p / "users" / new)
@@ -688,7 +958,7 @@ class H(BaseHTTPRequestHandler):
             db = db_load()
             users = db["users"]
             if act == "users" and method == "GET":
-                return self.json({"users": [{"user": n, "admin": bool(x.get("admin")), "projects": x.get("projects", {}), "scen": x.get("scen", {})} for n, x in users.items()],
+                return self.json({"users": [{"user": n, "admin": bool(x.get("admin")), "projects": x.get("projects", {}), "scen": x.get("scen", {}), "av": bool(av_file(n))} for n, x in users.items()],
                                   "projects": [{"id": p, "name": pj_of(ROOT / p).get("name") or p,
                                                 "scenarios": [{"id": s["id"], "title": s.get("title", s["id"])} for s in sorted(scen_list(ROOT / p).values(), key=lambda s: (s.get("order", 0), s["id"]))]}
                                                for p in list_projects()],
@@ -723,7 +993,7 @@ class H(BaseHTTPRequestHandler):
                 name, pw = str(d.get("user", "")).strip(), str(d.get("password", ""))
                 if not USER_RE.match(name):
                     return self.err("ユーザー名に使えない文字が含まれています")
-                if name in users or any((ROOT / p / "users" / name).exists() for p in list_projects()):
+                if name in users or (UD / name).exists() or any((ROOT / p / "users" / name).exists() for p in list_projects()):
                     return self.err("そのユーザー名はすでに使われています")
                 if len(pw) < 6:
                     return self.err("パスワードは6文字以上にしてください")
@@ -755,6 +1025,9 @@ class H(BaseHTTPRequestHandler):
                     if users[name].get("admin") and sum(1 for x in users.values() if x.get("admin")) <= 1:
                         return self.err("最後の管理者は削除できません")
                     users.pop(name)
+                    if (UD / name).exists():
+                        TRASH.mkdir(exist_ok=True)
+                        shutil.move(str(UD / name), str(TRASH / f"userdata-{name}-{int(time.time())}"))
                     db["sessions"] = {k: v for k, v in db["sessions"].items() if v["user"] != name}
             elif act == "project_add":
                 name = str(d.get("name", "")).strip()
@@ -808,7 +1081,7 @@ def backup_run(force=False):
         today = datetime.date.today().isoformat()
         dst = BAK / f"backup-{today}.zip"
         if dst.exists() and not force:
-            newest = max([f.stat().st_mtime for f in ROOT.rglob("*") if f.is_file()] + [DBF.stat().st_mtime if DBF.exists() else 0], default=0)
+            newest = max([f.stat().st_mtime for f in list(ROOT.rglob("*")) + list(UD.rglob("*")) if f.is_file()] + [DBF.stat().st_mtime if DBF.exists() else 0], default=0)
             if newest <= dst.stat().st_mtime or time.time() - dst.stat().st_mtime < BAK_REFRESH:
                 return None
         tmp = dst.with_name(dst.name + ".tmp")
@@ -816,6 +1089,9 @@ def backup_run(force=False):
             for f in sorted(ROOT.rglob("*")):
                 if f.is_file() and not f.name.endswith(".tmp"):
                     z.write(f, "projects/" + f.relative_to(ROOT).as_posix())
+            for f in sorted(UD.rglob("*")):
+                if f.is_file() and not f.name.endswith(".tmp"):
+                    z.write(f, "userdata/" + f.relative_to(UD).as_posix())
             if DBF.exists():
                 z.write(DBF, ".local/auth.json")
         os.replace(tmp, dst)
