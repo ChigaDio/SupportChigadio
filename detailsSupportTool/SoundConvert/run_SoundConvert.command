@@ -24,9 +24,8 @@ else
   exit 1
 fi
 
-APP="$TOOL_DIR/$TOOL_NAME.app"
-APP_EXE="$APP/Contents/MacOS/$TOOL_NAME"
-
+EXECUTABLE_NAME="$TOOL_NAME-macos-$ARCH"
+EXECUTABLE="$TOOL_DIR/$EXECUTABLE_NAME"
 ZIP="$TOOL_DIR/macos-$ARCH/$TOOL_NAME-macos-$ARCH.zip"
 
 if [ ! -f "$ZIP" ]; then
@@ -36,42 +35,39 @@ if [ ! -f "$ZIP" ]; then
   exit 1
 fi
 
-# Check whether an existing app supports this Mac architecture.
-if [ -d "$APP" ] && [ -x "$APP_EXE" ]; then
-  EXISTING_ARCHS="$(lipo -archs "$APP_EXE" 2>/dev/null || true)"
+# Check whether an existing executable supports this Mac architecture.
+if [ -f "$EXECUTABLE" ] && [ -x "$EXECUTABLE" ]; then
+  EXISTING_ARCHS="$(lipo -archs "$EXECUTABLE" 2>/dev/null || true)"
 
   if ! echo "$EXISTING_ARCHS" | grep -qw "$ARCH"; then
-    echo "Existing app does not support $ARCH."
-    echo "Re-extracting the correct application..."
-    rm -rf "$APP"
+    echo "Existing executable does not support $ARCH."
+    echo "Re-extracting the correct executable..."
+    rm -f "$EXECUTABLE"
   fi
 else
-  rm -rf "$APP"
+  rm -f "$EXECUTABLE"
 fi
 
 # Extract the selected ZIP directly into the tool folder.
-if [ ! -d "$APP" ]; then
+if [ ! -f "$EXECUTABLE" ]; then
   echo "Extracting $TOOL_NAME for $ARCH..."
 
   ditto -x -k "$ZIP" "$TOOL_DIR"
 
-  if [ ! -d "$APP" ]; then
-    echo "Failed to extract application:"
-    echo "$APP"
+  if [ ! -f "$EXECUTABLE" ]; then
+    echo "Failed to extract executable:"
+    echo "$EXECUTABLE"
     read -r -p "Press Enter to close..."
     exit 1
   fi
 fi
 
-if [ ! -x "$APP_EXE" ]; then
-  echo "Application executable was not found:"
-  echo "$APP_EXE"
-  read -r -p "Press Enter to close..."
-  exit 1
+if [ ! -x "$EXECUTABLE" ]; then
+  chmod +x "$EXECUTABLE"
 fi
 
-# Remove macOS quarantine attributes from the extracted app.
-xattr -cr "$APP" 2>/dev/null || true
+# Remove macOS quarantine attributes.
+xattr -cr "$EXECUTABLE" 2>/dev/null || true
 
 # Install requirements.txt if available.
 REQ="$TOOL_DIR/requirements.txt"
@@ -89,7 +85,7 @@ if [ -f "$REQ" ]; then
 fi
 
 # Run the application in this terminal.
-"$APP_EXE"
+"$EXECUTABLE"
 CODE=$?
 
 echo
