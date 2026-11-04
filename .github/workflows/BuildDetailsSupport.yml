@@ -92,6 +92,7 @@ jobs:
             -name ".build_*" \
             -exec rm -rf {} +
 
+
       - name: Build macOS applications
         shell: bash
         run: |
@@ -159,7 +160,7 @@ jobs:
               base="$(basename "$item")"
 
               case "$base" in
-                *.py|*.pyc|*.app|*.exe|*.sh|*.bat|*.command|*.spec|*.zip|macos-*|requirements.txt|__pycache__|.build_*)
+                *.py|*.pyc|*.app|*.exe|*.sh|*.command|*.bat|*.spec|*.zip|macos-*|requirements.txt|__pycache__|.build_*)
                   continue
                   ;;
               esac
@@ -210,6 +211,7 @@ jobs:
             fi
 
             archs="$(lipo -archs "$app_exe")"
+
             echo "Executable archs: $archs"
 
             if ! echo "$archs" | grep -qw "$ARCH"; then
@@ -217,14 +219,11 @@ jobs:
               exit 1
             fi
 
-            # Ad-hoc sign the bundle.
+            # Ad-hoc sign the whole bundle.
             codesign --force --deep --sign - "$built_app"
             codesign --verify --deep --strict --verbose=2 "$built_app"
 
-            # ==================================================
-            # Existing ZIP output (keep unchanged)
-            # ==================================================
-
+            # Keep the existing ZIP output format.
             out_dir="$tool_dir/macos-$ARCH"
             zip_name="$tool_name-macos-$ARCH.zip"
 
@@ -240,74 +239,23 @@ jobs:
 
             ls -lh "$out_dir/$zip_name"
 
-            # Existing architecture-specific launcher inside ZIP folder.
-            launcher="$out_dir/run_${tool_name}.sh"
+            # Remove old extracted app and old launchers.
+            rm -rf "$tool_dir/$tool_name.app"
+            rm -f "$tool_dir/run_${tool_name}.sh"
+            rm -f "$tool_dir/run_${tool_name}.command"
+
+            # Generate a launcher in the tool folder itself.
+            # The launcher selects the correct ZIP based on the Mac architecture.
+            launcher="$tool_dir/run_${tool_name}.sh"
 
             cat > "$launcher" <<'LAUNCHER_EOF'
           #!/bin/bash
 
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          APP="$DIR/__TOOL__.app"
-          ZIP="$DIR/__TOOL__-macos-__ARCH__.zip"
+          # Auto-generated launcher for __TOOL__.
+          set -u
 
-          if [ ! -d "$APP" ] && [ -f "$ZIP" ]; then
-            ditto -x -k "$ZIP" "$DIR"
-          fi
-
-          xattr -cr "$APP" 2>/dev/null || true
-
-          REQ="$DIR/../requirements.txt"
-
-          if [ -f "$REQ" ]; then
-            PY="$(command -v python3 || command -v python || true)"
-
-            if [ -n "$PY" ]; then
-              echo "Installing requirements..."
-              "$PY" -m pip install -q -r "$REQ" \
-                || echo "Warning: failed to install requirements"
-            else
-              echo "Warning: Python not found; skipping requirements install"
-            fi
-          fi
-
-          "$APP/Contents/MacOS/__TOOL__"
-
-          code=$?
-          echo
-          echo "Exited with code $code."
-          read -r -p "Press Enter to close..."
-          LAUNCHER_EOF
-
-            sed -i '' \
-              -e "s/__TOOL__/${tool_name}/g" \
-              -e "s/__ARCH__/${ARCH}/g" \
-              "$launcher"
-
-            chmod +x "$launcher"
-
-            # ==================================================
-            # Additional app bundle directly inside tool folder
-            # ==================================================
-
-            root_app="$tool_dir/${tool_name}-macos-${ARCH}.app"
-
-            rm -rf "$root_app"
-            ditto "$built_app" "$root_app"
-
-            echo "Created app: $root_app"
-
-            # ==================================================
-            # Root launchers (select architecture automatically)
-            # ==================================================
-
-            root_launcher="$tool_dir/run_${tool_name}.sh"
-
-            cat > "$root_launcher" <<'ROOT_LAUNCHER_EOF'
-          #!/bin/bash
-
-          set -e
-
-          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          TOOL_DIR="$(cd "$(dirname "$0")" && pwd)"
+          TOOL_NAME="__TOOL__"
 
           if [ "$(uname -s)" != "Darwin" ]; then
             echo "This launcher is for macOS."
@@ -318,33 +266,66 @@ jobs:
           MACHINE="$(uname -m)"
 
           if [ "$MACHINE" = "arm64" ]; then
-            APP="$ROOT/__TOOL__-macos-arm64.app"
+            ARCH="arm64"
           elif [ "$MACHINE" = "x86_64" ]; then
-            APP="$ROOT/__TOOL__-macos-x86_64.app"
+            ARCH="x86_64"
           else
             echo "Unsupported architecture: $MACHINE"
             read -r -p "Press Enter to close..."
             exit 1
           fi
 
-          if [ ! -d "$APP" ]; then
-            echo "App for $MACHINE was not found:"
-            echo "$APP"
+          APP="$TOOL_DIR/$TOOL_NAME.app"
+          APP_EXE="$APP/Contents/MacOS/$TOOL_NAME"
+
+          ZIP="$TOOL_DIR/macos-$ARCH/$TOOL_NAME-macos-$ARCH.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "Application ZIP was not found:"
+            echo "$ZIP"
             read -r -p "Press Enter to close..."
             exit 1
           fi
 
-          # Remove downloaded-file quarantine attributes.
+          # Check whether an existing app supports this Mac architecture.
+          if [ -d "$APP" ] && [ -x "$APP_EXE" ]; then
+            EXISTING_ARCHS="$(lipo -archs "$APP_EXE" 2>/dev/null || true)"
+
+            if ! echo "$EXISTING_ARCHS" | grep -qw "$ARCH"; then
+              echo "Existing app does not support $ARCH."
+              echo "Re-extracting the correct application..."
+              rm -rf "$APP"
+            fi
+          else
+            rm -rf "$APP"
+          fi
+
+          # Extract the selected ZIP directly into the tool folder.
+          if [ ! -d "$APP" ]; then
+            echo "Extracting $TOOL_NAME for $ARCH..."
+
+            ditto -x -k "$ZIP" "$TOOL_DIR"
+
+            if [ ! -d "$APP" ]; then
+              echo "Failed to extract application:"
+              echo "$APP"
+              read -r -p "Press Enter to close..."
+              exit 1
+            fi
+          fi
+
+          if [ ! -x "$APP_EXE" ]; then
+            echo "Application executable was not found:"
+            echo "$APP_EXE"
+            read -r -p "Press Enter to close..."
+            exit 1
+          fi
+
+          # Remove macOS quarantine attributes from the extracted app.
           xattr -cr "$APP" 2>/dev/null || true
 
-          # Ensure the executable bit is set.
-          chmod +x "$APP/Contents/MacOS/__TOOL__" 2>/dev/null || true
-
-          # Re-sign locally after quarantine removal.
-          codesign --force --deep --sign - "$APP" 2>/dev/null || true
-
-          # Install requirements if present.
-          REQ="$ROOT/requirements.txt"
+          # Install requirements.txt if available.
+          REQ="$TOOL_DIR/requirements.txt"
 
           if [ -f "$REQ" ]; then
             PY="$(command -v python3 || command -v python || true)"
@@ -358,28 +339,31 @@ jobs:
             fi
           fi
 
-          # Run the selected application.
-          "$APP/Contents/MacOS/__TOOL__"
-
-          code=$?
+          # Run the application in this terminal.
+          "$APP_EXE"
+          CODE=$?
 
           echo
-          echo "Exited with code $code."
+          echo "Exited with code $CODE."
           read -r -p "Press Enter to close..."
-          ROOT_LAUNCHER_EOF
+
+          exit "$CODE"
+          LAUNCHER_EOF
 
             sed -i '' \
               -e "s/__TOOL__/${tool_name}/g" \
-              "$root_launcher"
+              "$launcher"
 
-            chmod +x "$root_launcher"
+            chmod +x "$launcher"
 
-            # .command uses the same architecture-selection logic.
-            cp "$root_launcher" "$tool_dir/run_${tool_name}.command"
-            chmod +x "$tool_dir/run_${tool_name}.command"
+            # Generate .command with the same launcher contents.
+            command_file="$tool_dir/run_${tool_name}.command"
 
-            echo "Created: $root_launcher"
-            echo "Created: $tool_dir/run_${tool_name}.command"
+            cp "$launcher" "$command_file"
+            chmod +x "$command_file"
+
+            echo "Created: $launcher"
+            echo "Created: $command_file"
 
             built_count=$((built_count + 1))
           done
@@ -390,6 +374,7 @@ jobs:
           fi
 
           echo "Successfully built $built_count macOS applications ($ARCH)."
+
 
       # Existing ZIP artifact upload.
       - name: Upload macOS zips as artifact
