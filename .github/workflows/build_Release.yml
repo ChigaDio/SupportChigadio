@@ -1,9 +1,5 @@
 name: Build and Release　Commnad Sh Bat
 
-# リポジトリのルート（SupportChigadio）直下の .github/workflows/ に置く。
-# 実行方法:
-#   1) タグを push する: git tag v1.0.0 && git push origin v1.0.0
-#   2) Actions タブから "Run workflow"（タグ名を入力）
 on:
   push:
     tags:
@@ -38,18 +34,12 @@ jobs:
           - os: windows-latest
             suffix: windows-x64
             exe: SupportChigadio.exe
-
-          # Apple Silicon 優先枠
           - os: macos-latest
             suffix: macos-arm64
             exe: SupportChigadio
-
-          # Apple Silicon 予備枠
           - os: macos-15
             suffix: macos-arm64-fallback
             exe: SupportChigadio
-
-          # Intel Mac
           - os: macos-15-intel
             suffix: macos-x64
             exe: SupportChigadio
@@ -103,14 +93,12 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
         run: |
           if [ ! -f pythonSrc/__init__.py ]; then touch pythonSrc/__init__.py; fi
-
           pyinstaller --noconfirm --clean --onefile \
             --name "$APP_NAME" \
             --paths . \
             --hidden-import tkinter \
             --hidden-import tkinter.filedialog \
             app.py
-
           ls -la dist
 
       - name: Stage binary
@@ -118,11 +106,9 @@ jobs:
           STAGE="staging/${{ matrix.suffix }}/main-support"
           mkdir -p "$STAGE"
           cp "$APP_DIR/dist/${{ matrix.exe }}" "$STAGE/"
-
           if [ -n "$FRONTEND_BUILD" ] && [ -d "$FRONTEND_BUILD" ]; then
             cp -r "$FRONTEND_BUILD" "$STAGE/build"
           fi
-
           if [ "$RUNNER_OS" != "Windows" ]; then
             chmod +x "$STAGE/${{ matrix.exe }}"
             codesign --force --sign - "$STAGE/${{ matrix.exe }}" || true
@@ -135,9 +121,6 @@ jobs:
           path: staging/${{ matrix.suffix }}
           if-no-files-found: error
 
-  # ========== 共通: zip を作る処理（release / commit-to-repo で使う） ==========
-  # 実際のパッケージングは各ジョブ内で行う（artifact の受け渡しをシンプルにするため）
-
   release:
     name: Create GitHub Release
     needs: build
@@ -149,75 +132,51 @@ jobs:
           path: artifacts
           merge-multiple: false
 
-      - name: List downloaded artifacts
-        run: find artifacts -type f | sort
-
       - name: Package Windows
         run: |
           if [ ! -d artifacts/staging-windows-x64 ]; then
             echo "::warning::Windows build が無いためスキップ"
             exit 0
           fi
-
           ROOT="package/SupportChigadio"
           mkdir -p "$ROOT"
           cp -r artifacts/staging-windows-x64/main-support "$ROOT/"
-
           cat > "$ROOT/SupportChigadio.bat" << 'EOF'
           @echo off
           setlocal
           cd /d "%~dp0"
-
           if exist "SupportChigadio.exe" (
             start "" "SupportChigadio.exe"
             exit /b 0
           )
-
           if not exist "main-support\SupportChigadio.exe" (
             echo Error: main-support\SupportChigadio.exe が見つかりません
             pause
             exit /b 1
           )
-
           echo 初回セットアップ中...
           xcopy /E /I /Y "main-support\*" "." >nul
-          if errorlevel 1 (
-            echo コピーに失敗しました
-            pause
-            exit /b 1
-          )
-
           start "" "SupportChigadio.exe"
           EOF
-
           cd package
           7z a -tzip "../SupportChigadio-windows-x64.zip" "SupportChigadio"
 
-      - name: Package macOS (universal)
+      - name: Package macOS
         run: |
           ARM_SRC=""
           if [ -d artifacts/staging-macos-arm64 ]; then
             ARM_SRC="artifacts/staging-macos-arm64"
-            echo "arm64: macos-latest の成果物を使用"
           elif [ -d artifacts/staging-macos-arm64-fallback ]; then
             ARM_SRC="artifacts/staging-macos-arm64-fallback"
-            echo "arm64: macos-15 fallback の成果物を使用"
           fi
-
           X64_SRC=""
-          if [ -d artifacts/staging-macos-x64 ]; then
-            X64_SRC="artifacts/staging-macos-x64"
-            echo "x64: 成果物を使用"
-          fi
-
+          [ -d artifacts/staging-macos-x64 ] && X64_SRC="artifacts/staging-macos-x64"
           if [ -z "$ARM_SRC" ] && [ -z "$X64_SRC" ]; then
             echo "::warning::macOS build が無いためスキップ"
             exit 0
           fi
-
           ROOT="package/SupportChigadio"
           mkdir -p "$ROOT"
-
           if [ -n "$ARM_SRC" ]; then
             mkdir -p "$ROOT/arm64"
             cp -r "$ARM_SRC/main-support" "$ROOT/arm64/"
@@ -226,46 +185,34 @@ jobs:
             mkdir -p "$ROOT/x64"
             cp -r "$X64_SRC/main-support" "$ROOT/x64/"
           fi
-
           cat > "$ROOT/SupportChigadio.command" << 'EOF'
           #!/bin/bash
           set -e
           ROOT="$(cd "$(dirname "$0")" && pwd)"
           cd "$ROOT"
-
           xattr -cr "$ROOT" 2>/dev/null || true
-
           if [ -x "./SupportChigadio" ]; then
             if ! codesign --verify "./SupportChigadio" 2>/dev/null; then
               codesign --force --sign - "./SupportChigadio" 2>/dev/null || true
             fi
             exec "./SupportChigadio"
           fi
-
           ARCH="$(uname -m)"
-          if [ "$ARCH" = "arm64" ]; then
-            SRC="arm64/main-support"
-          else
-            SRC="x64/main-support"
-          fi
-
+          if [ "$ARCH" = "arm64" ]; then SRC="arm64/main-support"; else SRC="x64/main-support"; fi
           if [ ! -d "$SRC" ]; then
             echo "エラー: 対応する実行ファイルが見つかりません ($SRC)"
             read -r -p "Enterキーで終了..."
             exit 1
           fi
-
           echo "初回セットアップ中... ($ARCH)"
           cp -R "$SRC"/* .
           chmod +x ./SupportChigadio
           codesign --force --sign - ./SupportChigadio 2>/dev/null || true
-
           exec ./SupportChigadio
           EOF
           chmod +x "$ROOT/SupportChigadio.command"
           cp "$ROOT/SupportChigadio.command" "$ROOT/SupportChigadio.sh"
           chmod +x "$ROOT/SupportChigadio.sh"
-
           cd package
           zip -r -y "../SupportChigadio-macos.zip" "SupportChigadio"
 
@@ -288,18 +235,15 @@ jobs:
             ## 使い方
             1. zip を解凍する
             2. 出てきた **SupportChigadio** フォルダを開く
-            3. その中にある起動ファイルを実行する
-               - **Windows**: `SupportChigadio.bat` をダブルクリック
-               - **macOS**: `SupportChigadio.command` をダブルクリック
-                 （自動で arm64 / Intel を判定し、初回のみ必要なファイルを直下にコピーして起動します）
-            4. 起動時のダイアログで「サーバーモード / 通常モード」を選択
-            5. データは `SupportChigadio` フォルダの**親**に `data/` として作成されます
+            3. その中の起動ファイルを実行
+               - Windows: `SupportChigadio.bat`
+               - macOS: `SupportChigadio.command`
+            4. データは `SupportChigadio` の親に `data/` が作られます
 
-            ### macOS の初回起動について
+            ### macOS 初回
             - `SupportChigadio.command` を右クリック →「開く」
             - または `xattr -cr SupportChigadio`
 
-  # ========== リポジトリ直下に zip + VERSION を commit & push ==========
   commit-to-repo:
     name: Commit & Push to repository
     needs: build
@@ -318,14 +262,13 @@ jobs:
           path: artifacts
           merge-multiple: false
 
-      - name: Package zips for repo
+      - name: Package zips
         run: |
-          # ---- Windows ----
+          # Windows
           if [ -d artifacts/staging-windows-x64 ]; then
             ROOT="pkg-win/SupportChigadio"
             mkdir -p "$ROOT"
             cp -r artifacts/staging-windows-x64/main-support "$ROOT/"
-
             cat > "$ROOT/SupportChigadio.bat" << 'EOF'
           @echo off
           setlocal
@@ -343,11 +286,10 @@ jobs:
           xcopy /E /I /Y "main-support\*" "." >nul
           start "" "SupportChigadio.exe"
           EOF
-
             (cd pkg-win && 7z a -tzip "../SupportChigadio-windows-x64.zip" "SupportChigadio")
           fi
 
-          # ---- macOS ----
+          # macOS
           ARM_SRC=""
           if [ -d artifacts/staging-macos-arm64 ]; then
             ARM_SRC="artifacts/staging-macos-arm64"
@@ -356,11 +298,9 @@ jobs:
           fi
           X64_SRC=""
           [ -d artifacts/staging-macos-x64 ] && X64_SRC="artifacts/staging-macos-x64"
-
           if [ -n "$ARM_SRC" ] || [ -n "$X64_SRC" ]; then
             ROOT="pkg-mac/SupportChigadio"
             mkdir -p "$ROOT"
-
             if [ -n "$ARM_SRC" ]; then
               mkdir -p "$ROOT/arm64"
               cp -r "$ARM_SRC/main-support" "$ROOT/arm64/"
@@ -369,7 +309,6 @@ jobs:
               mkdir -p "$ROOT/x64"
               cp -r "$X64_SRC/main-support" "$ROOT/x64/"
             fi
-
             cat > "$ROOT/SupportChigadio.command" << 'EOF'
           #!/bin/bash
           set -e
@@ -383,11 +322,7 @@ jobs:
             exec "./SupportChigadio"
           fi
           ARCH="$(uname -m)"
-          if [ "$ARCH" = "arm64" ]; then
-            SRC="arm64/main-support"
-          else
-            SRC="x64/main-support"
-          fi
+          if [ "$ARCH" = "arm64" ]; then SRC="arm64/main-support"; else SRC="x64/main-support"; fi
           if [ ! -d "$SRC" ]; then
             echo "エラー: 対応する実行ファイルが見つかりません ($SRC)"
             read -r -p "Enterキーで終了..."
@@ -402,15 +337,93 @@ jobs:
             chmod +x "$ROOT/SupportChigadio.command"
             cp "$ROOT/SupportChigadio.command" "$ROOT/SupportChigadio.sh"
             chmod +x "$ROOT/SupportChigadio.sh"
-
             (cd pkg-mac && zip -r -y "../SupportChigadio-macos.zip" "SupportChigadio")
           fi
-
           ls -la *.zip || true
+
+      - name: Create root launchers
+        run: |
+          # ---- リポジトリ直下用 run_SupportChigadio.bat ----
+          cat > run_SupportChigadio.bat << 'EOF'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+
+          set "ZIP=SupportChigadio-windows-x64.zip"
+          set "DIR=SupportChigadio"
+
+          set "NEED_EXTRACT=0"
+          if not exist "%DIR%" set "NEED_EXTRACT=1"
+          if exist "VERSION" if exist "%DIR%\.version" (
+            fc /b VERSION "%DIR%\.version" >nul 2>&1
+            if errorlevel 1 set "NEED_EXTRACT=1"
+          )
+
+          if "%NEED_EXTRACT%"=="1" (
+            if not exist "%ZIP%" (
+              echo Error: %ZIP% が見つかりません
+              pause
+              exit /b 1
+            )
+            echo 解凍中... (%ZIP%)
+            if exist "%DIR%" rmdir /s /q "%DIR%"
+            powershell -NoProfile -Command "Expand-Archive -Path '%ZIP%' -DestinationPath '.' -Force"
+            if exist VERSION copy /y VERSION "%DIR%\.version" >nul
+          )
+
+          if exist "%DIR%\SupportChigadio.bat" (
+            call "%DIR%\SupportChigadio.bat"
+            exit /b %errorlevel%
+          )
+          echo Error: %DIR%\SupportChigadio.bat が見つかりません
+          pause
+          exit /b 1
+          EOF
+
+          # ---- リポジトリ直下用 run_SupportChigadio.command / .sh ----
+          cat > run_SupportChigadio.command << 'EOF'
+          #!/bin/bash
+          set -e
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          cd "$ROOT"
+
+          ZIP="SupportChigadio-macos.zip"
+          DIR="SupportChigadio"
+
+          NEED_EXTRACT=0
+          if [ ! -d "$DIR" ]; then
+            NEED_EXTRACT=1
+          elif [ -f VERSION ] && [ -f "$DIR/.version" ]; then
+            if [ "$(cat VERSION)" != "$(cat "$DIR/.version")" ]; then
+              NEED_EXTRACT=1
+            fi
+          fi
+
+          if [ "$NEED_EXTRACT" = "1" ]; then
+            if [ ! -f "$ZIP" ]; then
+              echo "Error: $ZIP が見つかりません"
+              read -r -p "Enterキーで終了..."
+              exit 1
+            fi
+            echo "解凍中... ($ZIP)"
+            rm -rf "$DIR"
+            unzip -q -o "$ZIP"
+            cp VERSION "$DIR/.version" 2>/dev/null || true
+          fi
+
+          if [ -x "$DIR/SupportChigadio.command" ]; then
+            exec "$DIR/SupportChigadio.command"
+          fi
+          echo "Error: $DIR/SupportChigadio.command が見つかりません"
+          read -r -p "Enterキーで終了..."
+          exit 1
+          EOF
+          chmod +x run_SupportChigadio.command
+          cp run_SupportChigadio.command run_SupportChigadio.sh
+          chmod +x run_SupportChigadio.sh
 
       - name: Check file sizes
         run: |
-          # GitHub は 100MB 超のファイルの push を拒否する
           BIG=$(find . -maxdepth 1 -name '*.zip' -size +100M)
           if [ -n "$BIG" ]; then
             echo "::error::100MBを超えるファイルがあるため push できません:"
@@ -421,8 +434,6 @@ jobs:
       - name: Commit and push
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-
-          # zip は Package ステップで既にリポジトリ直下に作られているので cp 不要
           echo "$TAG" > VERSION
 
           git config user.name "github-actions[bot]"
@@ -431,11 +442,12 @@ jobs:
           git add VERSION
           [ -f SupportChigadio-windows-x64.zip ] && git add SupportChigadio-windows-x64.zip
           [ -f SupportChigadio-macos.zip ] && git add SupportChigadio-macos.zip
+          git add run_SupportChigadio.bat run_SupportChigadio.command run_SupportChigadio.sh
 
           if git diff --staged --quiet; then
             echo "変更がありません。push をスキップします。"
             exit 0
           fi
 
-          git commit -m "Release ${TAG}: update distribution zips and VERSION"
+          git commit -m "Release ${TAG}: update distribution zips, launchers and VERSION"
           git push origin HEAD:${{ github.event.repository.default_branch }}
