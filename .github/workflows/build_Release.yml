@@ -422,17 +422,15 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
 
-          # リポジトリ直下に zip を配置（同名は上書き）
-          [ -f SupportChigadio-windows-x64.zip ] && cp SupportChigadio-windows-x64.zip ./
-          [ -f SupportChigadio-macos.zip ] && cp SupportChigadio-macos.zip ./
-
+          # zip は Package ステップで既にリポジトリ直下に作られているので cp 不要
           echo "$TAG" > VERSION
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add SupportChigadio-windows-x64.zip SupportChigadio-macos.zip VERSION 2>/dev/null || true
-          git add -u SupportChigadio-windows-x64.zip SupportChigadio-macos.zip VERSION 2>/dev/null || true
+          git add VERSION
+          [ -f SupportChigadio-windows-x64.zip ] && git add SupportChigadio-windows-x64.zip
+          [ -f SupportChigadio-macos.zip ] && git add SupportChigadio-macos.zip
 
           if git diff --staged --quiet; then
             echo "変更がありません。push をスキップします。"
