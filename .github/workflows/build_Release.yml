@@ -4,6 +4,11 @@ name: Build and Release
 # 実行方法:
 #   1) タグを push する:  git tag v1.0.0 && git push origin v1.0.0
 #   2) Actions タブから "Run workflow"（タグ名を入力）
+#
+# ビルド成果物は
+#   - GitHub Release に添付
+#   - SupportChigadio リポジトリ本体の releases/ にも commit & push
+# の両方に反映される。
 on:
   push:
     tags:
@@ -15,13 +20,14 @@ on:
         required: true
 
 permissions:
-  contents: write # リリース作成に必要
+  contents: write # リリース作成 / リポジトリへの push に必要
 
 env:
   APP_DIR: main-support # app.py があるフォルダ（リポジトリルートからの相対パス）
   APP_NAME: SupportChigadio
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
+  COMMIT_DIR: releases # zip をリポジトリ本体に置くフォルダ（リポジトリルートからの相対パス）
 
 jobs:
   build:
@@ -117,6 +123,67 @@ jobs:
           fi
           if [ "$RUNNER_OS" != "Windows" ]; then chmod +x "$STAGE/${{ matrix.exe }}"; fi
 
+      # ---- macOS 用ランチャー (.command / .sh) ----
+      # main-support の「親フォルダ」（zip解凍後のトップ）に置く。
+      #   .command : Finder でダブルクリックするとターミナルで実行される
+      #   .sh      : 同じ内容（ターミナルから実行する用）
+      # 起動時に隔離フラグ(quarantine)を解除するので、
+      # 「開発元が未確認」「壊れている」ダイアログを出さずに起動できる。
+      - name: Add macOS launchers
+        if: runner.os == 'macOS'
+        run: |
+          PKG="package/${APP_NAME}-${{ matrix.suffix }}"
+          STAGE="$PKG/main-support"
+
+          # ビルド時に ad-hoc 署名（Apple Silicon で必須）
+          codesign --force --sign - "$STAGE/${{ matrix.exe }}"
+          codesign --verify --verbose=2 "$STAGE/${{ matrix.exe }}"
+
+          LAUNCHER_SH="$PKG/run_${APP_NAME}.sh"
+          LAUNCHER_CMD="$PKG/run_${APP_NAME}.command"
+          cat > "$LAUNCHER_SH" <<'LAUNCHER_EOF'
+          #!/bin/bash
+          # Auto-generated launcher for __APP__ (macOS)
+          # Lives next to the main-support folder.
+          # 1) clears the quarantine flag so macOS does not ask for approval
+          # 2) makes sure the binary is executable and signed
+          # 3) runs it from main-support (data/ is created next to main-support)
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          APP_DIR="$DIR/main-support"
+          EXE="$APP_DIR/__APP__"
+
+          if [ ! -f "$EXE" ]; then
+            echo "Error: $EXE not found."
+            read -r -p "Press Enter to close..."
+            exit 1
+          fi
+
+          # Remove quarantine / extended attributes from the whole package.
+          xattr -cr "$DIR" 2>/dev/null || true
+          chmod +x "$EXE" 2>/dev/null || true
+
+          # Re-sign ad hoc only if the signature is missing or broken.
+          if ! codesign --verify "$EXE" 2>/dev/null; then
+            codesign --force --sign - "$EXE" 2>/dev/null || true
+          fi
+
+          cd "$APP_DIR" || exit 1
+
+          # Run in this terminal so logs stay visible; Ctrl+C or closing the
+          # terminal stops the server.
+          "$EXE"
+          code=$?
+          echo
+          echo "Exited with code $code."
+          read -r -p "Press Enter to close..."
+          LAUNCHER_EOF
+          sed -i '' -e "s/__APP__/${APP_NAME}/g" "$LAUNCHER_SH"
+          cp "$LAUNCHER_SH" "$LAUNCHER_CMD"
+          chmod +x "$LAUNCHER_SH" "$LAUNCHER_CMD"
+          echo "Created: $LAUNCHER_SH"
+          echo "Created: $LAUNCHER_CMD"
+          ls -la "$PKG"
+
       - name: Zip (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -162,13 +229,87 @@ jobs:
             - **macOS (Intel)**: `SupportChigadio-macos-x64.zip`
 
             ## 使い方
-            1. zipを解凍し、`main-support` フォルダ内の実行ファイルを起動
+            ### Windows
+            1. zipを解凍し、`main-support` フォルダ内の `SupportChigadio.exe` を起動
             2. 起動時のダイアログで「サーバーモード / 通常モード」を選択
             3. データは `main-support` の隣の `data/` に作成されます
 
-            ### macOS の初回起動について
-            署名・公証をしていないため、初回は以下を実行してください。
-            ```
-            xattr -cr SupportChigadio-macos-*/main-support
-            ```
-            または、右クリック →「開く」で起動できます。
+            ### macOS
+            1. zipを解凍し、`main-support` と同じ階層にある `run_SupportChigadio.command` をダブルクリック
+               （`.sh` でもOKですが、ダブルクリックで動くのは `.command` です）
+            2. 起動時のダイアログで「サーバーモード / 通常モード」を選択
+            3. データは `main-support` の隣の `data/` に作成されます
+
+            ランチャーが起動時に隔離フラグの解除と署名の確認を自動で行うため、
+            「開発元が未確認」の許可操作は基本的に不要です。
+
+            #### 初回だけ必要な操作
+            ブラウザでダウンロードしたzipは、ランチャー自体も macOS にブロックされます。
+            次のどちらかを一度だけ実行してください。
+            - `run_SupportChigadio.command` を右クリック →「開く」
+            - ターミナルで `xattr -cr SupportChigadio-macos-*`
+
+            `.command` が実行できない場合は `chmod +x run_SupportChigadio.command` を実行してください。
+
+  # ---- SupportChigadio リポジトリ本体にも commit & push ----
+  # release ジョブとは独立して並列に動く（どちらかが失敗してももう一方は実行される）。
+  # タグ push で起動した場合 checkout は detached HEAD になるため、
+  # デフォルトブランチを明示的に checkout して、そこへ push する。
+  # GITHUB_TOKEN による push は他のワークフローを起動しないので、無限ループにはならない。
+  commit-to-repo:
+    name: Commit & Push to repository
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: commit-to-repo
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Check file sizes
+        run: |
+          ls -la artifacts
+          # GitHub は 100MB を超えるファイルの push を拒否する
+          BIG=$(find artifacts -name '*.zip' -size +100M)
+          if [ -n "$BIG" ]; then
+            echo "::error::100MBを超えるファイルがあるため push できません（Git LFS の利用を検討してください）:"
+            echo "$BIG"
+            exit 1
+          fi
+
+      - name: Commit and push
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+
+          # 常に最新版のみを置く（古いzipは削除して置き換え）
+          mkdir -p "$COMMIT_DIR"
+          rm -f "$COMMIT_DIR"/*.zip
+          cp artifacts/*.zip "$COMMIT_DIR/"
+          echo "$TAG" > "$COMMIT_DIR/VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$COMMIT_DIR"
+
+          if git diff --cached --quiet; then
+            echo "変更なし。コミットをスキップします"
+            exit 0
+          fi
+
+          git commit -m "Release $TAG: update build artifacts"
+
+          # 他のコミットと競合しないよう、取り込んでから push（数回リトライ）
+          BRANCH="${{ github.event.repository.default_branch }}"
+          for i in 1 2 3; do
+            git pull --rebase origin "$BRANCH" && git push origin "HEAD:$BRANCH" && exit 0
+            echo "push に失敗しました。リトライ ($i/3)"
+            sleep 5
+          done
+          exit 1
