@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path "pythonSrc/__init__.py")) { New-Item -ItemType File -Path "pythonSrc/__init__.py" | Out-Null }
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
           if (!(Test-Path "dist/MainSupport.exe")) {
             throw "MainSupport.exe was not generated."
           }
@@ -265,6 +265,7 @@ jobs:
           set -e
           ROOT="$(cd "$(dirname "$0")" && pwd)"
           export SUPPORT_ROOT="$ROOT"
+          export PYTHONUNBUFFERED=1
           if [ "$(uname -s)" != "Darwin" ]; then
             echo "This launcher is for macOS."
             exit 1
@@ -291,11 +292,27 @@ jobs:
           cp MainSupport.sh MainSupport.command
           chmod +x MainSupport.sh MainSupport.command
 
+          # macOS停止スクリプト
+          cat > MainSupport-stop.command <<'LAUNCHER'
+          #!/bin/bash
+          pkill -f "MainSupport-macos" && echo "Stopped." || echo "Not running."
+          read -r -p "Press Enter to close..."
+          LAUNCHER
+          chmod +x MainSupport-stop.command
+
+          # Windows停止スクリプト
+          cat > MainSupport-stop.bat <<'LAUNCHER'
+          @echo off
+          taskkill /F /IM MainSupport.exe
+          pause
+          LAUNCHER
+
           # Windows起動スクリプト
           cat > MainSupport.bat <<'LAUNCHER'
           @echo off
           setlocal
           set "SUPPORT_ROOT=%~dp0"
+          set "PYTHONUNBUFFERED=1"
           cd /d "%SUPPORT_ROOT%"
           if not exist "%SUPPORT_ROOT%MainSupport.exe" (
             echo MainSupport.exe was not found.
@@ -318,8 +335,10 @@ jobs:
             MainSupport-macos-x86_64 \
             MainSupport.command \
             MainSupport.sh \
-            MainSupport.bat
-          git update-index --chmod=+x -- MainSupport.command MainSupport.sh
+            MainSupport.bat \
+            MainSupport-stop.command \
+            MainSupport-stop.bat
+          git update-index --chmod=+x -- MainSupport.command MainSupport.sh MainSupport-stop.command
           git diff --cached --stat
           if git diff --cached --quiet; then
             echo "No changes to commit."
