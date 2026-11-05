@@ -2,6 +2,7 @@
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export SUPPORT_ROOT="$ROOT"
+export PYTHONUNBUFFERED=1
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "This launcher is for macOS."
   exit 1
