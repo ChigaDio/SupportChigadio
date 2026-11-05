@@ -6,6 +6,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
   build-windows:
     name: Build Windows x64
@@ -20,18 +23,23 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Flask psutil websockets pyinstaller
+          pip install pyinstaller flask werkzeug psutil websockets openpyxl
+          if [ -f main-support/requirements.txt ]; then pip install -r main-support/requirements.txt; fi
+          if [ -f main-support/pythonSrc/requirements.txt ]; then pip install -r main-support/pythonSrc/requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build executable
         working-directory: main-support
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --paths . app.py
+          if (!(Test-Path "pythonSrc/__init__.py")) { New-Item -ItemType File -Path "pythonSrc/__init__.py" | Out-Null }
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
           if (!(Test-Path "dist/MainSupport.exe")) {
             throw "MainSupport.exe was not generated."
           }
@@ -65,17 +73,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Flask psutil websockets pyinstaller
+          pip install pyinstaller flask werkzeug psutil websockets openpyxl
+          if [ -f main-support/requirements.txt ]; then pip install -r main-support/requirements.txt; fi
+          if [ -f main-support/pythonSrc/requirements.txt ]; then pip install -r main-support/pythonSrc/requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
+          if [ ! -f pythonSrc/__init__.py ]; then touch pythonSrc/__init__.py; fi
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
@@ -112,17 +124,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Flask psutil websockets pyinstaller
+          pip install pyinstaller flask werkzeug psutil websockets openpyxl
+          if [ -f main-support/requirements.txt ]; then pip install -r main-support/requirements.txt; fi
+          if [ -f main-support/pythonSrc/requirements.txt ]; then pip install -r main-support/pythonSrc/requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
+          if [ ! -f pythonSrc/__init__.py ]; then touch pythonSrc/__init__.py; fi
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
@@ -157,17 +173,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Flask psutil websockets pyinstaller
+          pip install pyinstaller flask werkzeug psutil websockets openpyxl
+          if [ -f main-support/requirements.txt ]; then pip install -r main-support/requirements.txt; fi
+          if [ -f main-support/pythonSrc/requirements.txt ]; then pip install -r main-support/pythonSrc/requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
+          if [ ! -f pythonSrc/__init__.py ]; then touch pythonSrc/__init__.py; fi
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . --hidden-import tkinter --hidden-import tkinter.filedialog app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
@@ -228,17 +248,17 @@ jobs:
           test -f release/windows/MainSupport.exe
           test -f release/macos-arm64/MainSupport
           test -f release/macos-x86_64/MainSupport
-          
+
           # 存在する場合のみ古い.app形式の成果物を削除
           [ -d "MainSupport-macos-arm64.app" ] && rm -rf MainSupport-macos-arm64.app || true
           [ -d "MainSupport-macos-x86_64.app" ] && rm -rf MainSupport-macos-x86_64.app || true
-          
+
           # 実行ファイルをリポジトリ直下へ配置
           mv release/windows/MainSupport.exe ./MainSupport.exe
           mv release/macos-arm64/MainSupport ./MainSupport-macos-arm64
           mv release/macos-x86_64/MainSupport ./MainSupport-macos-x86_64
           chmod +x MainSupport-macos-arm64 MainSupport-macos-x86_64
-          
+
           # macOS起動スクリプト
           cat > MainSupport.sh <<'LAUNCHER'
           #!/bin/bash
@@ -270,7 +290,7 @@ jobs:
           LAUNCHER
           cp MainSupport.sh MainSupport.command
           chmod +x MainSupport.sh MainSupport.command
-          
+
           # Windows起動スクリプト
           cat > MainSupport.bat <<'LAUNCHER'
           @echo off
@@ -301,5 +321,9 @@ jobs:
             MainSupport.bat
           git update-index --chmod=+x -- MainSupport.command MainSupport.sh
           git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
           git commit -m "Build Main Support executable for Windows and macOS"
           git push origin HEAD:main
