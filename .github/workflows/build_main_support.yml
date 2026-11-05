@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-build-windows:
+  build-windows:
     name: Build Windows x64
     runs-on: windows-latest
     timeout-minutes: 90
@@ -225,37 +225,28 @@ build-windows:
         shell: bash
         run: |
           set -euo pipefail
-
           test -f release/windows/MainSupport.exe
           test -f release/macos-arm64/MainSupport
           test -f release/macos-x86_64/MainSupport
-
           # 古い.app形式の成果物を削除
           rm -rf MainSupport-macos-arm64.app
           rm -rf MainSupport-macos-x86_64.app
-
           # 実行ファイルをリポジトリ直下へ配置
           mv release/windows/MainSupport.exe ./MainSupport.exe
           mv release/macos-arm64/MainSupport ./MainSupport-macos-arm64
           mv release/macos-x86_64/MainSupport ./MainSupport-macos-x86_64
-
           chmod +x MainSupport-macos-arm64 MainSupport-macos-x86_64
-
           # macOS起動スクリプト
           cat > MainSupport.sh <<'LAUNCHER'
           #!/bin/bash
           set -e
-
           ROOT="$(cd "$(dirname "$0")" && pwd)"
           export SUPPORT_ROOT="$ROOT"
-
           if [ "$(uname -s)" != "Darwin" ]; then
             echo "This launcher is for macOS."
             exit 1
           fi
-
           MACHINE="$(uname -m)"
-
           if [ "$MACHINE" = "arm64" ]; then
             EXECUTABLE="$ROOT/MainSupport-macos-arm64"
           elif [ "$MACHINE" = "x86_64" ]; then
@@ -264,37 +255,29 @@ build-windows:
             echo "Unsupported architecture: $MACHINE"
             exit 1
           fi
-
           if [ ! -f "$EXECUTABLE" ]; then
             echo "MainSupport executable for $MACHINE was not found."
             read -r -p "Press Enter to close..."
             exit 1
           fi
-
           xattr -cr "$EXECUTABLE" 2>/dev/null || true
           chmod +x "$EXECUTABLE" 2>/dev/null || true
           codesign --force --sign - "$EXECUTABLE" 2>/dev/null || true
-
           "$EXECUTABLE"
           LAUNCHER
-
           cp MainSupport.sh MainSupport.command
           chmod +x MainSupport.sh MainSupport.command
-
           # Windows起動スクリプト
           cat > MainSupport.bat <<'LAUNCHER'
           @echo off
           setlocal
-
           set "SUPPORT_ROOT=%~dp0"
           cd /d "%SUPPORT_ROOT%"
-
           if not exist "%SUPPORT_ROOT%MainSupport.exe" (
             echo MainSupport.exe was not found.
             pause
             exit /b 1
-          )
-
+          }
           "%SUPPORT_ROOT%MainSupport.exe"
           pause
           LAUNCHER
@@ -303,10 +286,8 @@ build-windows:
         shell: bash
         run: |
           set -euo pipefail
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add -A -- \
             MainSupport.exe \
             MainSupport-macos-arm64 \
@@ -316,11 +297,7 @@ build-windows:
             MainSupport.command \
             MainSupport.sh \
             MainSupport.bat
-
           git update-index --chmod=+x -- MainSupport.command MainSupport.sh
-
           git diff --cached --stat
-
           git commit -m "Build Main Support executable for Windows and macOS"
           git push origin HEAD:main
-
