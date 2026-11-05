@@ -228,14 +228,17 @@ jobs:
           test -f release/windows/MainSupport.exe
           test -f release/macos-arm64/MainSupport
           test -f release/macos-x86_64/MainSupport
-          # 古い.app形式の成果物を削除
-          rm -rf MainSupport-macos-arm64.app
-          rm -rf MainSupport-macos-x86_64.app
+          
+          # 存在する場合のみ古い.app形式の成果物を削除
+          [ -d "MainSupport-macos-arm64.app" ] && rm -rf MainSupport-macos-arm64.app || true
+          [ -d "MainSupport-macos-x86_64.app" ] && rm -rf MainSupport-macos-x86_64.app || true
+          
           # 実行ファイルをリポジトリ直下へ配置
           mv release/windows/MainSupport.exe ./MainSupport.exe
           mv release/macos-arm64/MainSupport ./MainSupport-macos-arm64
           mv release/macos-x86_64/MainSupport ./MainSupport-macos-x86_64
           chmod +x MainSupport-macos-arm64 MainSupport-macos-x86_64
+          
           # macOS起動スクリプト
           cat > MainSupport.sh <<'LAUNCHER'
           #!/bin/bash
@@ -267,6 +270,7 @@ jobs:
           LAUNCHER
           cp MainSupport.sh MainSupport.command
           chmod +x MainSupport.sh MainSupport.command
+          
           # Windows起動スクリプト
           cat > MainSupport.bat <<'LAUNCHER'
           @echo off
@@ -277,7 +281,7 @@ jobs:
             echo MainSupport.exe was not found.
             pause
             exit /b 1
-          }
+          )
           "%SUPPORT_ROOT%MainSupport.exe"
           pause
           LAUNCHER
@@ -292,8 +296,6 @@ jobs:
             MainSupport.exe \
             MainSupport-macos-arm64 \
             MainSupport-macos-x86_64 \
-            MainSupport-macos-arm64.app \
-            MainSupport-macos-x86_64.app \
             MainSupport.command \
             MainSupport.sh \
             MainSupport.bat
