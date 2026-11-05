@@ -31,7 +31,7 @@ jobs:
         working-directory: main-support
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --collect-submodules pythonSrc app.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name MainSupport --paths . app.py
           if (!(Test-Path "dist/MainSupport.exe")) {
             throw "MainSupport.exe was not generated."
           }
@@ -75,7 +75,7 @@ jobs:
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --collect-submodules pythonSrc app.py
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
@@ -122,7 +122,7 @@ jobs:
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --collect-submodules pythonSrc app.py
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
@@ -167,7 +167,7 @@ jobs:
       - name: Build macOS executable
         working-directory: main-support
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --collect-submodules pythonSrc app.py
+          python -m PyInstaller --noconfirm --clean --onefile --name MainSupport --paths . app.py
           test -f "dist/MainSupport"
           chmod +x "dist/MainSupport"
           codesign --force --sign - "dist/MainSupport"
